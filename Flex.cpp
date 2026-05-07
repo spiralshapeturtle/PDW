@@ -48,6 +48,33 @@
 #define EOT1	0xAAAA
 #define EOT2	0xFFFF
 
+// FLEX message fragment reassembly — multimon-ng K/F/C classification.
+// Alpha message header word (standard FLEX): frag = bits 11-12 (2-bit), cont = bit 10 (1-bit).
+//   K (complete):  frag==3 && cont==0 — standalone message, show directly
+//   F (first/mid): cont==1            — more fragments follow, buffer
+//   C (last):      cont==0 && frag!=3 — end of chain, assemble + show
+// frag==3 marks the first fragment; subsequent fragments cycle 0→1→2 modulo 3.
+#define FLEX_FRAG_COMPLETE  3	// only this constant is still used (C-type check)
+
+#define FLEX_MAX_FRAG_SLOTS   16
+#define FLEX_FRAG_TIMEOUT_MS  120000u   // abandon incomplete chain after 2 minutes
+
+struct FlexFragSlot {
+	bool          active;
+	long          capcode;
+	DWORD         timestamp_ms;
+	unsigned char text [MAX_STR_LEN];
+	BYTE          color[MAX_STR_LEN];
+	int           textLen;
+};
+
+static FlexFragSlot g_flexFragSlots[FLEX_MAX_FRAG_SLOTS];
+
+// These globals live in Misc.cpp; used by fragment helpers below.
+extern BYTE message_color[];
+extern int  iMessageIndex;
+extern int  nCount_Fragments;
+
 
 int flex_blk = 0;
 int flex_bc  = 0;
@@ -101,6 +128,79 @@ FLEX::~FLEX()
 {
 }
 
+// --- Fragment buffer helpers ---
+
+static void frag_expire(void)
+{
+	DWORD now = GetTickCount();
+	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++)
+		if (g_flexFragSlots[i].active &&
+			(now - g_flexFragSlots[i].timestamp_ms) > FLEX_FRAG_TIMEOUT_MS)
+			g_flexFragSlots[i].active = false;
+}
+
+static int frag_find(long capcode)
+{
+	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++)
+		if (g_flexFragSlots[i].active && g_flexFragSlots[i].capcode == capcode)
+			return i;
+	return -1;
+}
+
+static int frag_alloc(long capcode)
+{
+	frag_expire();
+	// reuse existing slot for same capcode (handles retransmit of first fragment)
+	int slot = frag_find(capcode);
+	if (slot >= 0) {
+		g_flexFragSlots[slot].textLen      = 0;
+		g_flexFragSlots[slot].timestamp_ms = GetTickCount();
+		return slot;
+	}
+	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++) {
+		if (!g_flexFragSlots[i].active) {
+			g_flexFragSlots[i].active       = true;
+			g_flexFragSlots[i].capcode      = capcode;
+			g_flexFragSlots[i].textLen      = 0;
+			g_flexFragSlots[i].timestamp_ms = GetTickCount();
+			return i;
+		}
+	}
+	return -1; // all slots occupied
+}
+
+// Append current message_buffer content to slot and reset iMessageIndex.
+static void frag_save(int slot)
+{
+	FlexFragSlot &s = g_flexFragSlots[slot];
+	int space       = MAX_STR_LEN - 1 - s.textLen;
+	int tocopy      = min(iMessageIndex, space);
+	if (tocopy > 0) {
+		memcpy(s.text  + s.textLen, message_buffer, tocopy);
+		memcpy(s.color + s.textLen, message_color,  tocopy);
+		s.textLen += tocopy;
+	}
+	iMessageIndex = 0;
+}
+
+// Prepend the slot's accumulated text to the current message_buffer and free the slot.
+// After this call message_buffer holds the fully assembled message.
+static void frag_assemble(int slot)
+{
+	FlexFragSlot &s = g_flexFragSlots[slot];
+	int space       = MAX_STR_LEN - 1 - s.textLen;
+	int tocopy      = min(iMessageIndex, space);
+	if (s.textLen > 0) {
+		memmove(message_buffer + s.textLen, message_buffer, tocopy);
+		memmove(message_color  + s.textLen, message_color,  tocopy);
+		memcpy (message_buffer, s.text,  s.textLen);
+		memcpy (message_color,  s.color, s.textLen);
+		iMessageIndex = s.textLen + tocopy;
+	}
+	message_buffer[iMessageIndex] = 0;	// ShowMessage() loops on != 0; ensure termination
+	s.active = false;
+}
+
 // Reset routine called when changing data mode or if
 // switching between soundcard & serial port input.
 void flex_reset(void)
@@ -110,6 +210,7 @@ void flex_reset(void)
 	flex_timer = 0;
 	bReflex = false;
 	bFlexActive = false;
+	memset(g_flexFragSlots, 0, sizeof(g_flexFragSlots));
 }
 
 // checksum check for BIW and vector type words
@@ -311,7 +412,7 @@ void FLEX::FlexTIME()
 			switch((frame[i] >> 4) & 0x07)
 			{
 				case 0:
-//					OUTPUTDEBUGMSG((("frame[i]: Type == SSID/Local ID�s (i8-i0)(512) & Coverage Zones (c4-c0)(32)\n")));		
+//					OUTPUTDEBUGMSG((("frame[i]: Type == SSID/Local ID\xbbs (i8-i0)(512) & Coverage Zones (c4-c0)(32)\n")));		
 					break;
 				case 1:
 					frame[i] >>= 7;
@@ -391,9 +492,9 @@ void FLEX::showframe(int asa, int vsa)
 {
 	int vb, vt, tt, w1, w2, j, k, l, m, n=0, i, c=0;
 	long int cc, cc2, cc3;
-	bool bLongAddress=false, bXsumError=false;
+	bool bLongAddress=false, bXsumError=false, bFragmentBuffered=false;
 
-	int iFragmentNumber, iAssignedFrame;
+	int iFragmentNumber, iContFlag, iAssignedFrame;
 
 	extern unsigned long hourly_stat[NUM_STAT][2];
 	extern unsigned long hourly_char[NUM_STAT][2];
@@ -406,9 +507,11 @@ void FLEX::showframe(int asa, int vsa)
 
 	FlexTempAddress = -1;		// PH: Current temporary address(bit)
 
+	frag_expire();			// clean up timed-out fragment chains each frame
+
 	if (xsumchk(frame[0]) == 0)			// make sure we start out with valid BIW
 	{
-		for (j=asa; j<vsa; j++, c=0, bLongAddress=false, bXsumError=false) // run through whole address field
+		for (j=asa; j<vsa; j++, c=0, bLongAddress=false, bXsumError=false, bFragmentBuffered=false) // run through whole address field
 		{
 			cc2 = frame[j] & 0x1fffffl;	// Check if this can be the low part of a long address
 
@@ -444,16 +547,20 @@ void FLEX::showframe(int asa, int vsa)
 				w1 = w1 & 0x7f;
 				w2 = (w2 & 0x7f) + w1 - 1;
 
-				// get message fragment number (bits 11 and 12) from first header word
-				// if != 3 then this is a continued message
+				// Standard FLEX (North American) word layout: F=bits 11-12, C=bit 10.
+				// (RCR STD-43A / FLEX-TD differs: it adds a 10-bit K checksum that shifts
+				//  the fields to F=bits 8-9, C=bit 7 — but NL/EU networks use standard FLEX.)
+				// K/F/C: K=frag==3&&cont==0, F=cont==1, C=cont==0&&frag!=3
 				if (!bLongAddress)
 				{
-					iFragmentNumber = (int) (frame[w1] >> 11) & 0x03;
+					iFragmentNumber = (int)(frame[w1] >> 11) & 0x03;
+					iContFlag       = (int)(frame[w1] >> 10) & 0x01;
 					w1++;
 				}
 				else
 				{
-					iFragmentNumber = (int) (frame[vb+1] >> 11) & 0x03;
+					iFragmentNumber = (int)(frame[vb+1] >> 11) & 0x03;
+					iContFlag       = (int)(frame[vb+1] >> 10) & 0x01;
 					w2--;
 				}
 
@@ -495,9 +602,39 @@ void FLEX::showframe(int asa, int vsa)
 					}
 				}
 
-				if (iFragmentNumber < 3)	// Change last 0 of bitrate into fragmentnumber
+				// Fragment reassembly using multimon-ng K/F/C classification:
+				// F (cont==1): more follows — buffer; C (cont==0, frag!=3): last — assemble;
+				// K (cont==0, frag==3): standalone complete — fall through to ShowMessage().
+				if (capcode != 9999999)
 				{
-					Current_MSG[MSG_BITRATE][3] = '1' + iFragmentNumber;
+					if (iContFlag == 1)
+					{
+						// F-type: find existing chain (middle) or start a new one (first)
+						int slot = frag_find(capcode);
+						if (slot < 0) slot = frag_alloc(capcode);
+						if (slot >= 0) {
+							frag_save(slot);
+							bFragmentBuffered = true;
+						}
+						// all slots full: fall through and show this fragment alone
+					}
+					else if (iFragmentNumber != FLEX_FRAG_COMPLETE)
+					{
+						// C-type (last fragment): assemble accumulated chain
+						int slot = frag_find(capcode);
+						if (slot >= 0) {
+							frag_assemble(slot);
+							nCount_Fragments++;
+							// Mark type as reassembled: " ALPHA " → "ALPHA-F"
+							const char *t = Current_MSG[MSG_TYPE];
+							int s = 0, e = (int)strlen(t) - 1;
+							while (t[s] == ' ') s++;
+							while (e > s && t[e] == ' ') e--;
+							sprintf(Current_MSG[MSG_TYPE], "%.*s-F", e - s + 1, t + s);
+						}
+						// no prior chain: show this last fragment alone
+					}
+					// K-type (frag==3, cont==0): complete standalone — fall through to ShowMessage()
 				}
 
 				hourly_stat[flex_speed][STAT_ALPHA]++;
@@ -703,7 +840,14 @@ void FLEX::showframe(int asa, int vsa)
 				}
 				else AddAssignment(iAssignedFrame, FlexTempAddress, capcode);
 			}
-			else ShowMessage();
+			else if (!bFragmentBuffered)
+			{
+				ShowMessage();
+			}
+			else
+			{
+				iMessageIndex = 0;	// fragment was buffered; discard display buffer without showing
+			}
 
 			if (bLongAddress) j++;	// if long address then make sure we skip over both parts
 		}

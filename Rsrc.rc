@@ -191,14 +191,14 @@ BEGIN
     CONTROL         "Filter Window",IDC_CLEAR_PANE2,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,25,26,58,8
 END
 
-DEBUGDLGBOX DIALOG 10, 10, 221, 86
+DEBUGDLGBOX DIALOG 10, 10, 231, 96
 STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 CAPTION "PDW Debug Information"
 FONT 8, "Verdana"
 BEGIN
-    GROUPBOX        "",IDC_STATIC,2,0,217,84
+    GROUPBOX        "",IDC_STATIC,2,0,227,94
     LTEXT           "OS :",IDC_STATIC,8,10,16,8
-    LTEXT           ".....",IDC_DEBUG_OS,46,10,164,8
+    LTEXT           ".....",IDC_DEBUG_OS,46,10,174,8
     LTEXT           "Started :",IDC_STATIC,8,20,30,8
     LTEXT           ".....",IDC_DEBUG_STARTED,46,20,65,8
     LTEXT           "Running :",IDC_STATIC,8,30,32,8
@@ -208,17 +208,19 @@ BEGIN
     LTEXT           "FlexTIME :",IDC_STATIC,8,50,38,8
     LTEXT           ".....",IDC_DEBUG_FLEXTIME,46,50,48,8
     LTEXT           "Messages :",IDC_STATIC,116,20,38,8
-    LTEXT           ".....",IDC_DEBUG_MSG,183,20,34,8
-    LTEXT           "· Rejected :",IDC_STATIC,116,30,39,8
-    LTEXT           ".....",IDC_DEBUG_REJECTED,183,30,34,8
-    LTEXT           "· Blocked :",IDC_STATIC,116,40,36,8
-    LTEXT           ".....",IDC_DEBUG_BLOCKED,183,40,34,8
-    LTEXT           "· Buffer (timer) :",IDC_STATIC,120,50,56,8
-    LTEXT           ".....",IDC_DEBUG_BLOCKBUFFER,183,50,34,8
-    LTEXT           "· Groupcalls :",IDC_STATIC,116,60,45,8
-    LTEXT           ".....",IDC_DEBUG_GROUPMSG,183,60,34,8
-    LTEXT           "Missed groupcalls :",IDC_STATIC,116,70,63,8
-    LTEXT           ".....",IDC_DEBUG_MISSED,183,70,34,8
+    LTEXT           ".....",IDC_DEBUG_MSG,193,20,34,8
+    LTEXT           "> Rejected :",IDC_STATIC,120,30,42,8
+    LTEXT           ".....",IDC_DEBUG_REJECTED,193,30,34,8
+    LTEXT           "> Blocked :",IDC_STATIC,120,40,38,8
+    LTEXT           ".....",IDC_DEBUG_BLOCKED,193,40,34,8
+    LTEXT           "> Buffer (timer) :",IDC_STATIC,120,50,60,8
+    LTEXT           ".....",IDC_DEBUG_BLOCKBUFFER,193,50,34,8
+    LTEXT           "> Groupcalls :",IDC_STATIC,120,60,46,8
+    LTEXT           ".....",IDC_DEBUG_GROUPMSG,193,60,34,8
+    LTEXT           "> Missed groupcalls :",IDC_STATIC,120,70,71,8
+    LTEXT           ".....",IDC_DEBUG_MISSED,193,70,34,8
+    LTEXT           "> Fragmented :",IDC_STATIC,120,80,46,8
+    LTEXT           ".....",IDC_DEBUG_FRAGMSG,193,80,34,8
     LTEXT           "TEST :",IDC_STATIC,8,70,23,8,NOT WS_VISIBLE
     LTEXT           ".....",IDC_DEBUG_TEST,38,70,67,8,NOT WS_VISIBLE
 END
@@ -387,7 +389,7 @@ BEGIN
     EDITTEXT        IDC_BLOCKDUPTIMER,271,41,9,13,ES_CENTER | ES_AUTOHSCROLL | ES_NUMBER
     CONTROL         "Log blocked messages to 'blocked.txt'",IDC_BLOCKEDTXT,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,43,140,10
-    CONTROL         "Convert '»' character to linefeed",IDC_LINEFEEDS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,15,62,122,10
+    CONTROL         "Convert '>' character to linefeed",IDC_LINEFEEDS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,15,62,122,10
     CONTROL         "Separate/group messages with empty line",IDC_SEPARATOR,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,142,62,154,10
     LTEXT           "Date format (as logfile name) :",IDC_STATIC,15,82,103,8
@@ -869,8 +871,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 3,1,0,0
- PRODUCTVERSION 3,1,0,0
+ FILEVERSION 3,3,0,0
+ PRODUCTVERSION 3,3,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -888,11 +890,11 @@ BEGIN
             VALUE "Comments", "Supports Windows 95, 98, ME, 2K and XP"
             VALUE "CompanyName", "WitWarez"
             VALUE "FileDescription", "POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
-            VALUE "FileVersion", "3.1"
+            VALUE "FileVersion", "3.3"
             VALUE "InternalName", "PDW"
-            VALUE "OriginalFilename", "PDW3_1.exe"
+            VALUE "OriginalFilename", "PDW3_3.exe"
             VALUE "ProductName", "PDW"
-            VALUE "ProductVersion", "3.1"
+            VALUE "ProductVersion", "3.3"
         END
     END
     BLOCK "VarFileInfo"
@@ -1030,7 +1032,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME             " PDW v3.2b01 - Windows POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
+    IDS_APPNAME             " PDW v3.3 - Windows POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
 END
 
 STRINGTABLE

@@ -128,7 +128,7 @@ typedef struct
 	int  LabelNewline;				// Labels on new line
 	char ColLogfile[10];			// Flag for columns to be logged in logfile
 	char ColFilterfile[10];			// Flag for columns to be logged in filterfile
-	int  Linefeed;					// Flag for converting ¯ to linefeed
+	int  Linefeed;					// Flag for converting \xbb to linefeed
 	int  Separator;					// Flag for separating messages (empty line)
 	int  MonthNumber;				// Flag for using monthnumber in logfilenames
 	int  DateFormat;				// Flag for date format
@@ -367,7 +367,7 @@ int  filter_addr(char addr_str[], char filter_str[]);
 
 // macros for easier readability...
 
-#define GETHINST( x )  ((HINSTANCE) GetWindowLong( x, GWL_HINSTANCE ))
+#define GETHINST( x )  ((HINSTANCE) GetWindowLongPtr( x, GWLP_HINSTANCE ))
 
 // Windows function prototypes...
 
@@ -387,7 +387,7 @@ void BuildFilterString(char *temp_str, FILTER filter);
 void ChangeDataMode(HWND hWnd, int mode);
 
 VOID NEAR GoModalDialogBoxParam(HINSTANCE hInstance, LPCSTR lpszTemplate, HWND hWnd, DLGPROC lpDlgProc, LPARAM lParam);
-UINT CALLBACK CenterOpenDlgBox(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+UINT_PTR CALLBACK CenterOpenDlgBox(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL CenterWindow(HWND hWnd);
 
 BOOL FAR PASCAL AboutDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);

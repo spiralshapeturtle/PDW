@@ -5,11 +5,6 @@
 cmake_minimum_required( VERSION 3.5 )
 project( PDW )
 
-# Enforce Win32 (x86)
-if( CMAKE_SIZEOF_VOID_P EQUAL 8 )
-  message( FATAL_ERROR "PDW must be built as 32-bit (Win32). Use -A Win32 with CMake." )
-endif()
-
 # Project version number
 set( PDW_VERSION_MAJOR 3 )
 set( PDW_VERSION_MINOR 1 )
@@ -24,8 +19,12 @@ set( PWD_SRCS )
 add_subdirectory( GFX )
 add_subdirectory( Headers )
 add_subdirectory( utils )
-include_directories( "${CMAKE_CURRENT_SOURCE_DIR}/openssl-3.5.5/include" )
-link_directories( "${CMAKE_CURRENT_SOURCE_DIR}/openssl-3.5.5/lib" )
+include_directories( "${CMAKE_CURRENT_SOURCE_DIR}/openssl-3.5.6/include" )
+if( CMAKE_SIZEOF_VOID_P EQUAL 8 )
+  link_directories( "${CMAKE_CURRENT_SOURCE_DIR}/openssl-3.5.6/lib64" )
+else()
+  link_directories( "${CMAKE_CURRENT_SOURCE_DIR}/openssl-3.5.6/lib" )
+endif()
 
 # Microsoft Visual Studio Specific definitions
 if( MSVC )

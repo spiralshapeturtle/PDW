@@ -39,7 +39,7 @@
 // 11/06/2003 PH:  Added switch '/callmax' for optimized Callmax-pages
 // 26/06/2003 AVE: Added html.cpp & html.h for HTML-logfiles
 // 28/06/2003 PH:  Added  IRC-logfiles via switch '/irc'
-// 01/09/2003 PH:  Linefeed character will be replaced by '»'
+// 01/09/2003 PH:  Linefeed character will be replaced by '\xbb'
 // 02/09/2003 PH:  Added extra column "type" for FLEX/POCSAG
 // 03/09/2003 PH:  Changed GetTimeFormat/Date, now always leading zeros are displayed
 // 07/09/2033 PH:  Removed Flush-Time. All logfiles will be flushed immediately
@@ -363,6 +363,7 @@ int nCount_Rejected=0;				// PH: Counts # Rejected Messages
 int nCount_Blocked=0;				// PH: Counts # Blocked Messages
 int nCount_Missed[2] = { 0,0 };		// PH: Counts # Missed Groupcalls
 int nCount_BlockBuffer[2] = { 0,0 };// PH: Counts # Block Buffer
+int nCount_Fragments=0;				// Counts # reassembled FLEX fragmented messages
 
 //int iDebug_Test=0;
 
@@ -421,7 +422,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.2b01";		// Current version info
+char *pdw_version = "PDW v3.3";			// Current version info
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;
@@ -495,7 +496,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.LabelNewline		= 1;	// Flag for labels on new line
 	Profile.ColLogfile[0]		= '\0';	// Flag for columns in logfile
 	Profile.ColFilterfile[0]	= '\0';	// Flag for columns in filterfiles
-	Profile.Linefeed			= 1;	// Flag for converting » to linefeed
+	Profile.Linefeed			= 1;	// Flag for converting \xbb to linefeed
 	Profile.Separator			= 1;	// Flag for separating messages (empty line)
 	Profile.MonthNumber			= 1;	// Flag for using monthnumber in logfilenames
 	Profile.DateFormat			= 0;	// Flag for date format
@@ -994,7 +995,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		InitializePane(&Pane2);
 
 		Pane1.hWnd = CreateWindow(gszPane1Class, NULL, WS_CHILD | WS_VISIBLE, 0,0,0,0, hWnd,
-								  NULL, (HINSTANCE) GetWindowLong(hWnd, GWL_HINSTANCE), 0);
+								  NULL, (HINSTANCE) GetWindowLongPtr(hWnd, GWLP_HINSTANCE), 0);
 		if (Pane1.hWnd == NULL)
 		{
 			Free_Common_Objects();  // Free any objects we got!
@@ -1002,7 +1003,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		}
 
 		Pane2.hWnd = CreateWindow(gszPane2Class, NULL, WS_CHILD | WS_VISIBLE, 0,0,0,0, hWnd,
-								  NULL, (HINSTANCE) GetWindowLong(hWnd, GWL_HINSTANCE), 0);
+								  NULL, (HINSTANCE) GetWindowLongPtr(hWnd, GWLP_HINSTANCE), 0);
 
 		if (Pane2.hWnd == NULL)
 		{
@@ -2896,6 +2897,7 @@ BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 //		SetDlgItemInt(hDlg, IDC_DEBUG_TEST, iDebug_Test, false);
 		sprintf(szTEMP, "%i / %i", nCount_BlockBuffer[0], nCount_BlockBuffer[1]);
 		SetDlgItemText(hDlg, IDC_DEBUG_BLOCKBUFFER, szTEMP);
+		SetDlgItemInt(hDlg, IDC_DEBUG_FRAGMSG, nCount_Fragments, false);
 
 		return (TRUE);
 
@@ -3486,8 +3488,8 @@ BOOL FAR PASCAL SetupDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SendDlgItemMessage(hDlg, IDC_AUDIODEVICES, CB_SETCURSEL, more_audio ? Profile.audioDevice : 0, 0L);
 		if (!more_audio) EnableWindow(GetDlgItem(hDlg, IDC_AUDIODEVICES), false);
 
-		value = GetWindowLong(GetDlgItem(hDlg, IDC_AUDIODEVICES), GWL_STYLE) - CBS_DROPDOWNLIST;
-		SetWindowLong(GetDlgItem(hDlg, IDC_AUDIODEVICES), GWL_STYLE, value | ES_READONLY);
+		value = (DWORD)GetWindowLongPtr(GetDlgItem(hDlg, IDC_AUDIODEVICES), GWL_STYLE) - CBS_DROPDOWNLIST;
+		SetWindowLongPtr(GetDlgItem(hDlg, IDC_AUDIODEVICES), GWL_STYLE, value | ES_READONLY);
 
 		CheckDlgButton(hDlg, IDC_COMENABLE,   Profile.comPortEnabled);
 		CheckDlgButton(hDlg, IDC_AUDIOENABLE, Profile.audioEnabled);
@@ -3899,13 +3901,13 @@ BOOL FAR PASCAL ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		GetSystemMetrics(SM_CYDLGFRAME);
 
 		hColorWnd = CreateWindow(gszColorClass, NULL, WS_CHILD | WS_VISIBLE, xPos, yPos,
-			xSize, ySize,	hDlg, NULL,	(HINSTANCE) GetWindowLong(hDlg, GWL_HINSTANCE),	0);
+			xSize, ySize,	hDlg, NULL,	(HINSTANCE) GetWindowLongPtr(hDlg, GWLP_HINSTANCE),	0);
 
 		DeleteObject(hboxbr);
 
 		hboxbr = CreateSolidBrush(tmp_background);
 
-		SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+		SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 		InvalidateRect(hColorWnd, NULL, TRUE);
 
@@ -3938,7 +3940,7 @@ BOOL FAR PASCAL ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				DeleteObject(hboxbr);
 				hboxbr = CreateSolidBrush(tmp_background);
 
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
 			break;
@@ -4079,7 +4081,7 @@ BOOL FAR PASCAL ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				DeleteObject(hboxbr);
 				hboxbr = CreateSolidBrush(tmp_background);
 
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
 			break;
@@ -4102,8 +4104,8 @@ BOOL FAR PASCAL ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				DeleteObject(hbr);
 				hbr = CreateSolidBrush(Profile.color_background);
 
-				SetClassLong(Pane1.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
-				SetClassLong(Pane2.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
+				SetClassLongPtr(Pane1.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
+				SetClassLongPtr(Pane2.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
 			}
 
 			InvalidateRect(Pane1.hWnd, NULL, TRUE);
@@ -4280,12 +4282,12 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			   GetSystemMetrics(SM_CYDLGFRAME);
 
 		hColorWnd = CreateWindow(gszACARSColorClass, NULL,	WS_CHILD | WS_VISIBLE, xPos, yPos,
-			xSize, ySize, hDlg, NULL, (HINSTANCE) GetWindowLong(hDlg, GWL_HINSTANCE), 0);
+			xSize, ySize, hDlg, NULL, (HINSTANCE) GetWindowLongPtr(hDlg, GWLP_HINSTANCE), 0);
 
 		DeleteObject(hboxbr);
 
 		hboxbr = CreateSolidBrush(tmp_background);
-		SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+		SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 		InvalidateRect(hColorWnd, NULL, TRUE);
 
 		memset(&cc, 0, sizeof(CHOOSECOLOR));
@@ -4318,7 +4320,7 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 				hboxbr = CreateSolidBrush(tmp_background);
 
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
@@ -4477,7 +4479,7 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 										rgbColor[LTBLUE][2]);
 				DeleteObject(hboxbr);
 				hboxbr = CreateSolidBrush(tmp_background);
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
 			break;
@@ -4503,8 +4505,8 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 				hbr = CreateSolidBrush(Profile.color_background);
 
-				SetClassLong(Pane1.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
-				SetClassLong(Pane2.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
+				SetClassLongPtr(Pane1.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
+				SetClassLongPtr(Pane2.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
 			}
 
 			InvalidateRect(Pane1.hWnd, NULL, TRUE);
@@ -4682,13 +4684,13 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 				 GetSystemMetrics(SM_CYDLGFRAME);
 
 		hColorWnd = CreateWindow(gszMOBITEXColorClass, NULL, WS_CHILD | WS_VISIBLE, xPos, yPos,
-			xSize, ySize, hDlg, NULL, (HINSTANCE) GetWindowLong(hDlg, GWL_HINSTANCE), 0);
+			xSize, ySize, hDlg, NULL, (HINSTANCE) GetWindowLongPtr(hDlg, GWLP_HINSTANCE), 0);
 
 		DeleteObject(hboxbr);
 
 		hboxbr = CreateSolidBrush(tmp_background);
 
-		SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+		SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 		InvalidateRect(hColorWnd, NULL, TRUE);
 
@@ -4722,7 +4724,7 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
 				hboxbr = CreateSolidBrush(tmp_background);
 
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
@@ -4884,7 +4886,7 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
 				hboxbr = CreateSolidBrush(tmp_background);
 
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
@@ -4910,8 +4912,8 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
 				hbr = CreateSolidBrush(Profile.color_background);
 
-				SetClassLong(Pane1.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
-				SetClassLong(Pane2.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
+				SetClassLongPtr(Pane1.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
+				SetClassLongPtr(Pane2.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
 			}
 			InvalidateRect(Pane1.hWnd, NULL, TRUE);
 			InvalidateRect(Pane2.hWnd, NULL, TRUE);
@@ -5001,7 +5003,7 @@ LRESULT FAR PASCAL MOBITEXColorWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		SetTextColor(hDC, tmp_biterrors);
 		TextOut(hDC, 0, 0, "Q4E", 3);
 		SetTextColor(hDC, tmp_message);
-		TextOut(hDC, 0, 0, "#VX·&1$H? Z", 11);
+		TextOut(hDC, 0, 0, "#VX\xb7&1$H? Z", 11);
 
 		// Next line
 		MoveToEx(hDC, 0, tmp_cyChar*3, &lpPoint);
@@ -5096,12 +5098,12 @@ BOOL FAR PASCAL ERMESColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 				 GetSystemMetrics(SM_CYDLGFRAME);
 
 		hColorWnd = CreateWindow(gszERMESColorClass, NULL, WS_CHILD | WS_VISIBLE, xPos, yPos,
-			xSize, ySize, hDlg, NULL, (HINSTANCE) GetWindowLong(hDlg, GWL_HINSTANCE), 0);
+			xSize, ySize, hDlg, NULL, (HINSTANCE) GetWindowLongPtr(hDlg, GWLP_HINSTANCE), 0);
 
 		DeleteObject(hboxbr);
 
 		hboxbr = CreateSolidBrush(tmp_background);
-		SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+		SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 		InvalidateRect(hColorWnd, NULL, TRUE);
 
@@ -5135,7 +5137,7 @@ BOOL FAR PASCAL ERMESColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 				hboxbr = CreateSolidBrush(tmp_background);
 
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
@@ -5297,7 +5299,7 @@ BOOL FAR PASCAL ERMESColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 				hboxbr = CreateSolidBrush(tmp_background);
 
-				SetClassLong(hColorWnd, GCL_HBRBACKGROUND, (LONG) hboxbr);
+				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
 
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
@@ -5323,8 +5325,8 @@ BOOL FAR PASCAL ERMESColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 				hbr = CreateSolidBrush(Profile.color_background);
 
-				SetClassLong(Pane1.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
-				SetClassLong(Pane2.hWnd, GCL_HBRBACKGROUND, (LONG) hbr);
+				SetClassLongPtr(Pane1.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
+				SetClassLongPtr(Pane2.hWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hbr);
 			}
 
 			InvalidateRect(Pane1.hWnd, NULL, TRUE);
@@ -6542,8 +6544,8 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		if (Profile.FilterWindowColors)
 		{
-			dwStyle = GetWindowLong(hListView, GWL_STYLE);
-			SetWindowLong(hListView, GWL_STYLE, dwStyle | LVS_OWNERDRAWFIXED);
+			dwStyle = (DWORD)GetWindowLongPtr(hListView, GWL_STYLE);
+			SetWindowLongPtr(hListView, GWL_STYLE, dwStyle | LVS_OWNERDRAWFIXED);
 			SendMessage(hListView, LVM_SETBKCOLOR, 0, Profile.color_background);
 		}
 		else
@@ -6751,7 +6753,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				break;
 
 			case NM_CUSTOMDRAW :
-				SetWindowLong(hFilterDlg, DWL_MSGRESULT, OnCustomDraw((LPNMLVCUSTOMDRAW) lParam)) ;
+				SetWindowLongPtr(hFilterDlg, DWLP_MSGRESULT, OnCustomDraw((LPNMLVCUSTOMDRAW) lParam)) ;
 				return(TRUE) ;
 //			default :
 //				OUTPUTDEBUGMSG((("NM_%04X lParam = %08lX\n"), ((LPNMHDR)lParam)->code, lParam));
@@ -6932,16 +6934,16 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 			{
 				ListView_DeleteAllItems(hListView);
 
-				dwStyle = GetWindowLong(hListView, GWL_STYLE);
+				dwStyle = (DWORD)GetWindowLongPtr(hListView, GWL_STYLE);
 
 				if (Profile.FilterWindowColors)
 				{
-					SetWindowLong(hListView, GWL_STYLE, dwStyle | LVS_OWNERDRAWFIXED);
+					SetWindowLongPtr(hListView, GWL_STYLE, dwStyle | LVS_OWNERDRAWFIXED);
 					SendMessage(hListView, LVM_SETBKCOLOR, 0, Profile.color_background);
 				}
 				else
 				{
-					SetWindowLong(hListView, GWL_STYLE, dwStyle - LVS_OWNERDRAWFIXED);
+					SetWindowLongPtr(hListView, GWL_STYLE, dwStyle - LVS_OWNERDRAWFIXED);
 					SendMessage(hListView, LVM_SETBKCOLOR, 0, GetColorRGB(COLOR_FILTERLABEL+6)); // WHITE
 				}
    
@@ -9350,7 +9352,7 @@ BOOL FAR PASCAL MonStatDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 } // end of MonStatDlgProc
 
 
-UINT CALLBACK CenterOpenDlgBox(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+UINT_PTR CALLBACK CenterOpenDlgBox(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg)
 	{
@@ -11310,7 +11312,7 @@ void GoogleMaps(int iPosition)
 		}
 		szTMP[i] = '\0';
 
-		if ((szTMP[0] == '+') && (strlen(szTMP) == 18))		// + 4 ] v ^ v # c ·"
+		if ((szTMP[0] == '+') && (strlen(szTMP) == 18))		// + 4 ] v ^ v # c \xbb"
 		{
 			for (i=2; i<13; i+=2)
 			{

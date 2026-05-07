@@ -374,6 +374,7 @@
 #define IDC_DEBUG_MISSED          1179
 #define IDC_DEBUG_GROUPMSG        1180
 #define IDC_DEBUG_TEST            1181
+#define IDC_DEBUG_FRAGMSG         1182
 
 #define IDW_TOOL_BAR              1200
 #define IDT_TOOLBAR_BTN0          1201

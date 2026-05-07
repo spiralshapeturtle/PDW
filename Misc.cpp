@@ -188,15 +188,15 @@ void display_show_char(PaneStruct *pane, char cin)
 	{
 		if (cin == 0)
 		{
-			message_buffer[iMessageIndex] = '·';
-			mobitex_buffer[iMessageIndex] = '·';
+			message_buffer[iMessageIndex] = '\xb7';
+			mobitex_buffer[iMessageIndex] = '\xb7';
 		}
 		else if ((cin > 0) && (cin < 32))
 		{
 			message_buffer[iMessageIndex] = cin+32;
 			mobitex_buffer[iMessageIndex] = cin;		// Keep original characters
 		}
-		else if ((cin > 126) && (cin != '»'))
+		else if ((cin > 126) && (cin != '\xbb'))
 		{
 			message_buffer[iMessageIndex] = ' ';
 			mobitex_buffer[iMessageIndex] = cin;		// Keep original characters
@@ -211,7 +211,7 @@ void display_show_char(PaneStruct *pane, char cin)
 	{
 		if (cin == '\n')
 		{
-			cin = '»';	// PH: Convert 'new line' to '»'
+			cin = '\xbb';	// PH: Convert 'new line' to '\xbb'
 		}
 		else if (cin > 127)
 		{
@@ -859,11 +859,18 @@ void ShowMessage()
 
 			if (strstr(Current_MSG[MSG_MODE], "FLEX") && (Current_MSG[MSG_BITRATE][3] != '0'))
 			{
-				if (Profile.FlexGroupMode)
-				{
-					 sprintf(szFragment, "  [Fragment #%c]", char(Current_MSG[MSG_BITRATE][3])+1);
+				// Fallback path: first fragment lost or buffer full; show what arrived.
+				// MSG_BITRATE[3]: '1'=middle orphan, '2'=last orphan, '3'=first (no slot)
+				const char *fragType;
+				switch (Current_MSG[MSG_BITRATE][3]) {
+					case '1': fragType = "middle"; break;
+					case '2': fragType = "last";   break;
+					default:  fragType = "first";  break;
 				}
-				else sprintf(szFragment, "[Continued message - Fragment #%c]", char(Current_MSG[MSG_BITRATE][3])+1);
+				if (Profile.FlexGroupMode)
+					sprintf(szFragment, "  [%s fragment - incomplete]", fragType);
+				else
+					sprintf(szFragment, "[%s fragment - incomplete]", fragType);
 
 				bFragment=true;
 			}
@@ -956,7 +963,7 @@ void ShowMessage()
 								}
 							}
 						}
-						else if (ch == '»')		// Check for linefeed character '»'
+						else if (ch == '\xbb')		// Check for linefeed character '\xbb'
 						{
 							if (Profile.Linefeed)
 							{
@@ -1177,6 +1184,8 @@ void ShowMessage()
 			{
 				CollectLogfileLine(Profile.ColLogfile, false);
 
+				if (bFragment) { strcat(szLogFileLine, " "); strcat(szLogFileLine, szFragment); }
+
 				if (szCurrentLabel[1][0] && Profile.LabelLog) // PH: Add labels also in logfile
 				{
 					if (Profile.LabelNewline)
@@ -1200,6 +1209,8 @@ void ShowMessage()
 			if (!(Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING))
 			{
 				CollectLogfileLine(Profile.ColFilterfile, true);
+
+				if (bFragment) { strcat(szLogFileLine, " "); strcat(szLogFileLine, szFragment); }
 
 				if (szCurrentLabel[1][0])
 				{
@@ -2119,7 +2130,7 @@ void CollectLogfileLine(char *string, bool bFilter)
 					{
 						for (int pos=0; Current_MSG[MSG_MOBITEX][pos]!=0; pos++)
 						{
-							if (Current_MSG[MSG_MOBITEX][pos] == '»')
+							if (Current_MSG[MSG_MOBITEX][pos] == '\xbb')
 							{
 								strcat(szLogFileLine, "\n");
 								for (int i=0; i<spacing+1; i++) strcat(szLogFileLine, " ");
@@ -2132,11 +2143,11 @@ void CollectLogfileLine(char *string, bool bFilter)
 						strcat(szLogFileLine, Current_MSG[MSG_MESSAGE]);
 					}
 				}
-				else if ((strstr(Current_MSG[MSG_MESSAGE], "»") != 0) && Profile.Linefeed)
+				else if ((strstr(Current_MSG[MSG_MESSAGE], "\xbb") != 0) && Profile.Linefeed)
 				{
 					for (int pos=0; Current_MSG[MSG_MESSAGE][pos]!=0; pos++)
 					{
-						if (Current_MSG[MSG_MESSAGE][pos] == '»')
+						if (Current_MSG[MSG_MESSAGE][pos] == '\xbb')
 						{
 							strcat(szLogFileLine, "\n");
 							for (int i=0; i<spacing+1; i++) strcat(szLogFileLine, " ");

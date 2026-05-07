@@ -836,9 +836,16 @@ static int smtpLogin(int sfd)
 }
 
 
-// SMTP: MAIL FROM 
+static void strip_crlf(char *s)
+{
+	for (; *s; s++)
+		if (*s == '\r' || *s == '\n') *s = ' ';
+}
+
+// SMTP: MAIL FROM
 static int smtpMailFrom(int sfd)
 {
+	strip_crlf(mail.from);
 	_snprintf(buf,sizeof(buf)-1,"MAIL FROM: <%s>\r\n",mail.from);
 //	OUTPUTDEBUGMSG((("smtpMailFrom() : >>> %s"),buf));
 	sockPuts(sfd,buf);
@@ -886,6 +893,7 @@ static int smtpRcptTo(int sfd)
 	char *pTmp1 = szTemp, *pTmp2 ;
 
 	strncpy(szTemp, mail.to, (MAX_MAIL * 5) - 1) ;
+	strip_crlf(szTemp) ;
 	StripSpecial(szTemp) ;
 
 	while(1) {
@@ -938,7 +946,7 @@ static int smtpMail(int sfd, char *data)
 
 	for (int i=0; data[i]!=0; i++)
 	{
-		if (data[i] == '»')
+		if (data[i] == 'ï¿½')
 		{
 			strcat(szSubject, " - ");
 			strcat(szBody, "\n");
@@ -954,6 +962,7 @@ static int smtpMail(int sfd, char *data)
 	{
 		if (szSubject[0])
 		{
+			strip_crlf(szSubject);
 			memset(buf,0,sizeof(buf));
 			(void) _snprintf(buf,sizeof(buf)-1,"Subject: %s\r\n", szSubject);
 			sockPuts(sfd,buf);
@@ -972,25 +981,29 @@ static int smtpMail(int sfd, char *data)
 	// headers
 	if(mail.from)
 	{
+		strip_crlf(mail.from);
 		memset(buf,0,sizeof(buf));
 		(void) _snprintf(buf,sizeof(buf)-1,"From: %s\r\n",mail.from);
 		sockPuts(sfd,buf);
 	}
 	if(mail.to)
 	{
+		strip_crlf(mail.to);
 		memset(buf,0,sizeof(buf));
 		(void) _snprintf(buf,sizeof(buf)-1,"To: %s\r\n",mail.to);
-		sockPuts(sfd,buf);	
+		sockPuts(sfd,buf);
 	}
-	
+
 	if(mail.cc)
 	{
+		strip_crlf(mail.cc);
 		memset(buf,0,sizeof(buf));
 		(void) _snprintf(buf,sizeof(buf)-1,"Cc: %s\r\n",mail.cc);
 		sockPuts(sfd,buf);
 	}
 	if(mail.bcc)
 	{
+		strip_crlf(mail.bcc);
 		memset(buf,0,sizeof(buf));
 		(void) _snprintf(buf,sizeof(buf)-1,"Bcc: %s\r\n",mail.bcc);
 		sockPuts(sfd,buf);
