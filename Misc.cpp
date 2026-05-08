@@ -595,7 +595,7 @@ void ShowMessage()
 
 	bool bBlock=false, bSkip_character=false;
 	bool bMATCH=false, bMONITOR_ONLY=false, bFILTERED=false;
-	bool bShowMessage=true, bFragment=false, bGroupcode;
+	bool bShowMessage=true, bFragment=false, bAssembled=false, bGroupcode;
 	bool bNumeric=false;
 	bool bNewFile, bNewLine;					// PH: To indicate if the logfile is new / already exists
 	bool bSeparator[2] = { true, true };		// PH: Set if a separator is needed
@@ -614,6 +614,12 @@ void ShowMessage()
 
 	extern bool bTrayed, bDoubleDisplay;
 	extern int  nCount_Messages, nCount_Rejected, nCount_Blocked, nCount_Groupcalls;
+	extern bool g_flexAssembled;   // set by Flex.cpp after successful fragment reassembly
+	extern int  g_flexOrphanType;  // 1=F-type orphan, 2=C-type orphan (no prior chain)
+	// Read and immediately clear so the globals don't leak into the next ShowMessage() call
+	// if bShowMessage turns out to be false (FLEXGROUPMODE_HIDEGROUPCODES path).
+	const bool bFlexAssembledNow = g_flexAssembled;  g_flexAssembled  = false;
+	const int  iFlexOrphanNow    = g_flexOrphanType; g_flexOrphanType = 0;
 
 	DWORD dwColor;
 
@@ -857,22 +863,22 @@ void ShowMessage()
 				continue;
 			}
 
-			if (strstr(Current_MSG[MSG_MODE], "FLEX") && (Current_MSG[MSG_BITRATE][3] != '0'))
+			if (bFlexAssembledNow)
 			{
-				// Fallback path: first fragment lost or buffer full; show what arrived.
-				// MSG_BITRATE[3]: '1'=middle orphan, '2'=last orphan, '3'=first (no slot)
-				const char *fragType;
-				switch (Current_MSG[MSG_BITRATE][3]) {
-					case '1': fragType = "middle"; break;
-					case '2': fragType = "last";   break;
-					default:  fragType = "first";  break;
-				}
+				sprintf(szFragment, "[fragmented]"); // searchable logfile annotation; display uses * on capcode
+				bFragment  = true;
+				bAssembled = true;
+				// already cleared at top of ShowMessage
+			}
+			else if (iFlexOrphanNow)
+			{
+				const char *fragType = (iFlexOrphanNow == 2) ? "last" : "first";
 				if (Profile.FlexGroupMode)
 					sprintf(szFragment, "  [%s fragment - incomplete]", fragType);
 				else
 					sprintf(szFragment, "[%s fragment - incomplete]", fragType);
-
-				bFragment=true;
+				bFragment = true;
+				// already cleared at top of ShowMessage
 			}
 
 			if (bSeparator[pane] && pPane->Bottom) // If pane is not empty, add an empty line
@@ -896,7 +902,7 @@ void ShowMessage()
 
 				if (Profile.ScreenColumns[i] == MSG_MESSAGE)
 				{
-					if (!Profile.FlexGroupMode && bFragment)
+					if (!Profile.FlexGroupMode && bFragment && !bAssembled)
 					{
 						display_color(pPane, COLOR_INSTRUCTIONS);
 						display_show_strV2(pPane, szFragment);
@@ -1031,6 +1037,11 @@ void ShowMessage()
 						display_show_strV2(pPane, " ");
 					}
 					display_show_strV2(pPane, Current_MSG[Profile.ScreenColumns[i]]);
+					if (!Profile.FlexGroupMode && bAssembled && Profile.ScreenColumns[i] == MSG_CAPCODE)
+					{
+						display_color(pPane, COLOR_INSTRUCTIONS);
+						display_show_strV2(pPane, "*");
+					}
 				}
 			}
 
@@ -1069,7 +1080,7 @@ void ShowMessage()
 				{
 					if (Profile.ScreenColumns[i] == MSG_CAPCODE)
 					{
-						if (!iConvertingGroupcall && bFragment)
+						if (!iConvertingGroupcall && bFragment && !bAssembled)
 						{
 							display_color(pPane, COLOR_INSTRUCTIONS);
 							display_show_strV2(pPane, " ");
@@ -1082,6 +1093,11 @@ void ShowMessage()
 						}
 						display_color(pPane, messageitems_colors[MSG_CAPCODE]);
 						display_show_strV2(pPane, Current_MSG[MSG_CAPCODE]);
+						if (!iConvertingGroupcall && bAssembled)
+						{
+							display_color(pPane, COLOR_INSTRUCTIONS);
+							display_show_strV2(pPane, "*");
+						}
 					}
 				}
 			}
@@ -1108,7 +1124,15 @@ void ShowMessage()
 			}
 
 			memset(szLabelspacing, 0, sizeof(szLabelspacing));
-			memset(szLabelspacing, ' ', iItemPositions[MSG_MESSAGE]-iPanePos);
+
+			int len = iItemPositions[MSG_MESSAGE] - iPanePos;
+			if (len < 0)
+				len = 0;
+			if (len >= sizeof(szLabelspacing))
+				len = sizeof(szLabelspacing) - 1;
+
+			memset(szLabelspacing, ' ', len);
+			szLabelspacing[len] = '\0';
 
 			sprintf(szCurrentLabel[1], "- %s -", szCurrentLabel[0]);	// Create "- label -" for logfiles
 
