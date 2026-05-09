@@ -484,7 +484,28 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 		else
 		{
 			if (GroupFrame[groupbit] != -1) Remove_MissedGroupcall(groupbit);
-			if (Current_MSG[MSG_BITRATE][3] == '0') nCount_Missed[1]++;
+			if (Current_MSG[MSG_BITRATE][3] == '0')
+			{
+				nCount_Missed[1]++;
+
+				FILE *pFLEX_nosi = NULL;
+				sprintf(szFile, "%s\\no-si-groupcalls.txt", szPath);
+				if (!FileExists(szFile))
+				{
+					if ((pFLEX_nosi = fopen(szFile, "a")) != NULL)
+						fprintf(pFLEX_nosi, " Group calls received without matching Short Instruction (Y++ events):\n\n");
+				}
+				else pFLEX_nosi = fopen(szFile, "a");
+				if (pFLEX_nosi)
+				{
+					Get_Date_Time();
+					fprintf(pFLEX_nosi, " %s %s  capcode=%i  GroupFrame=%i  iCurrentFrame=%i  %s\n",
+						szCurrentDate, szCurrentTime,
+						capcode, GroupFrame[groupbit], iCurrentFrame,
+						message_buffer);
+					fclose(pFLEX_nosi);
+				}
+			}
 			CountBiterrors(5);
 			ShowMessage();		// PH: Display only groupcode
 			return;
