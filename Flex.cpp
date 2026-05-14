@@ -66,7 +66,7 @@
 struct FlexFragSlot {
 	bool          active;
 	long          capcode;
-	DWORD         timestamp_ms;
+	ULONGLONG     timestamp_ms;
 	unsigned char text [MAX_STR_LEN];
 	BYTE          color[MAX_STR_LEN];
 	int           textLen;
@@ -85,6 +85,17 @@ extern int  nCount_Fragments;
 // g_flexOrphanType: 1 = F-type orphan (first/middle, no slot), 2 = C-type orphan (last, no prior chain).
 bool g_flexAssembled  = false;
 int  g_flexOrphanType = 0;
+
+// flex_reset() can't reach the function-scope statics in frame_flex (slr, bct,
+// hbit, cy, fr) directly. Setting this flag asks frame_flex to wipe them on
+// its next entry — that way mode switches don't leave the 64-bit shift
+// register and frame counters drifting on data from a previous transmission.
+static volatile bool g_flexFrameFlexResetRequested = false;
+
+// Forward-declared here; defined together with display_cfstatus at the bottom
+// of the file. Cleared when the BCH stage rejects the cycle/frame info word,
+// preventing the 99/999 sentinel from leaking into Check4_MissedGroupcalls.
+extern bool bCurrentFrameValid;
 
 
 int flex_blk = 0;
@@ -143,14 +154,14 @@ FLEX::~FLEX()
 
 static void frag_expire(void)
 {
-	DWORD now = GetTickCount();
+	ULONGLONG now = GetTickCount64();
 	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++)
 		if (g_flexFragSlots[i].active &&
 			(now - g_flexFragSlots[i].timestamp_ms) > FLEX_FRAG_TIMEOUT_MS)
 		{
-			DWORD elapsedMs = now - g_flexFragSlots[i].timestamp_ms;
-			DebugLog("[FRAG] TIMEOUT slot=%d  capcode=%07li  elapsed=%lums  discarded=%d chars  expectedFrag=%d",
-				i, g_flexFragSlots[i].capcode, (unsigned long)elapsedMs,
+			ULONGLONG elapsedMs = now - g_flexFragSlots[i].timestamp_ms;
+			DebugLog("[FRAG] TIMEOUT slot=%d  capcode=%07li  elapsed=%llums  discarded=%d chars  expectedFrag=%d",
+				i, g_flexFragSlots[i].capcode, elapsedMs,
 				g_flexFragSlots[i].textLen, g_flexFragSlots[i].nextExpectedFrag);
 			g_flexFragSlots[i].active = false;
 		}
@@ -172,7 +183,7 @@ static int frag_alloc(long cc)
 	if (slot >= 0) {
 		g_flexFragSlots[slot].textLen            = 0;
 		g_flexFragSlots[slot].nextExpectedFrag   = 0;
-		g_flexFragSlots[slot].timestamp_ms       = GetTickCount();
+		g_flexFragSlots[slot].timestamp_ms       = GetTickCount64();
 		return slot;
 	}
 	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++) {
@@ -181,7 +192,7 @@ static int frag_alloc(long cc)
 			g_flexFragSlots[i].capcode            = cc;
 			g_flexFragSlots[i].textLen            = 0;
 			g_flexFragSlots[i].nextExpectedFrag   = 0;
-			g_flexFragSlots[i].timestamp_ms       = GetTickCount();
+			g_flexFragSlots[i].timestamp_ms       = GetTickCount64();
 			return i;
 		}
 	}
@@ -233,12 +244,27 @@ bool flex_has_pending_fragment(long capcode)
 // switching between soundcard & serial port input.
 void flex_reset(void)
 {
+	extern FLEX phase_A, phase_B, phase_C, phase_D;
 	flex_blk = 0;
 	flex_bc = 0;
 	flex_timer = 0;
 	bReflex = false;
 	bFlexActive = false;
 	memset(g_flexFragSlots, 0, sizeof(g_flexFragSlots));
+	// Clear per-phase scratch arrays so the first frame after a mode switch
+	// doesn't start on stale bits from the previous transmission. Without
+	// this, showblock() can sample garbage in the first BIW until the BCH
+	// stage filters it out.
+	memset(phase_A.block, 0, sizeof(phase_A.block));
+	memset(phase_A.frame, 0, sizeof(phase_A.frame));
+	memset(phase_B.block, 0, sizeof(phase_B.block));
+	memset(phase_B.frame, 0, sizeof(phase_B.frame));
+	memset(phase_C.block, 0, sizeof(phase_C.block));
+	memset(phase_C.frame, 0, sizeof(phase_C.frame));
+	memset(phase_D.block, 0, sizeof(phase_D.block));
+	memset(phase_D.frame, 0, sizeof(phase_D.frame));
+	// Ask frame_flex to wipe its function-scope statics on the next call.
+	g_flexFrameFlexResetRequested = true;
 }
 
 // checksum check for BIW and vector type words
@@ -542,6 +568,13 @@ void FLEX::showframe(int asa, int vsa)
 
 	if (xsumchk(frame[0]) == 0)			// make sure we start out with valid BIW
 	{
+		// Defence in depth: even with the BIW checksum passing, a BCH miscorrection
+		// could in principle produce asa/vsa values outside the FLEX spec window
+		// (1 <= asa <= vsa <= 88). frame[] has 200 entries so we're not at risk of
+		// OOB at the spec limits, but bail out if asa/vsa indices are obviously
+		// inconsistent so the address-loop doesn't iterate over vector words.
+		if (asa < 1 || asa > vsa || vsa > 88) return;
+
 		for (j=asa; j<vsa; j++, c=0, bLongAddress=false, bXsumError=false, bFragmentBuffered=false) // run through whole address field
 		{
 			cc2 = frame[j] & 0x1fffffl;	// Check if this can be the low part of a long address
@@ -556,10 +589,15 @@ void FLEX::showframe(int asa, int vsa)
 
 			if (xsumchk(frame[vb]) != 0)
 			{
+				// Long addresses occupy two address slots; if we skip here
+				// without advancing j, the next iteration mis-parses the
+				// second half as a new short capcode.
+				if (bLongAddress) j++;
 				continue; 	// screwed up vector fields are not processed
 			}
 			if (Profile.FlexGroupMode && bLongAddress)
 			{
+				j++;
 				continue; 	// Don't process long addresses if FlexGroupMode
 			}
 			strcpy(szWindowText[4], "");
@@ -569,6 +607,7 @@ void FLEX::showframe(int asa, int vsa)
 				case MODE_ALPHA:
 				case MODE_SECURE:
 
+				// FIX [Berichtdecodering]: j<vsa<=88, dus j+1<=88<200 — frame[j+1] altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
 
@@ -578,7 +617,7 @@ void FLEX::showframe(int asa, int vsa)
 				w1 = w1 & 0x7f;
 				w2 = (w2 & 0x7f) + w1 - 1;
 				if (w2 > 199) w2 = 199;  // BCH miscorrection can produce w2 up to 253; clamp to frame[] bounds
-				if (w1 > w2)  continue;
+				if (w1 > w2)  { if (bLongAddress) j++; continue; }
 
 				// Standard FLEX (North American) word layout: F=bits 11-12, C=bit 10.
 				// (RCR STD-43A / FLEX-TD differs: it adds a 10-bit K checksum that shifts
@@ -592,6 +631,10 @@ void FLEX::showframe(int asa, int vsa)
 				}
 				else
 				{
+					// FIX [Berichtdecodering]: expliciete boundscheck op frame[vb+1].
+					// Invariant: vb=vsa+j-asa<=174; frame[175] is safe, maar toekomstige
+					// wijzigingen aan de vsa-bound zouden dit ongeldig maken.
+					if (vb + 1 >= 200) { j++; continue; }
 					iFragmentNumber = (int)(frame[vb+1] >> 11) & 0x03;
 					iContFlag       = (int)(frame[vb+1] >> 10) & 0x01;
 					w2--;
@@ -643,7 +686,7 @@ void FLEX::showframe(int asa, int vsa)
 					// Capture text before any frag_save() resets iMessageIndex.
 					// Buffer sized to hold a full message (MAX_STR_LEN) so the [ALPHA] log line
 					// is never truncated; downstream comparison tools rely on the complete text.
-					char szDbgText[MAX_STR_LEN + 1]; int dbgLen = min(iMessageIndex, MAX_STR_LEN);
+					static char szDbgText[MAX_STR_LEN + 1]; int dbgLen = min(iMessageIndex, MAX_STR_LEN);  // FIX [L4]: static voorkomt 5 KB stack-allocatie per aanroep
 					memcpy(szDbgText, message_buffer, dbgLen); szDbgText[dbgLen] = '\0';
 
 					if (iContFlag == 1)
@@ -682,7 +725,7 @@ void FLEX::showframe(int asa, int vsa)
 								if (iFragmentNumber == g_flexFragSlots[slot].nextExpectedFrag) {
 									int prevLen = g_flexFragSlots[slot].textLen;
 									g_flexFragSlots[slot].nextExpectedFrag = (iFragmentNumber + 1) % 3;
-									g_flexFragSlots[slot].timestamp_ms     = GetTickCount();
+									g_flexFragSlots[slot].timestamp_ms     = GetTickCount64();
 									frag_save(slot);
 									bFragmentBuffered = true;
 									DebugLog("[FRAG] %02d/%03d  capcode=%07li  F-type continuation slot=%d  frag=%d (mod3 OK)  chain=%d->%d chars  partial=\"%s\"",
@@ -768,14 +811,15 @@ void FLEX::showframe(int asa, int vsa)
 
 				// RAH/PH: Short instruction for temporary address in group messaging
 
-				if (!Profile.showinstr) continue;
+				if (!Profile.showinstr) { if (bLongAddress) j++; continue; }
 
 				if (Profile.convert_si) bFLEX_Frame_contains_SI = true;
 
 				strcpy(szWindowText[4], "Groupcall");
 
+				// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
-				if (bFLEX_groupmessage) continue;
+				if (bFLEX_groupmessage) { if (bLongAddress) j++; continue; }
 				show_phase_speed(vt);
 
 				iAssignedFrame  = (frame[vb] >> 10) & 0x7f;	// Frame with groupmessage
@@ -804,8 +848,9 @@ void FLEX::showframe(int asa, int vsa)
 
 				// standard / special format numeric / numbered numeric message
 
-				if (!Profile.shownumeric) continue;
+				if (!Profile.shownumeric) { if (bLongAddress) j++; continue; }
 
+				// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
 
@@ -820,7 +865,12 @@ void FLEX::showframe(int asa, int vsa)
 					w1++;
 					w2++;
 				}
-				else cc = frame[vb+1];	// long address - first message word in second vector field
+				else
+				{
+					// FIX [Berichtdecodering]: boundscheck op frame[vb+1] voor long-address numeric.
+					if (vb + 1 >= 200) { j++; continue; }
+					cc = frame[vb+1];	// long address - first message word in second vector field
+				}
 
 				// skip over first 10 bits for numbered numeric, otherwise skip first 2
 
@@ -862,6 +912,7 @@ void FLEX::showframe(int asa, int vsa)
 
 				if ((Profile.showtone && tt) || (Profile.shownumeric && !tt))
 				{
+					// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 					show_address(frame[j], frame[j+1], bLongAddress);	// show address
 					show_phase_speed(vt);
 
@@ -882,7 +933,8 @@ void FLEX::showframe(int asa, int vsa)
 						hourly_char[flex_speed][STAT_NUMERIC] += 3;
 						daily_char [flex_speed][STAT_NUMERIC] += 3;
 
-						if (bLongAddress)  // long addresses have 2 vector words...
+						// FIX [Berichtdecodering]: boundscheck vóór frame[vb+1] voor tone-numeric.
+						if (bLongAddress && (vb + 1 < 200))
 						{
 							for (i=0; i<=16; i+=4)
 							{
@@ -896,14 +948,15 @@ void FLEX::showframe(int asa, int vsa)
 					hourly_stat[flex_speed][STAT_NUMERIC]++;
 					daily_stat [flex_speed][STAT_NUMERIC]++;
 				}
-				else continue;
+				else { if (bLongAddress) j++; continue; }
 
 				break;
 
 				case MODE_BINARY:
 
-				if (!Profile.showmisc) continue;
+				if (!Profile.showmisc) { if (bLongAddress) j++; continue; }
 
+				// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
 
@@ -911,6 +964,10 @@ void FLEX::showframe(int asa, int vsa)
 				w2 = w1 >> 7;
 				w1 = w1 & 0x7f;
 				w2 = (w2 & 0x7f) + w1 - 1;
+				// Same BCH-miscorrection guard as the ALPHA branch above.
+				// frame[] is only 200 entries; without the clamp, w2 can reach 253.
+				if (w2 > 199) w2 = 199;
+				if (w1 > w2)  { if (bLongAddress) j++; continue; }
 
 				if (!bLongAddress)
 				{
@@ -921,6 +978,8 @@ void FLEX::showframe(int asa, int vsa)
 				}
 				else
 				{
+					// FIX [Berichtdecodering]: boundscheck op frame[vb+1] voor binary long-address.
+					if (vb + 1 >= 200) { j++; continue; }
 					iFragmentNumber = (int) (frame[vb+1] >> 13) & 0x03;
 
 					if (iFragmentNumber == 3) w1++;
@@ -952,6 +1011,13 @@ void FLEX::showframe(int asa, int vsa)
 					}
 				}
 				break;
+
+				default:
+				// vt is `(frame[vb] >> 4) & 0x07` so all 8 values are covered above.
+				// This default exists so future code changes don't silently fall through
+				// the post-switch ShowMessage()/ConvertGroupcall() path on unknown types.
+				if (bLongAddress) j++;
+				continue;
 			}
 
 			if (Profile.convert_si && ((vt == MODE_SHORT_INSTRUCTION) || bFLEX_groupmessage))
@@ -992,7 +1058,10 @@ void FLEX::showframe(int asa, int vsa)
 
 			if (bLongAddress) j++;	// if long address then make sure we skip over both parts
 		}
-		Check4_MissedGroupcalls();	// At this point, no more addresses/messages should follow, so check for missed groupcalls
+		// Skip when iCurrentFrame is the 99/999 sentinel from a rejected
+		// frame-info word — comparing groupcall framenumbers against 999
+		// would otherwise count phantom misses.
+		if (bCurrentFrameValid) Check4_MissedGroupcalls();
 	}
 } // Reset for new message.
 
@@ -1026,7 +1095,7 @@ void FLEX::showblock(int blknum)
 			if (ob[j] == 0) cc ^= 0x100000l;
 		}
 
-		if (err == 3) cc ^= 0x400000l; // flag uncorrectable errors
+		if (err >= 3) cc ^= 0x400000l; // flag uncorrectable errors (defensive: ecd() currently returns 0..3)
 
 		frame[k] = cc;
 	}
@@ -1110,6 +1179,18 @@ void frame_flex(char gin)
 	static short int slr[4] = { 0, 0, 0, 0 };
 	static int bct, hbit;
 	double aver=0.0;
+
+	// flex_reset() asked us to clear our internal state. Do it before any
+	// shift-register or counter update so a single stale bit can't slip
+	// through into the first post-reset frame.
+	if (g_flexFrameFlexResetRequested) {
+		cy = 0;
+		fr = 0;
+		bct = 0;
+		hbit = 0;
+		slr[0] = slr[1] = slr[2] = slr[3] = 0;
+		g_flexFrameFlexResetRequested = false;
+	}
 
 	extern double rcver[65];
 	extern double exc;
@@ -1522,6 +1603,11 @@ void frame_flex(char gin)
 }
 
 
+// Definition for the forward-declared extern at the top of this file.
+// Tracks whether the current cycle/frame indices are real protocol values or
+// the 99/999 sentinel set when BCH decoding rejected the frame-info word.
+bool bCurrentFrameValid = true;
+
 void display_cfstatus(int cycle, int frame)
 {
 	// cycle/frame come from the BCH-corrected frame-info word; trust them.
@@ -1533,6 +1619,7 @@ void display_cfstatus(int cycle, int frame)
 	{
 		iCurrentCycle = 99;				// cycle 15 does not exist on-air; display 99/999
 		iCurrentFrame = 999;
+		bCurrentFrameValid = false;
 
 		CountBiterrors(5);
 	}
@@ -1540,6 +1627,7 @@ void display_cfstatus(int cycle, int frame)
 	{
 		iCurrentCycle = cycle;
 		iCurrentFrame = frame;
+		bCurrentFrameValid = true;
 	}
 }
 // end of display_cfstatus()

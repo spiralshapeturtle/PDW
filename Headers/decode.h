@@ -42,7 +42,7 @@ extern int rcv[16]; // { 0, 1, 1, 2, 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3 };
 
 // These hold or track VxD input data from comport
 extern unsigned long  bufsize;
-extern unsigned long  *cpstn;
+extern volatile unsigned long  *cpstn;  // FIX [L3]: volatile — geschreven door RxThread, gelezen door main thread
 extern unsigned short int *freqdata;
 extern unsigned char  *linedata;
 

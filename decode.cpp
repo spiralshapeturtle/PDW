@@ -79,7 +79,7 @@ int rcv[16]={ 0, 1, 1, 2, 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3 };
 
 // These hold or track VxD input data from comport
 unsigned long  bufsize;
-unsigned long  *cpstn = NULL;
+volatile unsigned long  *cpstn = NULL;  // FIX [L3]: volatile zodat compiler *cpstn niet hoist (schrijver op RxThread)
 unsigned short int *freqdata = NULL;
 unsigned char  *linedata = NULL;
 
@@ -91,7 +91,7 @@ int sig_flg=0;
 
 // HWi Add variables to hold the original values when in playback mode
 unsigned long  old_bufsize;
-unsigned long  *old_cpstn;
+volatile unsigned long  *old_cpstn;  // FIX [L3]: overeenkomend met cpstn
 unsigned short int *old_freqdata;
 unsigned char  *old_linedata;
 
@@ -155,6 +155,11 @@ struct
 int recsize = 3;				// Ignore word alignment, 3 bytes exact
 unsigned long nextcpstn = 1;	// Ahead of cpstn for playback
 unsigned long rcpstn = 0;		// Index used by cpstn for playback
+
+// FIX [E1]: recording ring-buffer indices — verplaatst van static-local naar file-scope
+// zodat Start_Recording ze expliciet kan resetten bij elke nieuwe opname.
+static unsigned int rec_tmp = 0;
+static unsigned int rec_last_write = 0;
 unsigned short int ltick;		// Last tick for pocflex rec compatibility
 
 #define RECBUFSIZE  4096
@@ -169,6 +174,10 @@ char rbuffer[FILEBUFSIZE];
 bool Start_Playback(LPTSTR lpstrFile)
 {
 	pd_reset_all();
+
+	// FIX [E2]: rcpstn/nextcpstn werden niet gereset — stale data uit vorige playback werd verwerkt
+	rcpstn    = 0;
+	nextcpstn = 1;
 
 	// HWi Save values to restore it after the playback
 	old_cpstn    = cpstn;
@@ -249,9 +258,13 @@ void pdw_playback(void)
 // HWi Inserted recording again
 void Start_Recording(LPTSTR lpstrFile)
 {
+	// FIX [C1]: voorkom FILE*-lek als Start_Recording opnieuw wordt aangeroepen zonder Stop_Recording
+	if (pRecording) { fclose(pRecording); pRecording = NULL; bRecording = false; }
+
 	// HWi
-	char szBuffer[80];
-	sprintf(szBuffer, "Recording %s", lpstrFile);
+	// FIX [D1]: szBuffer was 80 bytes; lpstrFile kan MAX_PATH (260) zijn — stack buffer overflow
+	char szBuffer[MAX_PATH + 32];
+	snprintf(szBuffer, sizeof(szBuffer), "Recording %s", lpstrFile);
 	SetWindowText(ghWnd, (LPSTR) szBuffer);
 	bRecording = true;
 
@@ -259,13 +272,16 @@ void Start_Recording(LPTSTR lpstrFile)
     {
 		MessageBox(NULL,"Error opening output file for recording.","PDW",MB_ICONWARNING);
 		bRecording = false;
-        // HWi 
+        // HWi
 		SetWindowText(ghWnd, (LPSTR) pdw_version);
     }
     else
     {
 		setbuf(pRecording,rbuffer);
 		fflush(pRecording);
+		// FIX [E1]: reset recording indices naar huidige bufpositie; voorkomt schrijven van stale data
+		rec_tmp        = (cpstn != NULL) ? *cpstn : 0;
+		rec_last_write = 0;
     }
 }
 
@@ -290,7 +306,8 @@ BOOL Open_Recording(OPENFILENAME *pofn, LPTSTR lpstrFile, bool bOpennotsave)
 	char szExt[] = ".rec";
 	char szInitialDir[MAX_PATH];
 
-	sprintf(szInitialDir, "%s\\Recordings", szPath);
+	// FIX [D2]: szPath kan MAX_PATH zijn; "\\Recordings" + null overschrijdt de MAX_PATH buffer
+	_snprintf_s(szInitialDir, sizeof(szInitialDir), _TRUNCATE, "%s\\Recordings", szPath);
 	strcpy(szTitle, bOpennotsave ? "Playback Recording" : "Start Recording");
 
 	pofn->lStructSize		= sizeof(OPENFILENAME);
@@ -473,17 +490,20 @@ void pdw_decode(void)
 {
 	if (bRecording)	// Hwi Added for recording function
 	{
-		static unsigned int last_write;
-		static unsigned int tmp;
-
-		while (tmp != *cpstn)
+		// FIX [E1]: static locals vervangen door file-scope rec_tmp/rec_last_write (gereset in Start_Recording)
+		// FIX [H2]: fwrite-retourwaarden worden gecontroleerd; bij schijffout opname stoppen
+		while (rec_tmp != *cpstn)
 		{
-			last_write -= freqdata[tmp];
-			fwrite(&last_write,    2, 1, pRecording);
-			fwrite(&linedata[tmp], 1, 1, pRecording);
-			tmp++;
+			rec_last_write -= freqdata[rec_tmp];
+			if (fwrite(&rec_last_write,    2, 1, pRecording) != 1 ||
+			    fwrite(&linedata[rec_tmp], 1, 1, pRecording) != 1)
+			{
+				Stop_Recording();
+				break;
+			}
+			rec_tmp++;
 
-			if (tmp == bufsize) tmp = 0;
+			if (rec_tmp == bufsize) rec_tmp = 0;
 		}
 	}
 
@@ -711,9 +731,10 @@ void check_save_data(void)
 				if (Profile.stat_file_use_date)
 				{
 					CreateDateFilename(".st", bDaily ? &prev_statTime : NULL);
-					sprintf(filename, "%s\\%s", szLogPathName, szFilenameDate);
+					// FIX [D3]: sprintf kan filename[1024] overschrijden bij lange paden
+					_snprintf_s(filename, sizeof(filename), _TRUNCATE, "%s\\%s", szLogPathName, szFilenameDate);
 				}
-				else sprintf(filename, "%s\\%s.st", szLogPathName, Profile.stat_file);
+				else _snprintf_s(filename, sizeof(filename), _TRUNCATE, "%s\\%s.st", szLogPathName, Profile.stat_file);
 
 				if ((pStatFile = fopen(filename, "a")) != NULL)
 				{

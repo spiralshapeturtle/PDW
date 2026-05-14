@@ -1108,7 +1108,7 @@ int xSendMail(THEMAIL *pMail)
 
 DWORD WINAPI MailThreadFunc(LPVOID lpData)
 {
-	DWORD dwLastActivityMs = GetTickCount() ;
+	ULONGLONG dwLastActivityMs = GetTickCount64() ;
 
 	OUTPUTDEBUGMSG((("MailThreadFunc()")));
 
@@ -1119,14 +1119,14 @@ DWORD WINAPI MailThreadFunc(LPVOID lpData)
 			// Close idle connection before the server times it out (typically 5 min).
 			// Next message will reconnect fresh — no stale socket, no dropped message.
 			if(g_persistSocket != INVALID_SOCKET &&
-			   GetTickCount() - dwLastActivityMs > 3 * 60 * 1000u)
+			   GetTickCount64() - dwLastActivityMs > 3 * 60 * 1000u)
 			{
 				smtpDisconnect(g_persistSocket) ;
 				g_persistSocket = INVALID_SOCKET ;
 				AddResponse("SMTP: idle connection closed (3 min) — will reconnect on next message") ;
 			}
 		} else {
-			dwLastActivityMs = GetTickCount() ;
+			dwLastActivityMs = GetTickCount64() ;
 			if(!xSendMail((THEMAIL *) lpData)) {
 				Sleep(1000) ;   // send failed — brief pause before retry
 			}
@@ -1182,8 +1182,11 @@ void StartMail(int nOptions)
 
 int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP, char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel)
 {
+	// FIX [Geheugenbeheer]: szBuffer vergroot van 1024 naar MAX_STR_LEN+256 (5376 bytes)
+	// en alle wsprintf-aanroepen vervangen door _snprintf_s met _TRUNCATE om stack-overflow
+	// te voorkomen bij lange FLEX/POCSAG berichten (MSG_MESSAGE tot 5120 bytes).
 	int	 len = 0 ;
-	char szBuffer[1024] = { 0 } ;
+	char szBuffer[MAX_STR_LEN + 256] = { 0 } ;
 //	char szSubject[1024]="";
 
 //	OUTPUTDEBUGMSG((("SendMail()")));
@@ -1236,35 +1239,35 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 
 	if(mail.options & MAIL_OPTION_ADDRESS)
 	{
-		len += wsprintf(szBuffer + len, "%s ", sz1) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz1) ;
 	}
 	if(mail.options & MAIL_OPTION_TIME)
 	{
-		len += wsprintf(szBuffer + len, "%s ", sz2) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz2) ;
 	}
 	if(mail.options & MAIL_OPTION_DATE)
 	{
-		len += wsprintf(szBuffer + len, "%s ", sz3) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz3) ;
 	}
 	if(mail.options & MAIL_OPTION_MODE)
 	{
-		len += wsprintf(szBuffer + len, "%s ", sz4) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz4) ;
 	}
 	if(mail.options & MAIL_OPTION_TYPE)
 	{
-		len += wsprintf(szBuffer + len, "%s ", sz5) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz5) ;
 	}
 	if(mail.options & MAIL_OPTION_BITRATE)
 	{
-		len += wsprintf(szBuffer + len, "%s ", sz6) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz6) ;
 	}
 	if(mail.options & MAIL_OPTION_MESSAGE)
 	{
-		len += wsprintf(szBuffer + len, "%s ", sz7) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz7) ;
 	}
 	if(mail.options & MAIL_OPTION_LABEL)
 	{
-		len += wsprintf(szBuffer + len, "- %s ", szLabel) ;
+		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "- %s ", szLabel) ;
 	}
 
 	if(!mail.smtp_port)

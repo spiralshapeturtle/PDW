@@ -14,7 +14,7 @@
 #define FLEXGROUPMODE_COMBINE			0x04
 #define FLEXGROUPMODE_HIDEGROUPCODES	0x08
 
-extern unsigned long int iSecondsElapsed;
+extern unsigned long long iSecondsElapsed;  // FIX [F3]: unsigned long overloopt na ~49 dagen
 
 extern char Current_MSG[9][MAX_STR_LEN];	// PH: Buffer for all message items
 extern unsigned char message_buffer[MAX_STR_LEN+1];

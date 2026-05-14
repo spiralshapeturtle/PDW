@@ -91,7 +91,7 @@ extern int pocsag_baud_rate, pocbit;
 // ACARS globals
 int process_acars_bit = 0;
 
-HGLOBAL h_audio_memory_block[NUMBER_BUFFERS];
+LPVOID h_audio_memory_block[NUMBER_BUFFERS];  // FIX [L2]: HGLOBAL Win16-patroon vervangen door HeapAlloc
 int audio_buffer_cnt = 0;
 
 // Routines and variables used for debugging.
@@ -111,8 +111,7 @@ extern bool bMode_IDLE;
 BOOL Start_Capturing(void)
 {
 	WAVEFORMATEX my_wave_format={0};
-	HGLOBAL h_memory_block = NULL;
-	LPSTR  lp_memory_block = NULL;
+	LPSTR  lp_memory_block = NULL;  // FIX [L2]: h_memory_block (HGLOBAL) vervallen; HeapAlloc geeft direct pointer
 	MMRESULT result;
 	char *msg;
 
@@ -167,15 +166,8 @@ BOOL Start_Capturing(void)
 	// Prepare buffers and add them to the input queue for the Audio API to fill.
 	for (int ctr=0; ctr<NUMBER_BUFFERS; ctr++)
 	{
-		h_memory_block = (HGLOBAL)GlobalAlloc(GHND, SIZEOF_AUDIOBUFFER);
-
-		if(!h_memory_block)
-		{
-			waveInClose(hWaveIn);
-			free_audio_buffers();
-			return(FALSE);
-		}
-		lp_memory_block = (LPSTR)GlobalLock(h_memory_block);
+		// FIX [L2]: GlobalAlloc+GlobalLock (Win16-patroon) vervangen door HeapAlloc
+		lp_memory_block = (LPSTR)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, SIZEOF_AUDIOBUFFER);
 
 		if(!lp_memory_block)
 		{
@@ -185,7 +177,7 @@ BOOL Start_Capturing(void)
 		}
 
 		// Keep track of buffers allocated.
-		h_audio_memory_block[ctr] = h_memory_block;
+		h_audio_memory_block[ctr] = lp_memory_block;
 		audio_buffer_cnt++;
 
 		WaveHeader[ctr].dwFlags			= 0;
@@ -196,10 +188,14 @@ BOOL Start_Capturing(void)
 		WaveHeader[ctr].dwBytesRecorded	= 0;
 		WaveHeader[ctr].lpData			= (LPSTR)lp_memory_block;
 
-		waveInPrepareHeader(hWaveIn, &WaveHeader[ctr], (UINT)sizeof(WaveHeader[ctr]));
-
-		// Add buffer to input queue
-		waveInAddBuffer(hWaveIn, &WaveHeader[ctr], (UINT)sizeof(WaveHeader[ctr]));
+		// FIX [H1]: retourwaarden controleren — stille fout hier laat buffer buiten de queue
+		if (waveInPrepareHeader(hWaveIn, &WaveHeader[ctr], (UINT)sizeof(WaveHeader[ctr])) != MMSYSERR_NOERROR ||
+		    waveInAddBuffer   (hWaveIn, &WaveHeader[ctr], (UINT)sizeof(WaveHeader[ctr])) != MMSYSERR_NOERROR)
+		{
+			waveInClose(hWaveIn);
+			free_audio_buffers();
+			return FALSE;
+		}
 	}
     
 	last_buff_processed = -1;
@@ -220,8 +216,13 @@ BOOL Start_Capturing(void)
 //   Resets the connection to the audio device and closes it.
 //
 BOOL Stop_Capturing(void)
-{   
+{
 	bCapturing = false;
+
+	// FIX [C2]: hWaveOut werd nooit gesloten — handle lek per start/stop cyclus
+	waveOutReset(hWaveOut);
+	waveOutClose(hWaveOut);
+	hWaveOut = NULL;  // FIX [L1]: hWaveOut op NULL zodat herhaalde Stop_Capturing geen stale handle gebruikt
 
 	// Reset the audio connection... takes waiting buffers out of input queue
 	waveInReset(hWaveIn);
@@ -248,8 +249,7 @@ void free_audio_buffers(void)
 
 	for (int i=0; i<audio_buffer_cnt; i++)
 	{
-		GlobalUnlock(h_audio_memory_block[i]);
-		GlobalFree(h_audio_memory_block[i]);
+		HeapFree(GetProcessHeap(), 0, h_audio_memory_block[i]);  // FIX [L2]: GlobalUnlock+GlobalFree vervangen
 		h_audio_memory_block[i] = NULL;
 	}
 	audio_buffer_cnt = 0;
@@ -323,8 +323,12 @@ void Process_ReadyBuffers(HWND hwnd)
 //		}
             
 		// Add audio buffer back to input queue
-		waveInAddBuffer(hWaveIn, &WaveHeader[last_buff_processed],
-							(UINT)sizeof(WaveHeader[last_buff_processed]));
+		// FIX [H1]: retourwaarde controleren; stille fout hier laat buffer buiten de queue
+		if (waveInAddBuffer(hWaveIn, &WaveHeader[last_buff_processed],
+		                    (UINT)sizeof(WaveHeader[last_buff_processed])) != MMSYSERR_NOERROR)
+		{
+			bCapturing = false;
+		}
 	}
 	InterlockedExchangeAdd(&buffers_ready, -(LONG)old_buffs_ready);
 }
@@ -336,8 +340,9 @@ void Process_ReadyBuffers(HWND hwnd)
 //   As we don't have much time here, we just keep track of how many
 //   wave buffers are ready.
 //
-void CALLBACK Callback_Function(HWAVEIN hwi, UINT uMsg, DWORD dwInstance, DWORD dwParam1, DWORD dwParam2)
+void CALLBACK Callback_Function(HWAVEIN hwi, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
+	(void)hwi; (void)dwInstance; (void)dwParam1; (void)dwParam2;
 	if (uMsg == WIM_DATA) InterlockedIncrement(&buffers_ready);
 }
 
