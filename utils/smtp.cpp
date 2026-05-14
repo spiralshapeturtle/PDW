@@ -20,6 +20,8 @@ static SOCKET smtp_socket = INVALID_SOCKET;
 static char buf[MY_BUFF_SIZE];
 
 static HANDLE MailThread ;
+static HANDLE hMailEvent = NULL ;
+static SOCKET g_persistSocket = INVALID_SOCKET ;
 static THEMAIL mail ;
 static int nMaxLen ;
 static BOOL keepbusy = TRUE ;
@@ -1025,14 +1027,13 @@ static int smtpMail(int sfd, char *data)
 }
 
 
-// returns 0 on success, -1 on failure
+// returns 0 on failure or empty queue, 1 on success
 int xSendMail(THEMAIL *pMail)
 {
-	SOCKET	sfd;
-	int 	rc = (-1);
+	int 	rc ;
 	char *pTmp ;
 	extern int nSMTPsessions;
-	
+
 	if(nBufferdMailStart == nBufferdMailEnd)
 	{
 		return(0) ;
@@ -1061,38 +1062,45 @@ int xSendMail(THEMAIL *pMail)
 		pTmp = MAILSEND_DEF_SUB;
 		OUTPUTDEBUGMSG((("No subject specified using default subject %s"), pTmp));
 	}
-	if (pMail->helo_domain == (char *) NULL) {
+	if (pMail->helo_domain == (char *) NULL || pMail->helo_domain[0] == '\0') {
 		pMail->helo_domain= "127.0.0.1" ;
 		OUTPUTDEBUGMSG((("No domain specified using default %s"), pMail->helo_domain));
 	}
-	
-	// open the network connection
-	sfd = smtpConnect(pMail->smtp_server, pMail->smtp_port);
-	if(sfd == INVALID_SOCKET)
-	{
-		nSMTPerrors++;			// PH: Counts # of Errors
-		return(0) ;
-	}
-	else nSMTPsessions++;		// PH: Counts # of sessions
 
-	if(!(rc = smtpHelo(sfd))) {
-		if(!(rc = smtpLogin(sfd))) {
-			if(!(rc = smtpMailFrom(sfd))) {
-				if(!(rc = smtpRcptTo(sfd))) {
-					if(!(rc = smtpData(sfd))) {
-						if(!(rc = smtpMail(sfd, pTmp))) {
-							if(!(rc = smtpEom(sfd))) {
-								rc = smtpQuit(sfd) ;
-							}
-						}
-					}
-				}
-			}
+	// Connect and authenticate once; reuse the socket across messages.
+	if(g_persistSocket == INVALID_SOCKET)
+	{
+		g_persistSocket = smtpConnect(pMail->smtp_server, pMail->smtp_port);
+		if(g_persistSocket == INVALID_SOCKET)
+		{
+			nSMTPerrors++;
+			return(0) ;
+		}
+		nSMTPsessions++;
+		if(smtpHelo(g_persistSocket) || smtpLogin(g_persistSocket))
+		{
+			smtpDisconnect(g_persistSocket);
+			g_persistSocket = INVALID_SOCKET;
+			return(0);
 		}
 	}
 
-	// close the network connection
-	smtpDisconnect(sfd);
+	// Per-message transaction: MAIL FROM → RCPT TO → DATA → body → EOM
+	rc = 0;
+	if(smtpMailFrom(g_persistSocket))        rc = -1;
+	else if(smtpRcptTo(g_persistSocket))     rc = -1;
+	else if(smtpData(g_persistSocket))       rc = -1;
+	else if(smtpMail(g_persistSocket, pTmp)) rc = -1;
+	else if(smtpEom(g_persistSocket))        rc = -1;
+
+	if(rc != 0)
+	{
+		// Connection is broken; close so the next call reconnects.
+		smtpDisconnect(g_persistSocket);
+		g_persistSocket = INVALID_SOCKET;
+		return(0);
+	}
+
 	return(1);
 }
 
@@ -1102,10 +1110,21 @@ DWORD WINAPI MailThreadFunc(LPVOID lpData)
 	OUTPUTDEBUGMSG((("MailThreadFunc()")));
 
 	while(keepbusy) {
-		if(!xSendMail((THEMAIL *) lpData)) {
-			Sleep(1000) ;
+		if(nBufferdMailStart == nBufferdMailEnd) {
+			// Queue empty — block until SendMail signals or 5 s safety timeout.
+			WaitForSingleObject(hMailEvent, 5000) ;
+		} else if(!xSendMail((THEMAIL *) lpData)) {
+			Sleep(1000) ;   // send failed — brief pause before retry
 		}
 	}
+
+	// Cleanly close the persistent SMTP connection on thread exit.
+	if(g_persistSocket != INVALID_SOCKET) {
+		smtpQuit(g_persistSocket) ;
+		smtpDisconnect(g_persistSocket) ;
+		g_persistSocket = INVALID_SOCKET ;
+	}
+
 	OUTPUTDEBUGMSG((("MailThreadFunc() 	ExitThread(0)\n")));
 	ExitThread(0);
 	return 0;
@@ -1123,6 +1142,7 @@ void StartMail(int nOptions)
 			OUTPUTDEBUGMSG((("StartMail() MailThread != 0  Mail is already Started!")));
 			return;
 		}
+		hMailEvent = CreateEvent(NULL, FALSE, FALSE, NULL) ;
 		keepbusy = TRUE ;
 		MailThread = CreateThread(0,0,MailThreadFunc,(LPVOID) &mail,0, &dummy);
 		OUTPUTDEBUGMSG((("StartMail() CreateThread\n")));
@@ -1135,9 +1155,11 @@ void StartMail(int nOptions)
 			return;
 		}
 		keepbusy = FALSE ;
-		Sleep(500) ;
+		if(hMailEvent) SetEvent(hMailEvent) ;   // wake thread so it sees keepbusy==FALSE
+		WaitForSingleObject(MailThread, 3000) ; // wait for clean exit (smtpQuit + TLS can be slow)
 		CloseHandle(MailThread);
 		MailThread = 0;
+		if(hMailEvent) { CloseHandle(hMailEvent) ; hMailEvent = NULL ; }
 		OUTPUTDEBUGMSG((("StartMail() CloseHandle(MailThread)\n")));
 	}
 }
@@ -1249,6 +1271,7 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 		{
 			nBufferdMailStart = 0 ;
 		}
+		if(hMailEvent) SetEvent(hMailEvent) ;   // wake mail thread immediately
 	}
 //	OUTPUTDEBUGMSG((("SendMail() nBufferdMailStart %d nBufferdMailEnd %d\n"), nBufferdMailStart, nBufferdMailEnd));
 	return(0) ;
@@ -1257,6 +1280,7 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 
 int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *szMailTo, char *szMailUser, char *szMailPassword, int iMailPort, int nOptions)
 {
+	StartMail(0) ;              // stop existing thread cleanly before reconfiguring (idempotent if not running)
 	memset(&mail, 0, sizeof(mail)) ;
 	mail.from = szMailFrom ;
 	mail.to = szMailTo ;
@@ -1266,9 +1290,7 @@ int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *s
 	mail.helo_domain = szMailHeloDomain ;
 	mail.user = szMailUser ;
 	mail.password = szMailPassword ;
-//	mail.smtp_port = -1 ;
 	mail.smtp_port = iMailPort ;
-	mail.helo_domain = NULL ;
 	mail.options = nOptions ;
 	StartMail(nOptions) ;
 	return(0) ;

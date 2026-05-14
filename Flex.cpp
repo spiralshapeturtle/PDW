@@ -75,6 +75,12 @@ extern BYTE message_color[];
 extern int  iMessageIndex;
 extern int  nCount_Fragments;
 
+// Set before calling ShowMessage() to signal assembly result to ShowMessage().
+// g_flexAssembled: message was reconstructed from multiple fragments.
+// g_flexOrphanType: 1 = F-type orphan (first/middle, no slot), 2 = C-type orphan (last, no prior chain).
+bool g_flexAssembled  = false;
+int  g_flexOrphanType = 0;
+
 
 int flex_blk = 0;
 int flex_bc  = 0;
@@ -616,7 +622,7 @@ void FLEX::showframe(int asa, int vsa)
 							frag_save(slot);
 							bFragmentBuffered = true;
 						}
-						// all slots full: fall through and show this fragment alone
+						else g_flexOrphanType = 1; // all slots full; show fragment alone with label
 					}
 					else if (iFragmentNumber != FLEX_FRAG_COMPLETE)
 					{
@@ -625,14 +631,9 @@ void FLEX::showframe(int asa, int vsa)
 						if (slot >= 0) {
 							frag_assemble(slot);
 							nCount_Fragments++;
-							// Mark type as reassembled: " ALPHA " → "ALPHA-F"
-							const char *t = Current_MSG[MSG_TYPE];
-							int s = 0, e = (int)strlen(t) - 1;
-							while (t[s] == ' ') s++;
-							while (e > s && t[e] == ' ') e--;
-							sprintf(Current_MSG[MSG_TYPE], "%.*s-F", e - s + 1, t + s);
+							g_flexAssembled = true; // signal ShowMessage() to show assembled indicator
 						}
-						// no prior chain: show this last fragment alone
+						else g_flexOrphanType = 2; // no prior chain; show last fragment alone with label
 					}
 					// K-type (frag==3, cont==0): complete standalone — fall through to ShowMessage()
 				}

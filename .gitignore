@@ -2,3 +2,7 @@
 .idea/
 CLAUDE.md
 .DS_Store
+.vscode/tasks.json
+pdw_vs2017/
+x64/
+Releases/
