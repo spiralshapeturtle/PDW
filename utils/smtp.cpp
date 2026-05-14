@@ -1067,41 +1067,39 @@ int xSendMail(THEMAIL *pMail)
 		OUTPUTDEBUGMSG((("No domain specified using default %s"), pMail->helo_domain));
 	}
 
-	// Connect and authenticate once; reuse the socket across messages.
-	if(g_persistSocket == INVALID_SOCKET)
+	// Retry once: a stale persistent socket (server-side idle timeout) fails on the
+	// first transaction attempt; the second attempt reconnects fresh and succeeds.
+	for(int attempt = 0; attempt < 2; attempt++)
 	{
-		g_persistSocket = smtpConnect(pMail->smtp_server, pMail->smtp_port);
 		if(g_persistSocket == INVALID_SOCKET)
 		{
-			nSMTPerrors++;
-			return(0) ;
+			g_persistSocket = smtpConnect(pMail->smtp_server, pMail->smtp_port);
+			if(g_persistSocket == INVALID_SOCKET)
+				return(0);
+			nSMTPsessions++;
+			if(smtpHelo(g_persistSocket) || smtpLogin(g_persistSocket))
+			{
+				smtpDisconnect(g_persistSocket);
+				g_persistSocket = INVALID_SOCKET;
+				return(0);
+			}
 		}
-		nSMTPsessions++;
-		if(smtpHelo(g_persistSocket) || smtpLogin(g_persistSocket))
-		{
-			smtpDisconnect(g_persistSocket);
-			g_persistSocket = INVALID_SOCKET;
-			return(0);
-		}
-	}
 
-	// Per-message transaction: MAIL FROM → RCPT TO → DATA → body → EOM
-	rc = 0;
-	if(smtpMailFrom(g_persistSocket))        rc = -1;
-	else if(smtpRcptTo(g_persistSocket))     rc = -1;
-	else if(smtpData(g_persistSocket))       rc = -1;
-	else if(smtpMail(g_persistSocket, pTmp)) rc = -1;
-	else if(smtpEom(g_persistSocket))        rc = -1;
+		rc = 0;
+		if(smtpMailFrom(g_persistSocket))        rc = -1;
+		else if(smtpRcptTo(g_persistSocket))     rc = -1;
+		else if(smtpData(g_persistSocket))       rc = -1;
+		else if(smtpMail(g_persistSocket, pTmp)) rc = -1;
+		else if(smtpEom(g_persistSocket))        rc = -1;
 
-	if(rc != 0)
-	{
-		// Connection is broken; close so the next call reconnects.
+		if(rc == 0)
+			return(1);
+
 		smtpDisconnect(g_persistSocket);
 		g_persistSocket = INVALID_SOCKET;
-		return(0);
 	}
 
-	return(1);
+	return(0);
 }
 
 
