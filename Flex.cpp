@@ -66,7 +66,7 @@
 struct FlexFragSlot {
 	bool          active;
 	long          capcode;
-	DWORD         timestamp_ms;
+	ULONGLONG     timestamp_ms;
 	unsigned char text [MAX_STR_LEN];
 	BYTE          color[MAX_STR_LEN];
 	int           textLen;
@@ -154,14 +154,14 @@ FLEX::~FLEX()
 
 static void frag_expire(void)
 {
-	DWORD now = GetTickCount();
+	ULONGLONG now = GetTickCount64();
 	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++)
 		if (g_flexFragSlots[i].active &&
 			(now - g_flexFragSlots[i].timestamp_ms) > FLEX_FRAG_TIMEOUT_MS)
 		{
-			DWORD elapsedMs = now - g_flexFragSlots[i].timestamp_ms;
-			DebugLog("[FRAG] TIMEOUT slot=%d  capcode=%07li  elapsed=%lums  discarded=%d chars  expectedFrag=%d",
-				i, g_flexFragSlots[i].capcode, (unsigned long)elapsedMs,
+			ULONGLONG elapsedMs = now - g_flexFragSlots[i].timestamp_ms;
+			DebugLog("[FRAG] TIMEOUT slot=%d  capcode=%07li  elapsed=%llums  discarded=%d chars  expectedFrag=%d",
+				i, g_flexFragSlots[i].capcode, elapsedMs,
 				g_flexFragSlots[i].textLen, g_flexFragSlots[i].nextExpectedFrag);
 			g_flexFragSlots[i].active = false;
 		}
@@ -183,7 +183,7 @@ static int frag_alloc(long cc)
 	if (slot >= 0) {
 		g_flexFragSlots[slot].textLen            = 0;
 		g_flexFragSlots[slot].nextExpectedFrag   = 0;
-		g_flexFragSlots[slot].timestamp_ms       = GetTickCount();
+		g_flexFragSlots[slot].timestamp_ms       = GetTickCount64();
 		return slot;
 	}
 	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++) {
@@ -192,7 +192,7 @@ static int frag_alloc(long cc)
 			g_flexFragSlots[i].capcode            = cc;
 			g_flexFragSlots[i].textLen            = 0;
 			g_flexFragSlots[i].nextExpectedFrag   = 0;
-			g_flexFragSlots[i].timestamp_ms       = GetTickCount();
+			g_flexFragSlots[i].timestamp_ms       = GetTickCount64();
 			return i;
 		}
 	}
@@ -720,7 +720,7 @@ void FLEX::showframe(int asa, int vsa)
 								if (iFragmentNumber == g_flexFragSlots[slot].nextExpectedFrag) {
 									int prevLen = g_flexFragSlots[slot].textLen;
 									g_flexFragSlots[slot].nextExpectedFrag = (iFragmentNumber + 1) % 3;
-									g_flexFragSlots[slot].timestamp_ms     = GetTickCount();
+									g_flexFragSlots[slot].timestamp_ms     = GetTickCount64();
 									frag_save(slot);
 									bFragmentBuffered = true;
 									DebugLog("[FRAG] %02d/%03d  capcode=%07li  F-type continuation slot=%d  frag=%d (mod3 OK)  chain=%d->%d chars  partial=\"%s\"",

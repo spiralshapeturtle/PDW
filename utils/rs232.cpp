@@ -55,7 +55,7 @@ volatile DWORD rs232_cpstn;
 // suggests the consumer is falling behind. At 19200 baud the buffer holds ~0.5 s of
 // samples; a wrap interval under 200 ms means the consumer is more than 2 s behind
 // real-time and is dropping data.
-static volatile DWORD g_lastWrapTickMs = 0;
+static volatile ULONGLONG g_lastWrapTickMs = 0;
 static volatile DWORD g_overrunWarnCount = 0;
 
 BYTE  byRS232Data[SLICER_BUFSIZE * (sizeof(WORD) + sizeof(BYTE))] ;
@@ -65,10 +65,10 @@ BYTE  byRS232Data[SLICER_BUFSIZE * (sizeof(WORD) + sizeof(BYTE))] ;
 // success with 0 bytes. The watchdog in RxThread detects this and tears
 // down + reopens the handle without involving the main thread.
 static int            g_comPortNumber  = 0;
-static volatile DWORD g_lastDataTickMs = 0;
+static volatile ULONGLONG g_lastDataTickMs = 0;
 // g_connectTickMs is set on every rs232_connect() and rs232_worker_reopen()
 // so the stall watchdog can suppress itself during the Moxa TCP warmup period.
-static volatile DWORD g_connectTickMs  = 0;
+static volatile ULONGLONG g_connectTickMs  = 0;
 #define RS232_STALL_MS              5000u
 #define RS232_RECONNECT_BACKOFF_MS  2000u
 // Moxa NPort needs 1-4 s after CreateFile to start delivering data.
@@ -187,7 +187,7 @@ static int rs232_worker_reopen(void)
 		return rc;
 	}
 	// Reset both timers so the stall watchdog skips the Moxa TCP warmup.
-	g_connectTickMs  = GetTickCount();
+	g_connectTickMs  = GetTickCount64();
 	g_lastDataTickMs = g_connectTickMs;
 	LeaveCriticalSection(&g_handleCs);
 	DebugLog("[rs232_worker_reopen] reconnected on %s", pcComPort);
@@ -311,7 +311,7 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 		return rc;
 	}
 	m_bConnectedToComport= TRUE;
-	g_connectTickMs  = GetTickCount();
+	g_connectTickMs  = GetTickCount64();
 	g_lastDataTickMs = g_connectTickMs;
 	LeaveCriticalSection(&g_handleCs);
 
@@ -405,7 +405,7 @@ int rs232_disconnect()
 ***********************************************************/
 DWORD WINAPI RxThread(LPVOID pCl)
 {
-	g_lastDataTickMs = GetTickCount();
+	g_lastDataTickMs = GetTickCount64();
 
 	do
 	{
@@ -436,19 +436,19 @@ DWORD WINAPI RxThread(LPVOID pCl)
 		// flowing. After RS232_STALL_MS of zero-byte reads, tear down
 		// the handle and reopen it from this thread — no main-thread
 		// involvement, no message-loop dependency.
-		DWORD now = GetTickCount();
+		ULONGLONG now = GetTickCount64();
 		if (bytesRead > 0) {
 			g_lastDataTickMs = now;
 		}
 		else if ((now - g_lastDataTickMs) > RS232_STALL_MS &&
 		         (now - g_connectTickMs)  > RS232_WARMUP_MS) {
-			DebugLog("[RxThread] no data for %ums on COM%d (err=%lu) - reconnecting",
+			DebugLog("[RxThread] no data for %llums on COM%d (err=%lu) - reconnecting",
 				now - g_lastDataTickMs, g_comPortNumber, (unsigned long)readErr);
 			if (rs232_worker_reopen() != RS232_SUCCESS) {
 				// Reopen failed. Distinguish "device physically gone"
 				// (long backoff, don't burn CPU) from "transient hiccup"
 				// (short backoff so we recover quickly on Moxa).
-				g_connectTickMs = GetTickCount();
+				g_connectTickMs = GetTickCount64();
 				Sleep(deviceGone ? RS232_DEVICE_GONE_MS : RS232_RECONNECT_BACKOFF_MS);
 			}
 		}
@@ -520,11 +520,11 @@ int rs232_read(void)
 			DWORD next = idx + 1;
 			if (next >= SLICER_BUFSIZE) {
 				next = 0;
-				DWORD now = GetTickCount();
-				DWORD lastWrap = g_lastWrapTickMs;
+				ULONGLONG now = GetTickCount64();
+				ULONGLONG lastWrap = g_lastWrapTickMs;
 				if (lastWrap != 0 && (now - lastWrap) < 200u) {
 					if ((++g_overrunWarnCount & 0x3F) == 1)
-						DebugLog("[rs232] RX ring wrapped %ums after previous wrap - consumer likely behind (count=%u)",
+						DebugLog("[rs232] RX ring wrapped %llums after previous wrap - consumer likely behind (count=%u)",
 							now - lastWrap, (unsigned)g_overrunWarnCount);
 				}
 				g_lastWrapTickMs = now;
@@ -574,11 +574,11 @@ int slicer_read(void)
 		DWORD next = idx + 1;
 		if (next >= SLICER_BUFSIZE) {
 			next = 0;
-			DWORD now = GetTickCount();
-			DWORD lastWrap = g_lastWrapTickMs;
+			ULONGLONG now = GetTickCount64();
+			ULONGLONG lastWrap = g_lastWrapTickMs;
 			if (lastWrap != 0 && (now - lastWrap) < 200u) {
 				if ((++g_overrunWarnCount & 0x3F) == 1)
-					DebugLog("[slicer] RX ring wrapped %ums after previous wrap - consumer likely behind (count=%u)",
+					DebugLog("[slicer] RX ring wrapped %llums after previous wrap - consumer likely behind (count=%u)",
 						now - lastWrap, (unsigned)g_overrunWarnCount);
 			}
 			g_lastWrapTickMs = now;

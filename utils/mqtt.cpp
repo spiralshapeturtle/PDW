@@ -535,7 +535,7 @@ static void DoSend(const MqttJob *job)
 
 static DWORD WINAPI WorkerThreadProc(LPVOID)
 {
-    DWORD dwLastActivityMs = 0;
+    ULONGLONG dwLastActivityMs = 0;
 
     while (g_bRunning)
     {
@@ -559,14 +559,14 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
             LeaveCriticalSection(&g_cs);
 
             if (!bHaveJob) break;
-            dwLastActivityMs = GetTickCount();
+            dwLastActivityMs = GetTickCount64();
             bDidWork = TRUE;
             DoSend(&job);
         }
 
         if (!bDidWork && g_mqttClient &&
             dwLastActivityMs != 0 &&
-            (GetTickCount() - dwLastActivityMs) > MQTT_IDLE_DISCONNECT_MS)
+            (GetTickCount64() - dwLastActivityMs) > MQTT_IDLE_DISCONNECT_MS)
         {
             ClientDestroy();
             dwLastActivityMs = 0;

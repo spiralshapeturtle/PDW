@@ -1108,7 +1108,7 @@ int xSendMail(THEMAIL *pMail)
 
 DWORD WINAPI MailThreadFunc(LPVOID lpData)
 {
-	DWORD dwLastActivityMs = GetTickCount() ;
+	ULONGLONG dwLastActivityMs = GetTickCount64() ;
 
 	OUTPUTDEBUGMSG((("MailThreadFunc()")));
 
@@ -1119,14 +1119,14 @@ DWORD WINAPI MailThreadFunc(LPVOID lpData)
 			// Close idle connection before the server times it out (typically 5 min).
 			// Next message will reconnect fresh — no stale socket, no dropped message.
 			if(g_persistSocket != INVALID_SOCKET &&
-			   GetTickCount() - dwLastActivityMs > 3 * 60 * 1000u)
+			   GetTickCount64() - dwLastActivityMs > 3 * 60 * 1000u)
 			{
 				smtpDisconnect(g_persistSocket) ;
 				g_persistSocket = INVALID_SOCKET ;
 				AddResponse("SMTP: idle connection closed (3 min) — will reconnect on next message") ;
 			}
 		} else {
-			dwLastActivityMs = GetTickCount() ;
+			dwLastActivityMs = GetTickCount64() ;
 			if(!xSendMail((THEMAIL *) lpData)) {
 				Sleep(1000) ;   // send failed — brief pause before retry
 			}
