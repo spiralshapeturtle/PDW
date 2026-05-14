@@ -431,7 +431,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.3";			// Current version info
+char *pdw_version = "PDW v3.4";			// Current version info
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;

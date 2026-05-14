@@ -201,6 +201,7 @@ BEGIN
     LTEXT           "Win2k/XP RS232 support by: Herman Withaar",IDC_STATIC,113,106,152,8
     PUSHBUTTON      "Visit PDW website",IDC_WEBSITE,121,68,68,15
     LTEXT           "2013 GNU GENERAL PUBLIC LICENSE",IDC_STATIC,124,57,124,8
+    LTEXT           "Signal analysis refined by Claude (Anthropic), 2025",IDC_STATIC,79,90,175,8
 END
 
 CLEARSCREENDLGBOX DIALOG 30, 20, 113, 66
@@ -993,8 +994,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 3,3,0,0
- PRODUCTVERSION 3,3,0,0
+ FILEVERSION 3,4,0,0
+ PRODUCTVERSION 3,4,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -1012,11 +1013,11 @@ BEGIN
             VALUE "Comments", "Supports Windows 95, 98, ME, 2K and XP"
             VALUE "CompanyName", "WitWarez"
             VALUE "FileDescription", "POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
-            VALUE "FileVersion", "3.3"
+            VALUE "FileVersion", "3.4"
             VALUE "InternalName", "PDW"
-            VALUE "OriginalFilename", "PDW3_3.exe"
+            VALUE "OriginalFilename", "PDW3_4.exe"
             VALUE "ProductName", "PDW"
-            VALUE "ProductVersion", "3.3"
+            VALUE "ProductVersion", "3.4"
         END
     END
     BLOCK "VarFileInfo"
@@ -1182,7 +1183,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME             " PDW v3.3 - Windows POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
+    IDS_APPNAME             " PDW v3.4 - Windows POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
 END
 
 STRINGTABLE

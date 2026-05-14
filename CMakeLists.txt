@@ -7,7 +7,7 @@ project( PDW )
 
 # Project version number
 set( PDW_VERSION_MAJOR 3 )
-set( PDW_VERSION_MINOR 1 )
+set( PDW_VERSION_MINOR 4 )
 set( PDW_VERSION_MICRO 0 )
 
 # Set base variables
