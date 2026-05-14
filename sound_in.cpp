@@ -336,8 +336,9 @@ void Process_ReadyBuffers(HWND hwnd)
 //   As we don't have much time here, we just keep track of how many
 //   wave buffers are ready.
 //
-void CALLBACK Callback_Function(HWAVEIN hwi, UINT uMsg, DWORD dwInstance, DWORD dwParam1, DWORD dwParam2)
+void CALLBACK Callback_Function(HWAVEIN hwi, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
+	(void)hwi; (void)dwInstance; (void)dwParam1; (void)dwParam2;
 	if (uMsg == WIM_DATA) InterlockedIncrement(&buffers_ready);
 }
 

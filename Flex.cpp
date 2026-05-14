@@ -86,6 +86,17 @@ extern int  nCount_Fragments;
 bool g_flexAssembled  = false;
 int  g_flexOrphanType = 0;
 
+// flex_reset() can't reach the function-scope statics in frame_flex (slr, bct,
+// hbit, cy, fr) directly. Setting this flag asks frame_flex to wipe them on
+// its next entry — that way mode switches don't leave the 64-bit shift
+// register and frame counters drifting on data from a previous transmission.
+static volatile bool g_flexFrameFlexResetRequested = false;
+
+// Forward-declared here; defined together with display_cfstatus at the bottom
+// of the file. Cleared when the BCH stage rejects the cycle/frame info word,
+// preventing the 99/999 sentinel from leaking into Check4_MissedGroupcalls.
+extern bool bCurrentFrameValid;
+
 
 int flex_blk = 0;
 int flex_bc  = 0;
@@ -233,12 +244,27 @@ bool flex_has_pending_fragment(long capcode)
 // switching between soundcard & serial port input.
 void flex_reset(void)
 {
+	extern FLEX phase_A, phase_B, phase_C, phase_D;
 	flex_blk = 0;
 	flex_bc = 0;
 	flex_timer = 0;
 	bReflex = false;
 	bFlexActive = false;
 	memset(g_flexFragSlots, 0, sizeof(g_flexFragSlots));
+	// Clear per-phase scratch arrays so the first frame after a mode switch
+	// doesn't start on stale bits from the previous transmission. Without
+	// this, showblock() can sample garbage in the first BIW until the BCH
+	// stage filters it out.
+	memset(phase_A.block, 0, sizeof(phase_A.block));
+	memset(phase_A.frame, 0, sizeof(phase_A.frame));
+	memset(phase_B.block, 0, sizeof(phase_B.block));
+	memset(phase_B.frame, 0, sizeof(phase_B.frame));
+	memset(phase_C.block, 0, sizeof(phase_C.block));
+	memset(phase_C.frame, 0, sizeof(phase_C.frame));
+	memset(phase_D.block, 0, sizeof(phase_D.block));
+	memset(phase_D.frame, 0, sizeof(phase_D.frame));
+	// Ask frame_flex to wipe its function-scope statics on the next call.
+	g_flexFrameFlexResetRequested = true;
 }
 
 // checksum check for BIW and vector type words
@@ -542,6 +568,13 @@ void FLEX::showframe(int asa, int vsa)
 
 	if (xsumchk(frame[0]) == 0)			// make sure we start out with valid BIW
 	{
+		// Defence in depth: even with the BIW checksum passing, a BCH miscorrection
+		// could in principle produce asa/vsa values outside the FLEX spec window
+		// (1 <= asa <= vsa <= 88). frame[] has 200 entries so we're not at risk of
+		// OOB at the spec limits, but bail out if asa/vsa indices are obviously
+		// inconsistent so the address-loop doesn't iterate over vector words.
+		if (asa < 1 || asa > vsa || vsa > 88) return;
+
 		for (j=asa; j<vsa; j++, c=0, bLongAddress=false, bXsumError=false, bFragmentBuffered=false) // run through whole address field
 		{
 			cc2 = frame[j] & 0x1fffffl;	// Check if this can be the low part of a long address
@@ -556,10 +589,15 @@ void FLEX::showframe(int asa, int vsa)
 
 			if (xsumchk(frame[vb]) != 0)
 			{
+				// Long addresses occupy two address slots; if we skip here
+				// without advancing j, the next iteration mis-parses the
+				// second half as a new short capcode.
+				if (bLongAddress) j++;
 				continue; 	// screwed up vector fields are not processed
 			}
 			if (Profile.FlexGroupMode && bLongAddress)
 			{
+				j++;
 				continue; 	// Don't process long addresses if FlexGroupMode
 			}
 			strcpy(szWindowText[4], "");
@@ -578,7 +616,7 @@ void FLEX::showframe(int asa, int vsa)
 				w1 = w1 & 0x7f;
 				w2 = (w2 & 0x7f) + w1 - 1;
 				if (w2 > 199) w2 = 199;  // BCH miscorrection can produce w2 up to 253; clamp to frame[] bounds
-				if (w1 > w2)  continue;
+				if (w1 > w2)  { if (bLongAddress) j++; continue; }
 
 				// Standard FLEX (North American) word layout: F=bits 11-12, C=bit 10.
 				// (RCR STD-43A / FLEX-TD differs: it adds a 10-bit K checksum that shifts
@@ -768,14 +806,14 @@ void FLEX::showframe(int asa, int vsa)
 
 				// RAH/PH: Short instruction for temporary address in group messaging
 
-				if (!Profile.showinstr) continue;
+				if (!Profile.showinstr) { if (bLongAddress) j++; continue; }
 
 				if (Profile.convert_si) bFLEX_Frame_contains_SI = true;
 
 				strcpy(szWindowText[4], "Groupcall");
 
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
-				if (bFLEX_groupmessage) continue;
+				if (bFLEX_groupmessage) { if (bLongAddress) j++; continue; }
 				show_phase_speed(vt);
 
 				iAssignedFrame  = (frame[vb] >> 10) & 0x7f;	// Frame with groupmessage
@@ -804,7 +842,7 @@ void FLEX::showframe(int asa, int vsa)
 
 				// standard / special format numeric / numbered numeric message
 
-				if (!Profile.shownumeric) continue;
+				if (!Profile.shownumeric) { if (bLongAddress) j++; continue; }
 
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
@@ -896,13 +934,13 @@ void FLEX::showframe(int asa, int vsa)
 					hourly_stat[flex_speed][STAT_NUMERIC]++;
 					daily_stat [flex_speed][STAT_NUMERIC]++;
 				}
-				else continue;
+				else { if (bLongAddress) j++; continue; }
 
 				break;
 
 				case MODE_BINARY:
 
-				if (!Profile.showmisc) continue;
+				if (!Profile.showmisc) { if (bLongAddress) j++; continue; }
 
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
@@ -911,6 +949,10 @@ void FLEX::showframe(int asa, int vsa)
 				w2 = w1 >> 7;
 				w1 = w1 & 0x7f;
 				w2 = (w2 & 0x7f) + w1 - 1;
+				// Same BCH-miscorrection guard as the ALPHA branch above.
+				// frame[] is only 200 entries; without the clamp, w2 can reach 253.
+				if (w2 > 199) w2 = 199;
+				if (w1 > w2)  { if (bLongAddress) j++; continue; }
 
 				if (!bLongAddress)
 				{
@@ -952,6 +994,13 @@ void FLEX::showframe(int asa, int vsa)
 					}
 				}
 				break;
+
+				default:
+				// vt is `(frame[vb] >> 4) & 0x07` so all 8 values are covered above.
+				// This default exists so future code changes don't silently fall through
+				// the post-switch ShowMessage()/ConvertGroupcall() path on unknown types.
+				if (bLongAddress) j++;
+				continue;
 			}
 
 			if (Profile.convert_si && ((vt == MODE_SHORT_INSTRUCTION) || bFLEX_groupmessage))
@@ -992,7 +1041,10 @@ void FLEX::showframe(int asa, int vsa)
 
 			if (bLongAddress) j++;	// if long address then make sure we skip over both parts
 		}
-		Check4_MissedGroupcalls();	// At this point, no more addresses/messages should follow, so check for missed groupcalls
+		// Skip when iCurrentFrame is the 99/999 sentinel from a rejected
+		// frame-info word — comparing groupcall framenumbers against 999
+		// would otherwise count phantom misses.
+		if (bCurrentFrameValid) Check4_MissedGroupcalls();
 	}
 } // Reset for new message.
 
@@ -1026,7 +1078,7 @@ void FLEX::showblock(int blknum)
 			if (ob[j] == 0) cc ^= 0x100000l;
 		}
 
-		if (err == 3) cc ^= 0x400000l; // flag uncorrectable errors
+		if (err >= 3) cc ^= 0x400000l; // flag uncorrectable errors (defensive: ecd() currently returns 0..3)
 
 		frame[k] = cc;
 	}
@@ -1110,6 +1162,18 @@ void frame_flex(char gin)
 	static short int slr[4] = { 0, 0, 0, 0 };
 	static int bct, hbit;
 	double aver=0.0;
+
+	// flex_reset() asked us to clear our internal state. Do it before any
+	// shift-register or counter update so a single stale bit can't slip
+	// through into the first post-reset frame.
+	if (g_flexFrameFlexResetRequested) {
+		cy = 0;
+		fr = 0;
+		bct = 0;
+		hbit = 0;
+		slr[0] = slr[1] = slr[2] = slr[3] = 0;
+		g_flexFrameFlexResetRequested = false;
+	}
 
 	extern double rcver[65];
 	extern double exc;
@@ -1522,6 +1586,11 @@ void frame_flex(char gin)
 }
 
 
+// Definition for the forward-declared extern at the top of this file.
+// Tracks whether the current cycle/frame indices are real protocol values or
+// the 99/999 sentinel set when BCH decoding rejected the frame-info word.
+bool bCurrentFrameValid = true;
+
 void display_cfstatus(int cycle, int frame)
 {
 	// cycle/frame come from the BCH-corrected frame-info word; trust them.
@@ -1533,6 +1602,7 @@ void display_cfstatus(int cycle, int frame)
 	{
 		iCurrentCycle = 99;				// cycle 15 does not exist on-air; display 99/999
 		iCurrentFrame = 999;
+		bCurrentFrameValid = false;
 
 		CountBiterrors(5);
 	}
@@ -1540,6 +1610,7 @@ void display_cfstatus(int cycle, int frame)
 	{
 		iCurrentCycle = cycle;
 		iCurrentFrame = frame;
+		bCurrentFrameValid = true;
 	}
 }
 // end of display_cfstatus()

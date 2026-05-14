@@ -16,7 +16,9 @@ extern char low_audio;
 extern long BaudRate;
 extern int  cross_over;
 
-void CALLBACK Callback_Function(HWAVEIN hwi, UINT uMsg, DWORD dwInstance, DWORD dwParam1, DWORD dwParam2);
+// Win32 waveInProc signature: DWORD_PTR for instance/param fields (64-bit safe).
+// Pre-x64 the DWORD form worked because DWORD == sizeof(void*); on x64 it truncates.
+void CALLBACK Callback_Function(HWAVEIN hwi, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2);
 void Process_ReadyBuffers(HWND hwnd);
 void free_audio_buffers(void);
 BOOL Stop_Capturing(void);
