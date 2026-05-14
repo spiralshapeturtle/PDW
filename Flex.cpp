@@ -607,6 +607,7 @@ void FLEX::showframe(int asa, int vsa)
 				case MODE_ALPHA:
 				case MODE_SECURE:
 
+				// FIX [Berichtdecodering]: j<vsa<=88, dus j+1<=88<200 — frame[j+1] altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
 
@@ -630,6 +631,10 @@ void FLEX::showframe(int asa, int vsa)
 				}
 				else
 				{
+					// FIX [Berichtdecodering]: expliciete boundscheck op frame[vb+1].
+					// Invariant: vb=vsa+j-asa<=174; frame[175] is safe, maar toekomstige
+					// wijzigingen aan de vsa-bound zouden dit ongeldig maken.
+					if (vb + 1 >= 200) { j++; continue; }
 					iFragmentNumber = (int)(frame[vb+1] >> 11) & 0x03;
 					iContFlag       = (int)(frame[vb+1] >> 10) & 0x01;
 					w2--;
@@ -681,7 +686,7 @@ void FLEX::showframe(int asa, int vsa)
 					// Capture text before any frag_save() resets iMessageIndex.
 					// Buffer sized to hold a full message (MAX_STR_LEN) so the [ALPHA] log line
 					// is never truncated; downstream comparison tools rely on the complete text.
-					char szDbgText[MAX_STR_LEN + 1]; int dbgLen = min(iMessageIndex, MAX_STR_LEN);
+					static char szDbgText[MAX_STR_LEN + 1]; int dbgLen = min(iMessageIndex, MAX_STR_LEN);  // FIX [L4]: static voorkomt 5 KB stack-allocatie per aanroep
 					memcpy(szDbgText, message_buffer, dbgLen); szDbgText[dbgLen] = '\0';
 
 					if (iContFlag == 1)
@@ -812,6 +817,7 @@ void FLEX::showframe(int asa, int vsa)
 
 				strcpy(szWindowText[4], "Groupcall");
 
+				// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				if (bFLEX_groupmessage) { if (bLongAddress) j++; continue; }
 				show_phase_speed(vt);
@@ -844,6 +850,7 @@ void FLEX::showframe(int asa, int vsa)
 
 				if (!Profile.shownumeric) { if (bLongAddress) j++; continue; }
 
+				// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
 
@@ -858,7 +865,12 @@ void FLEX::showframe(int asa, int vsa)
 					w1++;
 					w2++;
 				}
-				else cc = frame[vb+1];	// long address - first message word in second vector field
+				else
+				{
+					// FIX [Berichtdecodering]: boundscheck op frame[vb+1] voor long-address numeric.
+					if (vb + 1 >= 200) { j++; continue; }
+					cc = frame[vb+1];	// long address - first message word in second vector field
+				}
 
 				// skip over first 10 bits for numbered numeric, otherwise skip first 2
 
@@ -900,6 +912,7 @@ void FLEX::showframe(int asa, int vsa)
 
 				if ((Profile.showtone && tt) || (Profile.shownumeric && !tt))
 				{
+					// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 					show_address(frame[j], frame[j+1], bLongAddress);	// show address
 					show_phase_speed(vt);
 
@@ -920,7 +933,8 @@ void FLEX::showframe(int asa, int vsa)
 						hourly_char[flex_speed][STAT_NUMERIC] += 3;
 						daily_char [flex_speed][STAT_NUMERIC] += 3;
 
-						if (bLongAddress)  // long addresses have 2 vector words...
+						// FIX [Berichtdecodering]: boundscheck vóór frame[vb+1] voor tone-numeric.
+						if (bLongAddress && (vb + 1 < 200))
 						{
 							for (i=0; i<=16; i+=4)
 							{
@@ -942,6 +956,7 @@ void FLEX::showframe(int asa, int vsa)
 
 				if (!Profile.showmisc) { if (bLongAddress) j++; continue; }
 
+				// j<vsa<=88, frame[j+1]<=frame[88] — altijd binnen bounds.
 				show_address(frame[j], frame[j+1], bLongAddress);	// show address
 				show_phase_speed(vt);
 
@@ -963,6 +978,8 @@ void FLEX::showframe(int asa, int vsa)
 				}
 				else
 				{
+					// FIX [Berichtdecodering]: boundscheck op frame[vb+1] voor binary long-address.
+					if (vb + 1 >= 200) { j++; continue; }
 					iFragmentNumber = (int) (frame[vb+1] >> 13) & 0x03;
 
 					if (iFragmentNumber == 3) w1++;

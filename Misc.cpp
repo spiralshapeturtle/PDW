@@ -88,10 +88,13 @@ char Current_MSG[9][MAX_STR_LEN];			// PH: Buffer for all message items
 char Previous_MSG[2][9][MAX_STR_LEN];		// PH: Buffer for previous message items
 											// PH: [8]=last filtered messagetext
 
-unsigned long int iSecondsElapsed=0;
-unsigned long int aMessages[1000][3] = {0};	// PH: Array used for blocking messages
+unsigned long long iSecondsElapsed=0;  // FIX [F3]: unsigned long overloopt na ~49 dagen
+unsigned long long aMessages[1000][3] = {0};	// PH: Array used for blocking messages — FIX [F3b]: element type overeenkomend met iSecondsElapsed (64-bit)
 
-char szLogFileLine[MAX_STR_LEN+64];			// PH: Current Logfile line
+// FIX [Geheugenbeheer]: buffer vergroot van MAX_STR_LEN+64 → +256 → +600 (5720 bytes).
+// MSG_MESSAGE (5120) + veldkolommen (~70) + szFragment (37) + labelspacing (~70) + szCurrentLabel[FILTER_LABEL_LEN=256] + newlines (~10) = ~5563 max.
+// +256 was te krap; overflow kon szSepfilenames (direct erna) corruptypen.
+char szLogFileLine[MAX_STR_LEN+600];			// PH: Current Logfile line
 char szSepfilenames[MAX_SEPFILES][MAX_PATH];// PH: Buffer for current separate filename and the sepfiles in current groupcall
 FILE* pSepFilterFiles[MAX_SEPFILES];
 extern char szWindowText[6][1000];
@@ -467,7 +470,8 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 				{
 					if (Profile.show_rejectblocked)
 					{
-						sprintf(szWindowText[5], "Blocked Duplicate GroupMessage : %i %s", 2029568+groupbit, message_buffer);
+						// FIX [M4]: szWindowText[5] is 1000 bytes; message_buffer kan 5120 bytes zijn
+					_snprintf_s(szWindowText[5], sizeof(szWindowText[5]), _TRUNCATE, "Blocked Duplicate GroupMessage : %i %s", 2029568+groupbit, message_buffer);
 					}
 
 					if (Profile.BlockDuplicate & BLOCK_LOGFILE)
@@ -548,7 +552,7 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 					DebugLog("[ConvertGroupcall] Y++ now=%d (X=%d)", nCount_Missed[1], nCount_Missed[0]);
 
 					FILE *pFLEX_nosi = NULL;
-					sprintf(szFile, "%s\\no-si-groupcalls.txt", szPath);
+					_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\no-si-groupcalls.txt", szPath);  // FIX [M5]: szPath kan MAX_PATH zijn
 					if (!FileExists(szFile))
 					{
 						if ((pFLEX_nosi = fopen(szFile, "a")) != NULL)
@@ -654,7 +658,7 @@ void Remove_MissedGroupcall(int groupbit)
 	
 	FILE *pFLEX_missed = NULL;			// PH: file: "missed-groupcalls.txt"
 
-	sprintf(szFile, "%s\\missed-groupcalls.txt", szPath);
+	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\missed-groupcalls.txt", szPath);  // FIX [M5]: szPath kan MAX_PATH zijn
 
 	if (!FileExists(szFile))
 	{
@@ -820,7 +824,8 @@ void ShowMessage()
 			{
 				if (Profile.show_rejectblocked)
 				{
-					sprintf(szWindowText[5], "Rejected Message : %s %s", Current_MSG[MSG_CAPCODE], Current_MSG[MSG_MESSAGE]);
+					// FIX [M4]: Current_MSG[MSG_MESSAGE] kan 5120 bytes zijn; szWindowText[5] is 1000
+					_snprintf_s(szWindowText[5], sizeof(szWindowText[5]), _TRUNCATE, "Rejected Message : %s %s", Current_MSG[MSG_CAPCODE], Current_MSG[MSG_MESSAGE]);
 				}
 
 				if (bGroupcode)
@@ -855,7 +860,8 @@ void ShowMessage()
 			{
 				if (Profile.show_rejectblocked)			// Show in title bar?
 				{
-					sprintf(szWindowText[5], "Blocked Duplicate Message : %s %s", Current_MSG[MSG_CAPCODE], (Profile.monitor_mobitex && !Current_MSG[MSG_MESSAGE][0]) ? Current_MSG[MSG_TYPE] : Current_MSG[MSG_MESSAGE]);
+					// FIX [M4]: Current_MSG[MSG_MESSAGE] kan 5120 bytes zijn; szWindowText[5] is 1000
+					_snprintf_s(szWindowText[5], sizeof(szWindowText[5]), _TRUNCATE, "Blocked Duplicate Message : %s %s", Current_MSG[MSG_CAPCODE], (Profile.monitor_mobitex && !Current_MSG[MSG_MESSAGE][0]) ? Current_MSG[MSG_TYPE] : Current_MSG[MSG_MESSAGE]);
 				}
 
 				if (Profile.BlockDuplicate & BLOCK_LOGFILE)
@@ -1556,7 +1562,7 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 
 	char temp[10];
 
-	unsigned long int lChecksum=0, lAddress=0;
+	unsigned long long lChecksum=0, lAddress=0;  // FIX [F3b]: overeenkomend met aMessages[][3] (64-bit)
 
 	if (!iConvertingGroupcall && (Profile.BlockDuplicate & BLOCK_OPTION) != BLOCK_TIMER)	// Not using the timer, only check last message
 	{
@@ -1590,7 +1596,7 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 
 		if (reject)							// At this point, we don't want to show a FLEX-groupcode,
 		{									// but we didn't show any capcodes either,
-			for (i=0; i<1000; i++)			// so let's assume that all capcodes are rejected
+			for (i=0; i<999; i++)			// so let's assume that all capcodes are rejected  // FIX [M3]: i<1000 met i+1 las buiten array-einde op i=999
 			{								// and current groupcall can be removed from array
 				if (aMessages[i+1][BLOCK_ADDRESS] == 0)
 				{
@@ -1629,13 +1635,15 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 			{
 				if (aMessages[999][BLOCK_ADDRESS])	// Array full?
 				{
-					memmove(aMessages[0], aMessages[1], sizeof(aMessages));
+					// FIX [X1b]: sizeof(aMessages) overleest array-einde; laatste slot handmatig wissen
+					memmove(aMessages[0], aMessages[1], sizeof(aMessages) - sizeof(aMessages[0]));
+					memset(&aMessages[999], 0, sizeof(aMessages[0]));
 				}
 				for (i=0; i<1000; i++)
 				{
 					if (aMessages[i][BLOCK_ADDRESS] == 0)
 					{
-						memset(aMessages[i], 0, sizeof(aMessages));
+						memset(aMessages[i], 0, sizeof(aMessages[i]));  // FIX [M1]: was sizeof(aMessages), overschreef het hele array
 
 						aMessages[i][BLOCK_ADDRESS]  = lAddress;
 						aMessages[i][BLOCK_TIME]     = iSecondsElapsed;

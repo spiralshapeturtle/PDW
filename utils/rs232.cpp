@@ -238,13 +238,8 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 
 	pOutSlicer->freqdata = rs232_freqdata ;
 	pOutSlicer->linedata = rs232_linedata ;
-	// The slicer.h interface still uses non-volatile unsigned long* for cpstn.
-	// Strip volatile here on purpose; the producer side enforces ordering with
-	// _WriteBarrier(), and the consumer (decode.cpp) polls in a tight loop where
-	// the dereference happens on each iteration, so hoisting is unlikely. If the
-	// consumer is moved to a more aggressive optimizer or non-x86, decode.h's
-	// `cpstn` declaration should be updated to `volatile unsigned long *`.
-	pOutSlicer->cpstn	 = (unsigned long *)&rs232_cpstn ;
+	// FIX [L3]: SLICER_OUT_STR.cpstn is nu volatile unsigned long* — cast niet meer nodig.
+	pOutSlicer->cpstn	 = &rs232_cpstn ;
 	pOutSlicer->bufsize  = SLICER_BUFSIZE ;
 
 	if (m_bConnectedToComport)
@@ -607,7 +602,12 @@ int OpenComPort(void)
 
 	OUTPUTDEBUGMSG((("calling: OpenComPort()\n")));
 
-	pcComPort[3] = '1' + nComPort2 ;
+	// FIX [SerieelIO]: pcComPort[3]='1'+nComPort2 werkte alleen voor COM1-COM9 en
+	// genereerde ongeldige strings (bijv. "COM::") voor nComPort2>=9 zonder \\.\-prefix.
+	if (nComPort2 + 1 > 9)
+		_snprintf_s(pcComPort, sizeof(pcComPort), _TRUNCATE, R"(\\.\COM%d)", nComPort2 + 1);
+	else
+		_snprintf_s(pcComPort, sizeof(pcComPort), _TRUNCATE, "COM%d", nComPort2 + 1);
 
 	if (m_bConnectedToComport2) {
 		rc = CloseComPort();
@@ -653,6 +653,20 @@ int OpenComPort(void)
 	    OUTPUTDEBUGMSG((("ERROR: PurgeComm() %08lX!\n"), GetLastError()));
 		CloseHandle(m_ComPortHandle2);
 		return RS232_NO_DUT;
+	}
+
+	// FIX [SerieelIO]: SetCommTimeouts ontbrak voor de secundaire poort — ReadFile kon
+	// dan onbeperkt blokkeren bij afwezigheid van data. Zelfde waarden als primaire poort.
+	{
+		COMMTIMEOUTS ct = {};
+		ct.ReadIntervalTimeout        = MAXDWORD;
+		ct.ReadTotalTimeoutMultiplier = MAXDWORD;
+		ct.ReadTotalTimeoutConstant   = 100;
+		if (!SetCommTimeouts(m_ComPortHandle2, &ct)) {
+			OUTPUTDEBUGMSG((("ERROR: SetCommTimeouts() %08lX!\n"), GetLastError()));
+			CloseHandle(m_ComPortHandle2);
+			return RS232_NO_DUT;
+		}
 	}
 
 	m_bConnectedToComport2 = TRUE;

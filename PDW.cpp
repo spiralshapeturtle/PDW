@@ -790,7 +790,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 	bool pane1=false;
 
-	extern unsigned long int aMessages[1000][3];		// PH: Array used for blocking messages
+	extern unsigned long long aMessages[1000][3];		// PH: Array used for blocking messages — FIX [F3b]: overeenkomend met Misc.cpp definitie
 	int BlockTimer = (Profile.BlockDuplicate >> 4) * 60;
 
 	switch (uMsg)
@@ -810,13 +810,17 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				DrawPaneLabels(ghWnd, PANERXQUAL);
 
 				lTime = time(NULL);		// Get current systemtime
-				iSecondsElapsed = (unsigned long)difftime(lTime, tStarted);
+				// FIX [F3]: (unsigned long) overloopt na ~49 dagen; gebruik unsigned long long
+				iSecondsElapsed = (unsigned long long)difftime(lTime, tStarted);
 
 				if (BlockTimer)
 				{
 					while (aMessages[0][0] && (iSecondsElapsed > (aMessages[0][1] + BlockTimer)))	// First entry Overdue?
 					{
-						memmove(aMessages[0], aMessages[1], sizeof(aMessages));	// Move entries
+						// FIX [X1]: sizeof(aMessages) kopieert 1 element (12 bytes) voorbij array-einde;
+						// correct: sizeof minus één element; laatste slot wordt daarna op nul gezet
+						memmove(aMessages[0], aMessages[1], sizeof(aMessages) - sizeof(aMessages[0]));
+						memset(&aMessages[999], 0, sizeof(aMessages[0]));
 						nCount_BlockBuffer[0]--;
 					}
 				}
@@ -825,7 +829,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				break;
 
 				case MINUTE_TIMER:	// Handle minute timer
-
+				{
 				if (bMode_IDLE || bEmpty_Frame || Profile.monitor_acars || Profile.monitor_mobitex)
 				{
 					if (bUpdateFilters)
@@ -835,7 +839,10 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 					}
 				}
 				lTime = time(NULL);
-				recTm = localtime(&lTime);
+				// FIX [Multithreading]: localtime() verwijst naar statische buffer; localtime_s is thread-safe.
+				struct tm tmBuf = {};
+				localtime_s(&tmBuf, &lTime);
+				recTm = &tmBuf;
 
 				if ((recTm->tm_mon == 4) && (recTm->tm_mday == 4)) strcpy(szWindowText[1], "Today is Peter Hunt's birthday :-)");
 				else if ((recTm->tm_mon == 11) && ((recTm->tm_mday == 25) || (recTm->tm_mday == 26))) strcpy(szWindowText[1], "Merry Christmas!");
@@ -852,6 +859,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 					AutoRecording(); // PH: temp/test
 				}
 				break;
+				}
 
 				case CLICK_TIMER:	// Handle click timer
 
@@ -9231,9 +9239,11 @@ char *GetTestMail(int nLine)
 {
 	static char szBuf[9][128] ;
 	time_t lTime ;
-	struct tm *recTm ; 
+	// FIX [Multithreading]: localtime_s is thread-safe en vermijdt de statische buffer van localtime().
+	struct tm tmLocal = {} ;
 	lTime = time(NULL) ;
-	recTm = localtime(&lTime) ;
+	localtime_s(&tmLocal, &lTime) ;
+	struct tm *recTm = &tmLocal ;
 	int		len = 0 ;
 	wsprintf(szBuf[1], "012345678") ;
 	wsprintf(szBuf[2], "%02d:%02d", recTm->tm_hour, recTm->tm_min) ;
@@ -10223,6 +10233,8 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 {
 	char *pSearch=NULL;
 	char *token;
+	// FIX [Multithreading]: strtok_s context-pointer voor thread-veiligheid.
+	char *strtokCtx = NULL;
 	char szSepfiles[MAX_STR_LEN];
 	char szLine[MAX_STR_LEN];				// Buffer for current line
 	bool bError=false;
@@ -10418,21 +10430,21 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 								szSepfiles[MAX_STR_LEN - 1] = '\0';
 								{ char* pQ = strchr(szSepfiles, '"'); if (pQ) *pQ = '\0'; }
 								pos += strlen(szSepfiles);
-								token = strtok(szSepfiles, ";");
+								token = strtok_s(szSepfiles, ";", &strtokCtx);
 
 								do
 								{
 									strcpy(filter.sep_filterfile[filter.sep_filterfiles++], token);
 								}
-								while (token = strtok(NULL, ";"));
+								while (token = strtok_s(NULL, ";", &strtokCtx));
 							}
 							break;
 
 							case FILTER_HITCOUNTER:	// Get hitcounter
 
-							if (token = strtok(&szLine[pos], ",")) filter.hitcounter = atoi(token);
-							if (token = strtok(NULL, ",")) strcpy(filter.lasthit_date, token);
-							if (token = strtok(NULL, ",")) strcpy(filter.lasthit_time, token);
+							if (token = strtok_s(&szLine[pos], ",", &strtokCtx)) filter.hitcounter = atoi(token);
+							if (token = strtok_s(NULL, ",", &strtokCtx)) strcpy(filter.lasthit_date, token);
+							if (token = strtok_s(NULL, ",", &strtokCtx)) strcpy(filter.lasthit_time, token);
 
 							break;
 						}
