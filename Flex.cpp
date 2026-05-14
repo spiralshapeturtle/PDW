@@ -27,6 +27,7 @@
 #include "headers\helper_funcs.h"
 #include "headers\initapp.h"
 #include "utils\debug.h"
+#include "utils\debuglog.h"
 
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 #define max(a,b) (((a) > (b)) ? (a) : (b))
@@ -48,12 +49,15 @@
 #define EOT1	0xAAAA
 #define EOT2	0xFFFF
 
-// FLEX message fragment reassembly — multimon-ng K/F/C classification.
+// FLEX message fragment reassembly — MC68175 spec-based K/F/C classification.
 // Alpha message header word (standard FLEX): frag = bits 11-12 (2-bit), cont = bit 10 (1-bit).
-//   K (complete):  frag==3 && cont==0 — standalone message, show directly
-//   F (first/mid): cont==1            — more fragments follow, buffer
-//   C (last):      cont==0 && frag!=3 — end of chain, assemble + show
-// frag==3 marks the first fragment; subsequent fragments cycle 0→1→2 modulo 3.
+//   K (complete):  frag==3 && cont==0 — standalone; show directly
+//   F (first):     frag==3 && cont==1 — first fragment; start new chain
+//   F (cont):      frag!=3 && cont==1 — continuation; only valid if prior F=11 chain exists
+//   C (last):      frag!=3 && cont==0 — last fragment; assemble chain + show
+// frag==3 (F=11) is the ONLY valid chain start. Continuation arriving without a prior
+// F=11 chain = mid-stream orphan (header lost in transit) — discard silently.
+// After F=11, subsequent fragments must follow the strict 0->1->2 modulo-3 cycle.
 #define FLEX_FRAG_COMPLETE  3	// only this constant is still used (C-type check)
 
 #define FLEX_MAX_FRAG_SLOTS   16
@@ -66,6 +70,7 @@ struct FlexFragSlot {
 	unsigned char text [MAX_STR_LEN];
 	BYTE          color[MAX_STR_LEN];
 	int           textLen;
+	int           nextExpectedFrag;  // 0, 1, or 2: next F-value in the modulo-3 cycle
 };
 
 static FlexFragSlot g_flexFragSlots[FLEX_MAX_FRAG_SLOTS];
@@ -142,33 +147,41 @@ static void frag_expire(void)
 	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++)
 		if (g_flexFragSlots[i].active &&
 			(now - g_flexFragSlots[i].timestamp_ms) > FLEX_FRAG_TIMEOUT_MS)
+		{
+			DWORD elapsedMs = now - g_flexFragSlots[i].timestamp_ms;
+			DebugLog("[FRAG] TIMEOUT slot=%d  capcode=%07li  elapsed=%lums  discarded=%d chars  expectedFrag=%d",
+				i, g_flexFragSlots[i].capcode, (unsigned long)elapsedMs,
+				g_flexFragSlots[i].textLen, g_flexFragSlots[i].nextExpectedFrag);
 			g_flexFragSlots[i].active = false;
+		}
 }
 
-static int frag_find(long capcode)
+static int frag_find(long cc)
 {
 	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++)
-		if (g_flexFragSlots[i].active && g_flexFragSlots[i].capcode == capcode)
+		if (g_flexFragSlots[i].active && g_flexFragSlots[i].capcode == cc)
 			return i;
 	return -1;
 }
 
-static int frag_alloc(long capcode)
+static int frag_alloc(long cc)
 {
 	frag_expire();
-	// reuse existing slot for same capcode (handles retransmit of first fragment)
-	int slot = frag_find(capcode);
+	// reuse existing slot for same capcode (F=11 retransmit/restart: flush + start fresh)
+	int slot = frag_find(cc);
 	if (slot >= 0) {
-		g_flexFragSlots[slot].textLen      = 0;
-		g_flexFragSlots[slot].timestamp_ms = GetTickCount();
+		g_flexFragSlots[slot].textLen            = 0;
+		g_flexFragSlots[slot].nextExpectedFrag   = 0;
+		g_flexFragSlots[slot].timestamp_ms       = GetTickCount();
 		return slot;
 	}
 	for (int i = 0; i < FLEX_MAX_FRAG_SLOTS; i++) {
 		if (!g_flexFragSlots[i].active) {
-			g_flexFragSlots[i].active       = true;
-			g_flexFragSlots[i].capcode      = capcode;
-			g_flexFragSlots[i].textLen      = 0;
-			g_flexFragSlots[i].timestamp_ms = GetTickCount();
+			g_flexFragSlots[i].active             = true;
+			g_flexFragSlots[i].capcode            = cc;
+			g_flexFragSlots[i].textLen            = 0;
+			g_flexFragSlots[i].nextExpectedFrag   = 0;
+			g_flexFragSlots[i].timestamp_ms       = GetTickCount();
 			return i;
 		}
 	}
@@ -205,6 +218,15 @@ static void frag_assemble(int slot)
 	}
 	message_buffer[iMessageIndex] = 0;	// ShowMessage() loops on != 0; ensure termination
 	s.active = false;
+}
+
+// Public helper for the SI/groupcall counter logic in Misc.cpp.
+// Returns true if a fragment chain is currently in progress for the given capcode.
+// Used by Check4_MissedGroupcalls() to suppress false X++ during multi-fragment
+// group messages: if the group call is mid-chain, it is NOT a missed call.
+bool flex_has_pending_fragment(long capcode)
+{
+	return frag_find(capcode) >= 0;
 }
 
 // Reset routine called when changing data mode or if
@@ -393,8 +415,7 @@ void FLEX::FlexTIME()
 	char temp[MAX_PATH];
 	char szFlexTIME[128];
 
-	float frame_seconds= (iCurrentFrame & 0x1f) * 1.875;
-	int seconds		 = frame_seconds;
+	int seconds = (int)((iCurrentFrame & 0x1f) * 1.875f);
 
 	static int FLEX_time=0, FLEX_date=0, count=0;
 
@@ -515,6 +536,10 @@ void FLEX::showframe(int asa, int vsa)
 
 	frag_expire();			// clean up timed-out fragment chains each frame
 
+	DebugLogNotifyFrameChange(iCurrentFrame);
+	DebugLog("[showframe] %02d/%03d  asa=%d vsa=%d  addresses=%d",
+		DebugLogGetCycle(), iCurrentFrame, asa, vsa, vsa - asa);
+
 	if (xsumchk(frame[0]) == 0)			// make sure we start out with valid BIW
 	{
 		for (j=asa; j<vsa; j++, c=0, bLongAddress=false, bXsumError=false, bFragmentBuffered=false) // run through whole address field
@@ -552,6 +577,8 @@ void FLEX::showframe(int asa, int vsa)
 				w2 = w1 >> 7;
 				w1 = w1 & 0x7f;
 				w2 = (w2 & 0x7f) + w1 - 1;
+				if (w2 > 199) w2 = 199;  // BCH miscorrection can produce w2 up to 253; clamp to frame[] bounds
+				if (w1 > w2)  continue;
 
 				// Standard FLEX (North American) word layout: F=bits 11-12, C=bit 10.
 				// (RCR STD-43A / FLEX-TD differs: it adds a 10-bit K checksum that shifts
@@ -613,29 +640,123 @@ void FLEX::showframe(int asa, int vsa)
 				// K (cont==0, frag==3): standalone complete — fall through to ShowMessage().
 				if (capcode != 9999999)
 				{
+					// Capture text before any frag_save() resets iMessageIndex.
+					// Buffer sized to hold a full message (MAX_STR_LEN) so the [ALPHA] log line
+					// is never truncated; downstream comparison tools rely on the complete text.
+					char szDbgText[MAX_STR_LEN + 1]; int dbgLen = min(iMessageIndex, MAX_STR_LEN);
+					memcpy(szDbgText, message_buffer, dbgLen); szDbgText[dbgLen] = '\0';
+
 					if (iContFlag == 1)
 					{
-						// F-type: find existing chain (middle) or start a new one (first)
-						int slot = frag_find(capcode);
-						if (slot < 0) slot = frag_alloc(capcode);
-						if (slot >= 0) {
-							frag_save(slot);
-							bFragmentBuffered = true;
+						if (iFragmentNumber == FLEX_FRAG_COMPLETE)
+						{
+							// F=11, C=1: first fragment of a multi-part chain.
+							// Capture pre-flush state for the RESTART log entry.
+							int existingSlot = frag_find(capcode);
+							int discardedLen = (existingSlot >= 0) ? g_flexFragSlots[existingSlot].textLen : 0;
+							int discardedExp = (existingSlot >= 0) ? g_flexFragSlots[existingSlot].nextExpectedFrag : -1;
+							// frag_alloc() resets an existing slot (retransmit/restart) or claims a free one.
+							int slot = frag_alloc(capcode);
+							if (slot >= 0) {
+								frag_save(slot);
+								bFragmentBuffered = true;
+								if (existingSlot >= 0)
+									DebugLog("[FRAG] %02d/%03d  capcode=%07li  F=11 RESTART slot=%d  discarded=%d chars (was at expected=%d)  partial=\"%s\"",
+										DebugLogGetCycle(), iCurrentFrame, capcode, slot,
+										discardedLen, discardedExp, szDbgText);
+								else
+									DebugLog("[FRAG] %02d/%03d  capcode=%07li  F-type first slot=%d  partial=\"%s\"",
+										DebugLogGetCycle(), iCurrentFrame, capcode, slot, szDbgText);
+							}
+							else {
+								g_flexOrphanType = 1; // all slots full; show this first fragment alone with label
+								DebugLog("[FRAG] %02d/%03d  capcode=%07li  F-type ORPHAN (all 16 slots full)  partial=\"%s\"",
+									DebugLogGetCycle(), iCurrentFrame, capcode, szDbgText);
+							}
 						}
-						else g_flexOrphanType = 1; // all slots full; show fragment alone with label
+						else
+						{
+							// F!=11, C=1: continuation — only valid if a prior F=11 chain exists for this capcode.
+							int slot = frag_find(capcode);
+							if (slot >= 0) {
+								if (iFragmentNumber == g_flexFragSlots[slot].nextExpectedFrag) {
+									int prevLen = g_flexFragSlots[slot].textLen;
+									g_flexFragSlots[slot].nextExpectedFrag = (iFragmentNumber + 1) % 3;
+									g_flexFragSlots[slot].timestamp_ms     = GetTickCount();
+									frag_save(slot);
+									bFragmentBuffered = true;
+									DebugLog("[FRAG] %02d/%03d  capcode=%07li  F-type continuation slot=%d  frag=%d (mod3 OK)  chain=%d->%d chars  partial=\"%s\"",
+										DebugLogGetCycle(), iCurrentFrame, capcode, slot,
+										iFragmentNumber, prevLen, g_flexFragSlots[slot].textLen, szDbgText);
+								}
+								else {
+									// Row 5: out-of-sequence missing fragment — abort chain, discard silently.
+									DebugLog("[FRAG] %02d/%03d  capcode=%07li  F-type SEQUENCE ERROR slot=%d  got=%d expected=%d  chain=%d chars before abort",
+										DebugLogGetCycle(), iCurrentFrame, capcode, slot,
+										iFragmentNumber, g_flexFragSlots[slot].nextExpectedFrag,
+										g_flexFragSlots[slot].textLen);
+									g_flexFragSlots[slot].active = false;
+									bFragmentBuffered = true; // discard this fragment silently
+								}
+							}
+							else {
+								// No prior F=11 chain — mid-stream orphan (header lost in transit).
+								DebugLog("[FRAG] %02d/%03d  capcode=%07li  F-type mid-stream ORPHAN (no chain, frag=%d)",
+									DebugLogGetCycle(), iCurrentFrame, capcode, iFragmentNumber);
+								bFragmentBuffered = true; // discard silently
+							}
+						}
 					}
 					else if (iFragmentNumber != FLEX_FRAG_COMPLETE)
 					{
-						// C-type (last fragment): assemble accumulated chain
+						// C-type (cont==0, frag!=3): last fragment — assemble chain.
 						int slot = frag_find(capcode);
 						if (slot >= 0) {
-							frag_assemble(slot);
-							nCount_Fragments++;
-							g_flexAssembled = true; // signal ShowMessage() to show assembled indicator
+							if (iFragmentNumber == g_flexFragSlots[slot].nextExpectedFrag) {
+								int prevLen = g_flexFragSlots[slot].textLen;
+								frag_assemble(slot);
+								nCount_Fragments++;
+								g_flexAssembled = true; // signal ShowMessage() to show assembled indicator
+								int dbgLen2 = min(iMessageIndex, MAX_STR_LEN);
+								memcpy(szDbgText, message_buffer, dbgLen2); szDbgText[dbgLen2] = '\0';
+								DebugLog("[FRAG] %02d/%03d  capcode=%07li  C-type assembled slot=%d  frag=%d (mod3 OK)  prefix=%d + last=%d = total %d chars  \"%s\"",
+									DebugLogGetCycle(), iCurrentFrame, capcode, slot,
+									iFragmentNumber, prevLen, iMessageIndex - prevLen, iMessageIndex, szDbgText);
+								// Emit a standard [ALPHA] line with K-type tag so downstream tools
+								// see fragmented and non-fragmented messages in identical format.
+								DebugLog("[ALPHA] %02d/%03d  capcode=%07li  K-type  \"%s\"",
+									DebugLogGetCycle(), iCurrentFrame, capcode, szDbgText);
+							}
+							else {
+								// Row 8: out-of-sequence last fragment — abort chain, discard silently (consistent with Row 5).
+								DebugLog("[FRAG] %02d/%03d  capcode=%07li  C-type SEQUENCE ERROR slot=%d  got=%d expected=%d  chain=%d chars discarded",
+									DebugLogGetCycle(), iCurrentFrame, capcode, slot,
+									iFragmentNumber, g_flexFragSlots[slot].nextExpectedFrag,
+									g_flexFragSlots[slot].textLen);
+								g_flexFragSlots[slot].active = false;
+								bFragmentBuffered = true; // discard silently
+							}
 						}
-						else g_flexOrphanType = 2; // no prior chain; show last fragment alone with label
+						else {
+							// Row 9: orphan last fragment (no prior chain) — discard silently (Rule 5).
+							DebugLog("[FRAG] %02d/%03d  capcode=%07li  C-type mid-stream ORPHAN (no chain, frag=%d)",
+								DebugLogGetCycle(), iCurrentFrame, capcode, iFragmentNumber);
+							bFragmentBuffered = true; // discard silently
+						}
 					}
-					// K-type (frag==3, cont==0): complete standalone — fall through to ShowMessage()
+					else
+					{
+						// Row 1: K-type (frag==3, cont==0) standalone — fall through to ShowMessage().
+						// Existing fragmentation slots for this capcode are intentionally left untouched.
+						int openSlot = frag_find(capcode);
+						if (openSlot >= 0)
+							DebugLog("[ALPHA] %02d/%03d  capcode=%07li  K-type  (open chain in slot=%d, %d chars, untouched)  \"%s\"",
+								DebugLogGetCycle(), iCurrentFrame, capcode, openSlot,
+								g_flexFragSlots[openSlot].textLen, szDbgText);
+						else
+							DebugLog("[ALPHA] %02d/%03d  capcode=%07li  K-type  \"%s\"",
+								DebugLogGetCycle(), iCurrentFrame, capcode, szDbgText);
+					}
 				}
 
 				hourly_stat[flex_speed][STAT_ALPHA]++;
@@ -837,9 +958,28 @@ void FLEX::showframe(int asa, int vsa)
 			{
 				if (bFLEX_groupmessage)
 				{
-					ConvertGroupcall(capcode-2029568, vtype[vt], capcode);
+					if (!bFragmentBuffered)
+					{
+						DebugLog("[ConvertGroupcall->] %02d/%03d  capcode=%07li  groupbit=%d  vt=%s",
+							DebugLogGetCycle(), iCurrentFrame, capcode,
+							capcode-2029568, vtype[vt]);
+						ConvertGroupcall(capcode-2029568, vtype[vt], capcode);
+					}
+					else
+					{
+						// F-type group fragment buffered — skip ConvertGroupcall to prevent premature
+						// GroupFrame reset and spurious Y++ on the next fragment.
+						DebugLog("[GroupFragBuffered] %02d/%03d  capcode=%07li  groupbit=%d  ConvertGroupcall SKIPPED",
+							DebugLogGetCycle(), iCurrentFrame, capcode, capcode-2029568);
+						iMessageIndex = 0;
+					}
 				}
-				else AddAssignment(iAssignedFrame, FlexTempAddress, capcode);
+				else
+				{
+					DebugLog("[AddAssignment->] %02d/%03d  capcode=%07li  groupbit=%d  iAssignedFrame=%d",
+						DebugLogGetCycle(), iCurrentFrame, capcode, FlexTempAddress, iAssignedFrame);
+					AddAssignment(iAssignedFrame, FlexTempAddress, capcode);
+				}
 			}
 			else if (!bFragmentBuffered)
 			{
@@ -1384,25 +1524,15 @@ void frame_flex(char gin)
 
 void display_cfstatus(int cycle, int frame)
 {
-	static int oldframe=-1;
-
-	if (oldframe == frame)
-	{
-		if (Profile.convert_si && bFLEX_Frame_contains_SI)
-		{
-			if (frame++ == 128)
-			{
-				frame = 0;
-				if (cycle++ == 15) cycle = 0;
-			}
-		}
-	}
-	oldframe = frame;
-
+	// cycle/frame come from the BCH-corrected frame-info word; trust them.
+	// A previous hack here advanced the counter when the same frame number arrived
+	// twice and contained an SI — but `oldframe` ignored the cycle, the wrap test
+	// (frame++ == 128) was post-increment so it never fired, and the mutation made
+	// sync drift dependent on whether the prior frame held an SI. Removed.
 	if (cycle == 15)
 	{
-		iCurrentCycle = 99;				// Sometimes PDW seems to display cycle "15", which
-		iCurrentFrame = 999;			// does not exist, so let's display 99/999
+		iCurrentCycle = 99;				// cycle 15 does not exist on-air; display 99/999
+		iCurrentFrame = 999;
 
 		CountBiterrors(5);
 	}

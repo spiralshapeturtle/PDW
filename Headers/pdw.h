@@ -232,6 +232,36 @@ typedef struct
 	int lang_mi_index;          // Decides language menu item.
 	int lang_tbl_index;         // Decides language character map.
 	bool ssl;
+
+	int  webhookEnabled;
+	char szWebhookURL[512];
+	int  webhookTrustSelfSigned;
+	int  webhookLogToFile;
+	int  webhookPadCapcodes;
+	int  webhookPagermonFormat;
+	int  webhookSendIn;         // 0=All, 1=Filtered only, 2=Filtered+Monitor
+	int  webhookFields;         // bitmask: bit0=label,1=time,2=date,3=timestamp,4=mode,5=type,6=bitrate
+
+	int  mqttEnabled;
+	char szMqttBroker  [256];   // hostname or IP
+	int  mqttPort;              // 1883 plain, 8883 TLS
+	char szMqttClientId[64];
+	char szMqttUser    [64];
+	char szMqttPassword[128];
+	char szMqttTopic   [256];   // base topic; capcode appended as sub-path
+	int  mqttQos;               // 0, 1 or 2
+	int  mqttRetain;
+	int  mqttLogToFile;
+	int  mqttPadCapcodes;
+	int  mqttFlatJson;          // 0=PDW-native, 1=flat (Node-RED)
+	int  mqttTopicSuffix;       // 0=none (base topic only), 1=/{capcode} per message
+	int  mqttSendIn;            // 0=All, 1=Filtered only, 2=Filtered+Monitor
+	int  mqttFields;            // bitmask: same layout as webhookFields
+
+	int  bDebugLog;             // 0=off, 1=write per-frame trace to pdw_debug.log
+
+	int  betterContrast;        // 0=off, 1=remap low-contrast filter label colors
+	int  lighterBackground;     // 0=off, 1=use dark-navy background instead of pure black
 } PROFILE, *PPROFILE;
 
 extern PROFILE Profile;     // profile information
@@ -420,6 +450,9 @@ BOOL FAR PASCAL FilterFindDlgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 BOOL FAR PASCAL FilterCheckDuplicateDlgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL MonStatDlgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL FAR PASCAL DisplayOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL NEAR SetTitle(HWND hWnd, TCHAR *cTitle);
 
 BOOL ErrorMessageBox(LPCTSTR lpszText, LPCTSTR lpszTitle, LPCTSTR lpszFile, INT Line);

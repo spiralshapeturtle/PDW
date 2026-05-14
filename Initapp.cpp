@@ -55,6 +55,23 @@ int iMaxWidth;
 int sizeSet = 0;
 int pane1Height, pane2Height, pane1Pos, pane2Pos, pane1Top;
 
+// Current system/window DPI — updated at startup and in WM_DPICHANGED.
+// All font lfHeight values are stored at 96-DPI baseline; scale with MulDiv(px, g_dpi, 96).
+UINT g_dpi = 96;
+
+// Returns the DPI for hwnd (Win10 1607+) or falls back to the desktop DC.
+UINT PdwGetDpi(HWND hwnd)
+{
+    typedef UINT (WINAPI *PFN_GDFW)(HWND);
+    static PFN_GDFW pfn = (PFN_GDFW)(void*)
+        GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
+    if (pfn && hwnd) return pfn(hwnd);
+    HDC hdc = GetDC(NULL);
+    UINT dpi = (UINT)GetDeviceCaps(hdc, LOGPIXELSX);
+    ReleaseDC(NULL, hdc);
+    return dpi ? dpi : 96u;
+}
+
 char  gszPDWClass[15] = "WinPDWWndClass";
 char  gszPane1Class[17] = "WinPDWPane1Class";
 char  gszPane2Class[17] = "WinPDWPane2Class";
