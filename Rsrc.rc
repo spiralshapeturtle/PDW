@@ -28,21 +28,37 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 //
 
 IDT_TOOLBAR_BTN0        BITMAP                  "GFX\\open.bmp"
+
 IDT_TOOLBAR_BTN1        BITMAP                  "GFX\\copy.bmp"
+
 IDT_TOOLBAR_BTN2        BITMAP                  "GFX\\cpyUP.bmp"
+
 IDT_TOOLBAR_BTN3        BITMAP                  "GFX\\cpyLO.bmp"
+
 IDT_TOOLBAR_BTN4        BITMAP                  "GFX\\save.bmp"
+
 IDT_TOOLBAR_BTN5        BITMAP                  "GFX\\prt.bmp"
+
 IDT_TOOLBAR_BTN6        BITMAP                  "GFX\\options.bmp"
+
 IDT_TOOLBAR_BTN7        BITMAP                  "GFX\\filter.bmp"
+
 IDT_TOOLBAR_BTN8        BITMAP                  "GFX\\stats.bmp"
+
 IDT_TOOLBAR_BTN9        BITMAP                  "GFX\\pause.bmp"
+
 IDT_TOOLBAR_BTN10       BITMAP                  "GFX\\help.bmp"
+
 IDT_TOOLBAR_BTN11       BITMAP                  "GFX\\clr.bmp"
+
 IDT_TOOLBAR_BTN12       BITMAP                  "GFX\\mode.bmp"
+
 IDS_SIGIND              BITMAP                  "GFX\\sigind.bmp"
+
 IDS_EXCLAM              BITMAP                  "GFX\\exclamation.bmp"
+
 IDS_ABOUTLOGO           BITMAP                  "GFX\\pdwlogo2.bmp"
+
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -52,6 +68,7 @@ IDS_ABOUTLOGO           BITMAP                  "GFX\\pdwlogo2.bmp"
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
 PDWICON                 ICON                    "GFX\\pdw.ico"
+
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -84,6 +101,10 @@ BEGIN
         MENUITEM "&Options...\tCtrl-O",         IDM_OPTIONS
         MENUITEM "&General...\tCtrl-G",         IDM_GENERAL
         MENUITEM "&SMTP/Email...\tCtrl-M",      IDM_MAIL
+        MENUITEM "&Webhook...\tCtrl-W",         IDM_WEBHOOK
+        MENUITEM "MQ&TT...\tCtrl-Q",            IDM_MQTT
+        MENUITEM SEPARATOR
+        MENUITEM "Live &Debug Log",             IDM_DEBUGLOG
     END
     POPUP "Filters"
     BEGIN
@@ -142,6 +163,8 @@ BEGIN
     "F",            IDM_FONT,               VIRTKEY, ALT, NOINVERT
     "G",            IDM_GENERAL,            VIRTKEY, CONTROL, NOINVERT
     "M",            IDM_MAIL,               VIRTKEY, CONTROL, NOINVERT
+    "W",            IDM_WEBHOOK,            VIRTKEY, CONTROL, NOINVERT
+    "Q",            IDM_MQTT,               VIRTKEY, CONTROL, NOINVERT
     "O",            IDM_OPTIONS,            VIRTKEY, CONTROL, NOINVERT
     "P",            IDM_COPY_PRINT,         VIRTKEY, CONTROL, NOINVERT
     "P",            IDM_PLAYBACK,           VIRTKEY, SHIFT, ALT, NOINVERT
@@ -406,10 +429,10 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,187,149,44,14
 END
 
-COLORSDLGBOX DIALOG 10, 10, 311, 140
+COLORSDLGBOX DIALOGEX 10, 10, 311, 140
 STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "POCSAG/FLEX Colors"
-FONT 8, "Verdana"
+CAPTION " "
+FONT 8, "Verdana", 0, 0, 0x0
 BEGIN
     GROUPBOX        "",IDC_STATIC,4,2,181,43
     PUSHBUTTON      "Address",IDC_COLORCAPCODE,8,10,55,14
@@ -426,6 +449,7 @@ BEGIN
     GROUPBOX        "",IDC_STATIC,4,46,303,69
     CONTROL         "",IDC_COLORWIN,"Static",SS_BLACKFRAME,5,51,300,62
     PUSHBUTTON      "&Default Colors",IDC_COLORDEFAULT,8,122,54,14
+    PUSHBUTTON      "Display Enhancements...",IDC_DISPLAYOPTIONS_BTN,68,122,124,14
     PUSHBUTTON      "OK",IDOK,203,122,44,14
     PUSHBUTTON      "Cancel",IDCANCEL,259,122,44,14
 END
@@ -781,6 +805,104 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,194,110,38,14
 END
 
+DISPLAYOPTIONSDLGBOX DIALOG 10, 10, 260, 106
+STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+CAPTION "PDW Display Enhancements"
+FONT 8, "Verdana"
+BEGIN
+    GROUPBOX        "",IDC_STATIC,7,4,246,74
+    CONTROL         "Better contrast colors",IDC_DISPLAY_BETTER_CONTRAST,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,14,150,10
+    LTEXT           "Remaps poorly visible colors to higher-legibility variants. filter.ini is not modified.",IDC_STATIC,22,26,224,16
+    CONTROL         "Softer background",IDC_DISPLAY_LIGHTER_BG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,46,120,10
+    LTEXT           "Changes the message list background from pure black to dark navy (#1A1A2E).",IDC_STATIC,22,58,224,16
+    PUSHBUTTON      "OK",IDOK,84,85,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,132,85,44,14
+END
+
+WEBHOOK_DLGBOX DIALOG 10, 10, 260, 240
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Webhook Settings"
+FONT 8, "Verdana"
+BEGIN
+    CONTROL         "Enable webhook",IDC_WEBHOOK_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,80,10
+    LTEXT           "URL",IDC_STATIC,8,24,14,8
+    EDITTEXT        IDC_WEBHOOK_URL,24,22,228,13,ES_AUTOHSCROLL
+    CONTROL         "Trust self-signed certificate (HTTPS)",IDC_WEBHOOK_TRUST_SS,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,42,148,10
+    CONTROL         "Log to file (pdw_webhook.log)",IDC_WEBHOOK_LOG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,56,120,10
+    CONTROL         "Pad capcodes to 9 digits (RTL-SDR compatible)",IDC_WEBHOOK_PAD_CAPCODES,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,70,172,10
+    CONTROL         "Flat JSON format (Node-RED compatible)",IDC_WEBHOOK_PAGERMON_FMT,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,84,148,10
+    GROUPBOX        "JSON fields to include",IDC_STATIC,8,96,244,92
+    CONTROL         "label: CSV (group capcodes as one string, comma-separated labels)",IDC_WEBHOOK_LABEL_CSV,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,107,232,10
+    CONTROL         "label: 1:1 (per capcode a label, no grouped capcodes)",IDC_WEBHOOK_LABEL_PERCAP,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,119,232,10
+    CONTROL         "label: subscribers array [{address,label},...] in one message",IDC_WEBHOOK_LABEL_ARRAY,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,131,232,10
+    CONTROL         "time",IDC_WEBHOOK_FIELD_TIME,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,143,110,10
+    CONTROL         "mode",IDC_WEBHOOK_FIELD_MODE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,143,110,10
+    CONTROL         "date",IDC_WEBHOOK_FIELD_DATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,155,110,10
+    CONTROL         "type",IDC_WEBHOOK_FIELD_TYPE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,155,110,10
+    CONTROL         "timestamp",IDC_WEBHOOK_FIELD_TS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,167,110,10
+    CONTROL         "bitrate",IDC_WEBHOOK_FIELD_BITRATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,167,110,10
+    LTEXT           "Send notifications for:",IDC_STATIC,8,194,80,8
+    COMBOBOX        IDC_WEBHOOK_SEND_IN,92,192,148,42,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Status: Idle",IDC_WEBHOOK_STATUS,8,210,244,8
+    DEFPUSHBUTTON   "OK",IDOK,148,224,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,208,224,44,14
+END
+
+MQTT_DLGBOX DIALOGEX 10, 10, 260, 292
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "MQTT Settings"
+FONT 8, "Verdana", 0, 0, 0x0
+BEGIN
+    CONTROL         "Enable MQTT",IDC_MQTT_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,80,10
+    LTEXT           "Broker",IDC_STATIC,8,26,24,8
+    EDITTEXT        IDC_MQTT_BROKER,36,24,162,13,ES_AUTOHSCROLL
+    LTEXT           "Port",IDC_STATIC,204,26,16,8
+    EDITTEXT        IDC_MQTT_PORT,222,24,30,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Client ID",IDC_STATIC,8,42,28,8
+    EDITTEXT        IDC_MQTT_CLIENTID,40,40,212,13,ES_AUTOHSCROLL
+    LTEXT           "User",IDC_STATIC,8,58,18,8
+    EDITTEXT        IDC_MQTT_USER,30,56,100,13,ES_AUTOHSCROLL
+    LTEXT           "Password",IDC_STATIC,138,58,32,8
+    EDITTEXT        IDC_MQTT_PASSWORD,174,56,78,13,ES_PASSWORD | ES_AUTOHSCROLL
+    LTEXT           "Topic",IDC_STATIC,8,74,20,8
+    EDITTEXT        IDC_MQTT_TOPIC,32,72,220,13,ES_AUTOHSCROLL
+    LTEXT           "Topic suffix",IDC_STATIC,8,90,42,8
+    COMBOBOX        IDC_MQTT_TOPIC_SUFFIX,54,88,198,42,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "QoS",IDC_STATIC,8,108,14,8
+    COMBOBOX        IDC_MQTT_QOS,26,106,40,42,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL         "Retain",IDC_MQTT_RETAIN,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,76,108,36,10
+    CONTROL         "Log to file (pdw_mqtt.log)",IDC_MQTT_LOG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,120,108,140,10
+    CONTROL         "Pad capcodes to 9 digits (RTL-SDR compatible)",IDC_MQTT_PAD_CAPCODES,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,122,200,10
+    CONTROL         "Flat JSON format (Node-RED compatible)",IDC_MQTT_FLAT_JSON,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,136,172,10
+    GROUPBOX        "JSON fields to include",IDC_STATIC,8,148,244,92
+    CONTROL         "label: CSV (group capcodes as one string, comma-separated labels)",IDC_MQTT_LABEL_CSV,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,159,232,10
+    CONTROL         "label: 1:1 (per capcode a label, no grouped capcodes)",IDC_MQTT_LABEL_PERCAP,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,171,232,10
+    CONTROL         "label: subscribers array [{address,label},...] in one message",IDC_MQTT_LABEL_ARRAY,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,183,232,10
+    CONTROL         "time",IDC_MQTT_FIELD_TIME,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,195,110,10
+    CONTROL         "mode",IDC_MQTT_FIELD_MODE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,195,110,10
+    CONTROL         "date",IDC_MQTT_FIELD_DATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,207,110,10
+    CONTROL         "type",IDC_MQTT_FIELD_TYPE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,207,110,10
+    CONTROL         "timestamp",IDC_MQTT_FIELD_TS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,219,110,10
+    CONTROL         "bitrate",IDC_MQTT_FIELD_BITRATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,219,110,10
+    LTEXT           "Send notifications for:",IDC_STATIC,8,246,80,8
+    COMBOBOX        IDC_MQTT_SEND_IN,92,244,160,42,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Status: Idle",IDC_MQTT_STATUS,8,260,244,8
+    DEFPUSHBUTTON   "OK",IDOK,148,274,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,208,274,44,14
+END
+
 MAIL_DLGBOX DIALOGEX 0, 0, 357, 265
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "SMTP / email settings"
@@ -932,6 +1054,10 @@ BEGIN
         BOTTOMMARGIN, 128
     END
 
+    CUSTOM_AUDIO_DLG, DIALOG
+    BEGIN
+    END
+
     OPTIONSDLGBOX, DIALOG
     BEGIN
         VERTGUIDE, 14
@@ -972,6 +1098,18 @@ BEGIN
         HORZGUIDE, 38
     END
 
+    SCROLLDLGBOX, DIALOG
+    BEGIN
+    END
+
+    SYSTEMTRAYDLGBOX, DIALOG
+    BEGIN
+    END
+
+    FILTEROPTIONSDLGBOX, DIALOG
+    BEGIN
+    END
+
     FILTEREDITDLGBOX, DIALOG
     BEGIN
         VERTGUIDE, 124
@@ -1006,6 +1144,18 @@ BEGIN
         VERTGUIDE, 10
         VERTGUIDE, 323
         BOTTOMMARGIN, 66
+    END
+
+    SCREENOPTIONSDLGBOX, DIALOG
+    BEGIN
+    END
+
+    DISPLAYOPTIONSDLGBOX, DIALOG
+    BEGIN
+    END
+
+    MQTT_DLGBOX, DIALOG
+    BEGIN
     END
 
     MAIL_DLGBOX, DIALOG

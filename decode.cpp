@@ -24,6 +24,7 @@
 #include "headers\ermes.h"
 #include "headers\helper_funcs.h"
 #include "utils\debug.h"
+#include "utils\debuglog.h"
 
 FILE *pd_raw_fp = NULL;		// Debug - Raw data file for logging POCSAG/FLEX symbol data.
 
@@ -566,6 +567,7 @@ void pdw_decode(void)
 						pd_clk = 0.0;
 					}
 					rcv_clkt = rcv_clkt_po;
+					DebugLog("[POCSAG] spurious trigger 2400 bps  bFlexActive=%d  pocbit was=%d  -> 600", bFlexActive, pocbit);
 					pocbit = 600;
 				}
 			}
@@ -585,6 +587,7 @@ void pdw_decode(void)
 						pd_clk = 0.0;
 					}
 					rcv_clkt = rcv_clkt_po;
+					DebugLog("[POCSAG] spurious trigger 1200 bps  bFlexActive=%d  pocbit was=%d  -> 600", bFlexActive, pocbit);
 					pocbit = 600;
 				}
 			}
@@ -604,6 +607,7 @@ void pdw_decode(void)
 						pd_clk = 0.0;
 					}
 					rcv_clkt = rcv_clkt_po;
+					DebugLog("[POCSAG] spurious trigger 512 bps  bFlexActive=%d  pocbit was=%d  -> 600", bFlexActive, pocbit);
 					pocbit = 600;
 				}
 			}

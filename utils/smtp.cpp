@@ -1097,22 +1097,39 @@ int xSendMail(THEMAIL *pMail)
 
 		smtpDisconnect(g_persistSocket);
 		g_persistSocket = INVALID_SOCKET;
+		if(attempt == 0)
+			AddResponse("SMTP: send failed on existing connection — retrying with fresh connection") ;
 	}
 
+	AddResponse("SMTP: send failed after retry — message dropped") ;
 	return(0);
 }
 
 
 DWORD WINAPI MailThreadFunc(LPVOID lpData)
 {
+	DWORD dwLastActivityMs = GetTickCount() ;
+
 	OUTPUTDEBUGMSG((("MailThreadFunc()")));
 
 	while(keepbusy) {
 		if(nBufferdMailStart == nBufferdMailEnd) {
 			// Queue empty — block until SendMail signals or 5 s safety timeout.
 			WaitForSingleObject(hMailEvent, 5000) ;
-		} else if(!xSendMail((THEMAIL *) lpData)) {
-			Sleep(1000) ;   // send failed — brief pause before retry
+			// Close idle connection before the server times it out (typically 5 min).
+			// Next message will reconnect fresh — no stale socket, no dropped message.
+			if(g_persistSocket != INVALID_SOCKET &&
+			   GetTickCount() - dwLastActivityMs > 3 * 60 * 1000u)
+			{
+				smtpDisconnect(g_persistSocket) ;
+				g_persistSocket = INVALID_SOCKET ;
+				AddResponse("SMTP: idle connection closed (3 min) — will reconnect on next message") ;
+			}
+		} else {
+			dwLastActivityMs = GetTickCount() ;
+			if(!xSendMail((THEMAIL *) lpData)) {
+				Sleep(1000) ;   // send failed — brief pause before retry
+			}
 		}
 	}
 

@@ -314,6 +314,9 @@
 #include "utils\debug.h"
 #include "utils\ostype.h"
 #include "utils\smtp.h"
+#include "utils\webhook.h"
+#include "utils\mqtt.h"
+#include "utils\debuglog.h"
 
 #include "headers\helper_funcs.h"	// Extra functies van Andreas
 
@@ -380,6 +383,9 @@ bool bTrayed=false;					// PH: Is true if trayed
 bool bLBUTTONDBLCLK=false;			// PH: Is true after 2 WM_LBUTTONDOWN messages
 bool bFilterFindCASE=false;			// PH: Filter Find Case Sensitive?
 
+BOOL g_betterContrast    = FALSE;	// Display enhancement: remap low-contrast filter label colors
+BOOL g_lighterBackground = FALSE;	// Display enhancement: dark-navy instead of pure-black background
+
 int   iTEMP = 0;					// Global temporary int
 char szTEMP[MAX_STR_LEN];			// Global temporary buffer
 
@@ -394,6 +400,9 @@ char szWindowText[6][1000];			// [0] = PDW version
 									// [3] = FLEX/ERMES cycle/frame(/batch)
 									// [4] = FLEX - Groupcall
 									// [5] = Rejected/Blocked messages
+
+char g_szModeLabel[20];			// Protocol label shown in title: " [FLEX]", " [POCSAG]", etc.
+static void UpdateModeLabel();	// forward declaration
 
 // Text editing globals
 unsigned int iSelectionStartCol, iSelectionStartRow, iSelectionEndCol, iSelectionEndRow;
@@ -472,6 +481,9 @@ int  FindFilter(int index, char *szSearchString, bool bShowHits, bool bBackwards
 void pumpMessages(void);
 
 DWORD GetColorRGB(BYTE color);
+static COLORREF ApplyContrastRemap(COLORREF clr);
+static COLORREF MsgListBg(void);
+static COLORREF FilterDropBg(void);
 
 void AutoRecording();	// PH: temp/test
 
@@ -507,6 +519,20 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.SystemTray	        = 0;	// Flag for enabeling the system tray
 	Profile.SystemTrayRestore	= 0;	// Flag for enabeling auto restore from tray
 	Profile.SMTP = 0;					// Flag for SMTP-email
+
+	Profile.webhookEnabled         = 0;
+	Profile.szWebhookURL[0]        = '\0';
+	Profile.webhookTrustSelfSigned = 0;
+	Profile.webhookLogToFile       = 0;
+	Profile.webhookPadCapcodes     = 0;
+	Profile.webhookPagermonFormat  = 0;
+	Profile.webhookSendIn          = 0;
+	Profile.webhookFields          = 0x7F;
+
+	Profile.bDebugLog              = 0;     // Live debug log disabled by default
+
+	Profile.betterContrast         = 0;
+	Profile.lighterBackground      = 0;
 
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
@@ -669,6 +695,8 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 		return (FALSE);
 	}
 
+	DebugLogInit();		// Init critical section for live debug log
+
 	if (hToolbar) TB_AutoSize(hToolbar);	// keep toolbar correct size!
 
 	acars.read_data();		// Load Acars data base files.
@@ -680,6 +708,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	SetWindowPaneSize(WINDOW_SIZE);	// PH: Set Max_X_Client / iMaxWidth / NewLinePoint
 
 	sprintf(szWindowText[0], " %s", pdw_version);	// PH: Set version info in szWindowText buffer
+	UpdateModeLabel();
 
 	Get_Date_Time();
 	sprintf(szDebugStarted, "%s %s", szCurrentDate, szCurrentTime);
@@ -781,7 +810,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				DrawPaneLabels(ghWnd, PANERXQUAL);
 
 				lTime = time(NULL);		// Get current systemtime
-				iSecondsElapsed = difftime(lTime, tStarted);
+				iSecondsElapsed = (unsigned long)difftime(lTime, tStarted);
 
 				if (BlockTimer)
 				{
@@ -903,6 +932,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			return(-1);					// These use standard system colors.
 		}
 
+		g_dpi = PdwGetDpi(hWnd);
+
 		if (!(GetLogFONTS()))		// Get general purpose font objects.
 		{
 			Free_Common_Objects();	// Free any objects we got!
@@ -915,7 +946,12 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			return(-1);
 		}
 
-		hfont = CreateFontIndirect(&Profile.fontInfo);
+		{
+			LOGFONT lf = Profile.fontInfo;
+			lf.lfHeight = MulDiv(Profile.fontInfo.lfHeight, (int)g_dpi, 96);
+			lf.lfQuality = CLEARTYPE_QUALITY;
+			hfont = CreateFontIndirect(&lf);
+		}
 
 		ghDC = GetDC(hWnd);
 		SelectObject(ghDC, hfont);
@@ -1417,6 +1453,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 												 hWnd, (DLGPROC) ScreenOptionsDlgProc, 0L);
 				break;
 
+				case IDM_DISPLAYOPTIONS:
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(DISPLAYOPTIONSDLGBOX),
+												 hWnd, (DLGPROC) DisplayOptionsDlgProc, 0L);
+				break;
+
 				case IDM_SCROLLBACK:
 					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(SCROLLDLGBOX),
 												 hWnd, (DLGPROC) ScrollDlgProc, 0L);
@@ -1472,18 +1513,36 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 												 hWnd, (DLGPROC) MailDlgProc, 0L);
 				break;
 
+				case IDM_WEBHOOK:
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(WEBHOOK_DLGBOX),
+												 hWnd, (DLGPROC) WebhookDlgProc, 0L);
+				break;
+
+				case IDM_MQTT:
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(MQTT_DLGBOX),
+												 hWnd, (DLGPROC) MqttDlgProc, 0L);
+				break;
+
+				case IDM_DEBUGLOG:
+					Profile.bDebugLog = !Profile.bDebugLog;
+					CheckMenuItem(GetMenu(hWnd), IDM_DEBUGLOG,
+						MF_BYCOMMAND | (Profile.bDebugLog ? MF_CHECKED : MF_UNCHECKED));
+					DebugLog("[ToggleDebugLog] live debug log %s by user",
+						Profile.bDebugLog ? "ENABLED" : "disabled");
+				break;
+
 				case IDM_RELOAD:
 
 				if (FileExists(szFilterPathName))
 				{
-					sprintf(filters_temp, "Old  number  of filters :  %u\n",Profile.filters.size());
+					sprintf(filters_temp, "Old  number  of filters :  %u\n", (unsigned int)Profile.filters.size());
 					strcpy (filters_reload, filters_temp);
 						
 					Profile.filters.clear();
 							
 					if (ReadFilters(szFilterPathName, &Profile, false))
 					{
-						sprintf(filters_temp, "New number of filters :  %u",Profile.filters.size());
+						sprintf(filters_temp, "New number of filters :  %u", (unsigned int)Profile.filters.size());
 						strcat (filters_reload, filters_temp);
 
 						MessageBox(ghWnd, filters_reload, "PDW Reloaded filters", MB_ICONINFORMATION);
@@ -1818,6 +1877,9 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		// HWi, stop Mail thread.....
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
+		WebhookShutdown();
+		MqttShutdown();
+		DebugLogShutdown();
 
 		if (bCapturing)	Stop_Capturing();		// Reset and close audio device.
 		if (bPlayback)	Stop_Playback();		// RAH: stop playback
@@ -1861,17 +1923,17 @@ void ChangeDataMode(HWND hWnd, int mode)
 			Profile.monitor_paging = true;
 			strcpy(szWindowText[2], "POCSAG/FLEX...");
 		break;
-		
+
 		case MODE_ACARS:
 			Profile.monitor_acars = true;
 			strcpy(szWindowText[2], "ACARS...");
 		break;
-		
+
 		case MODE_MOBITEX:
 			Profile.monitor_mobitex = true;
 			strcpy(szWindowText[2], "MOBITEX...");
 		break;
-		
+
 		case MODE_ERMES:
 			Profile.monitor_ermes = true;
 			strcpy(szWindowText[2], "ERMES...");
@@ -1880,6 +1942,7 @@ void ChangeDataMode(HWND hWnd, int mode)
 	set_menu_items();
 	Reset_ATB();            // Reset audio input variables.
 	pd_reset_all();         // Reset serial port variables.
+	UpdateModeLabel();
 	SetNewWindowText("");
 }
 
@@ -2051,7 +2114,7 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 			if (PL1_SCount)
 			{
 				PL1_SCount=0;
-				PL1_SCount =- (Pane1.iHscrollPos * cxChar);
+				PL1_SCount = -(Pane1.iHscrollPos * (int)cxChar);
 				DrawPaneLabels(ghWnd, PANE1);
 			}
 
@@ -2142,6 +2205,16 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 		break;
 
+		case WM_ERASEBKGND:
+		{
+			RECT rc;
+			GetClientRect(hWnd, &rc);
+			HBRUSH hb = CreateSolidBrush(MsgListBg());
+			FillRect((HDC)wParam, &rc, hb);
+			DeleteObject(hb);
+			return 1;
+		}
+
 		case WM_PAINT:
 		PanePaint(&Pane1);
 //		DrawPaneLabels(ghWnd, PANE1);
@@ -2208,7 +2281,7 @@ LRESULT FAR PASCAL Pane2WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 			if (PL2_SCount)
 			{
 				PL2_SCount=0;
-				PL2_SCount = -(Pane2.iHscrollPos * cxChar);
+				PL2_SCount = -(Pane2.iHscrollPos * (int)cxChar);
 				DrawPaneLabels(ghWnd, PANE2);
 			}
 
@@ -2298,6 +2371,16 @@ LRESULT FAR PASCAL Pane2WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 		selecting = 0;
 
 		break;
+
+		case WM_ERASEBKGND:
+		{
+			RECT rc;
+			GetClientRect(hWnd, &rc);
+			HBRUSH hb = CreateSolidBrush(MsgListBg());
+			FillRect((HDC)wParam, &rc, hb);
+			DeleteObject(hb);
+			return 1;
+		}
 
 		case WM_PAINT:
 		PanePaint(&Pane2);
@@ -2524,7 +2607,7 @@ void PanePaint(PaneStruct *pane)
 	iPaintEnd = min(pane->Bottom, pane->iVscrollPos + ps.rcPaint.bottom / cyChar);
 
 	SetBkMode(hDC, OPAQUE);
-	SetBkColor(hDC, Profile.color_background);
+	SetBkColor(hDC, MsgListBg());
 
 	// let Windows handle aligning the characters as TextOut goes along
 	SetTextAlign(hDC, TA_UPDATECP);
@@ -2550,7 +2633,7 @@ void PanePaint(PaneStruct *pane)
 			if (pcolor[i*(LINE_SIZE+1) + pos] != color)
 			{
 				color = pcolor[i*(LINE_SIZE+1) + pos];
-				SetTextColor(hDC, GetColorRGB(color));	// now set the text color
+				SetTextColor(hDC, ApplyContrastRemap(GetColorRGB(color)));	// now set the text color
 			}
 			// calculate how many characters are this color
 			size = 0;
@@ -2641,6 +2724,46 @@ DWORD GetColorRGB(BYTE color)
 			break;
 	}
 	return(rgb);
+}
+
+
+static COLORREF ApplyContrastRemap(COLORREF clr) {
+	if (!g_betterContrast) return clr;
+	switch (clr) {
+		case RGB(  0,   0, 255): return RGB( 80, 148, 255);	// pure blue / LTBLUE
+		case RGB(  0,  51, 153): return RGB( 80, 148, 255);	// Profile "Blue" (navy)
+		case RGB(  0, 128,   0): return RGB( 77, 255, 145);	// dark green
+		case RGB(  0, 255,   0): return RGB( 77, 255, 145);	// LTGREEN
+		case RGB(128, 128, 128): return RGB(192, 192, 192);	// medium gray
+		case RGB(192, 192, 192): return RGB(208, 208, 208);	// LTGRAY
+		case RGB(160,  82,  45): return RGB(212, 164,  76);	// sienna
+		case RGB(128, 128,  64): return RGB(212, 188,  84);	// BROWN (olive)
+		case RGB(173, 216, 230): return RGB(126, 200, 227);	// pastel light blue
+		case RGB(  0, 255, 255): return RGB(  0, 229, 229);	// LTCYAN
+		case RGB(  0, 128, 128): return RGB(  0, 220, 220);	// CYAN (dark teal)
+		case RGB( 46, 139,  87): return RGB( 61, 214, 140);	// forest sea green
+		case RGB( 51, 204, 153): return RGB( 90, 230, 175);	// Profile sea green
+		case RGB(255, 192, 203): return RGB(255, 133, 161);	// pastel pink
+		case RGB(255, 153, 204): return RGB(255, 180, 210);	// Profile pink
+		case RGB(176, 224, 230): return RGB(168, 218, 255);	// pastel ice blue
+		case RGB(153, 255, 255): return RGB(180, 240, 255);	// Profile ice blue
+		case RGB(153, 255, 204): return RGB(170, 255, 215);	// Profile turquoise
+		case RGB(255,   0, 255): return RGB(255, 102, 255);	// magenta
+		case RGB(255, 255,   0): return RGB(255, 224,  51);	// yellow
+		case RGB(255,   0,   0): return RGB(255,  68,  68);	// red
+		case RGB(255, 165,   0): return RGB(255, 170,   0);	// standard orange
+		case RGB(255, 170,   0): return RGB(255, 195,  64);	// Profile orange
+		case RGB(255, 255, 255): return RGB(224, 224, 224);	// white
+		default:                 return clr;
+	}
+}
+
+static COLORREF MsgListBg(void) {
+	return g_lighterBackground ? RGB(26, 26, 46) : Profile.color_background;
+}
+
+static COLORREF FilterDropBg(void) {
+	return MsgListBg();
 }
 
 
@@ -3335,7 +3458,7 @@ BOOL FAR PASCAL SetupDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	int i, state=0, config, comport, slicer, rs232, serial, soundcard;
 	int	tmp_audioConfig = Profile.audioConfig; // May need to restore configuration later.
 
-	DWORD value;
+	LONG_PTR value;
 
 	WAVEINCAPS WaveInCaps = {0};
 
@@ -3488,7 +3611,7 @@ BOOL FAR PASCAL SetupDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SendDlgItemMessage(hDlg, IDC_AUDIODEVICES, CB_SETCURSEL, more_audio ? Profile.audioDevice : 0, 0L);
 		if (!more_audio) EnableWindow(GetDlgItem(hDlg, IDC_AUDIODEVICES), false);
 
-		value = (DWORD)GetWindowLongPtr(GetDlgItem(hDlg, IDC_AUDIODEVICES), GWL_STYLE) - CBS_DROPDOWNLIST;
+		value = GetWindowLongPtr(GetDlgItem(hDlg, IDC_AUDIODEVICES), GWL_STYLE) - CBS_DROPDOWNLIST;
 		SetWindowLongPtr(GetDlgItem(hDlg, IDC_AUDIODEVICES), GWL_STYLE, value | ES_READONLY);
 
 		CheckDlgButton(hDlg, IDC_COMENABLE,   Profile.comPortEnabled);
@@ -3828,7 +3951,11 @@ BOOL NEAR SelectFont(HWND hDlg)
 		strcpy(Profile.fontInfo.lfFaceName,tmp_logfont.lfFaceName);
 
 		DeleteObject(hfont);
-		hfont = CreateFontIndirect(&Profile.fontInfo);
+		{
+			LOGFONT lf = Profile.fontInfo;
+			lf.lfQuality = CLEARTYPE_QUALITY;
+			hfont = CreateFontIndirect(&lf);
+		}
 		SelectObject(hDC, hfont);
 		GetTextMetrics(hDC, &tm);
 
@@ -4060,6 +4187,11 @@ BOOL FAR PASCAL ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				ReleaseDC(hDlg, hDC);
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
+			break;
+
+			case IDC_DISPLAYOPTIONS_BTN:
+				GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(DISPLAYOPTIONSDLGBOX),
+											 hDlg, (DLGPROC) DisplayOptionsDlgProc, 0L);
 			break;
 
 			case IDC_COLORDEFAULT:
@@ -5766,7 +5898,9 @@ BOOL FAR PASCAL OptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 			len = GetDlgItemText(hDlg, IDC_MB_MIN_MSG, (LPSTR) tbuf, 3);
 			if (len) sscanf(tbuf, "%d", &mb.min_msg_len);
 
+			UpdateModeLabel();
 			WriteSettings();
+			SetNewWindowText("");
 
 			EndDialog(hDlg, TRUE);
 			return (TRUE);
@@ -6122,6 +6256,59 @@ BOOL FAR PASCAL ScreenOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 } // end of ScreenOptionsDlgProc
 
 
+BOOL FAR PASCAL DisplayOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	static BOOL bSavedContrast, bSavedLighterBg;
+
+	switch (uMsg)
+	{
+		case WM_INITDIALOG:
+		if (!CenterWindow(hDlg)) return (FALSE);
+		bSavedContrast  = g_betterContrast;
+		bSavedLighterBg = g_lighterBackground;
+		CheckDlgButton(hDlg, IDC_DISPLAY_BETTER_CONTRAST, g_betterContrast  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_DISPLAY_LIGHTER_BG,      g_lighterBackground ? BST_CHECKED : BST_UNCHECKED);
+		return (TRUE);
+
+		case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+			case IDC_DISPLAY_BETTER_CONTRAST:
+			g_betterContrast = IsDlgButtonChecked(hDlg, IDC_DISPLAY_BETTER_CONTRAST) ? TRUE : FALSE;
+			InvalidateRect(Pane1.hWnd, NULL, TRUE);
+			InvalidateRect(Pane2.hWnd, NULL, TRUE);
+			if (hFilterDlg) InvalidateRect(GetDlgItem(hFilterDlg, IDC_FILTERS), NULL, TRUE);
+			break;
+
+			case IDC_DISPLAY_LIGHTER_BG:
+			g_lighterBackground = IsDlgButtonChecked(hDlg, IDC_DISPLAY_LIGHTER_BG) ? TRUE : FALSE;
+			InvalidateRect(Pane1.hWnd, NULL, TRUE);
+			InvalidateRect(Pane2.hWnd, NULL, TRUE);
+			if (hFilterDlg) InvalidateRect(GetDlgItem(hFilterDlg, IDC_FILTERS), NULL, TRUE);
+			break;
+
+			case IDOK:
+			Profile.betterContrast    = g_betterContrast    ? 1 : 0;
+			Profile.lighterBackground = g_lighterBackground ? 1 : 0;
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			return (TRUE);
+
+			case IDCANCEL:
+			g_betterContrast    = bSavedContrast;
+			g_lighterBackground = bSavedLighterBg;
+			InvalidateRect(Pane1.hWnd, NULL, TRUE);
+			InvalidateRect(Pane2.hWnd, NULL, TRUE);
+			if (hFilterDlg) InvalidateRect(GetDlgItem(hFilterDlg, IDC_FILTERS), NULL, TRUE);
+			EndDialog(hDlg, TRUE);
+			return (TRUE);
+		}
+		break;
+	}
+	return (FALSE);
+} // end of DisplayOptionsDlgProc
+
+
 BOOL FAR PASCAL ScrollDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	int pane1_size = Profile.pane1_size;
@@ -6427,10 +6614,10 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 	int x, y, w, h, buttonspace, start, next;
 
 	static int iFiltersColors = Profile.FilterWindowColors;
-	static HFONT hf ;
+	static HFONT hf = NULL;
 
 	RECT rect;
-	DWORD  dwStyle;
+	LONG_PTR dwStyle;
 	HBRUSH hb ;
 	UINT   idCtl;				// control identifier 
 	LPDRAWITEMSTRUCT lpdis;		// item-drawing information 
@@ -6450,7 +6637,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			if (lpdis->itemAction == ODA_DRAWENTIRE)
 			{
-				SetTextColor(lpdis->hDC, GetColorRGB(COLOR_FILTERLABEL+Profile.filters[lpdis->itemID].label_color));
+				SetTextColor(lpdis->hDC, ApplyContrastRemap(GetColorRGB(COLOR_FILTERLABEL+Profile.filters[lpdis->itemID].label_color)));
 
 				if (ListView_GetItemState(hListView, lpdis->itemID, LVIS_SELECTED))
 				{
@@ -6464,7 +6651,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 					{
 						SetTextColor(lpdis->hDC, RGB(0x44, 0x44, 0x44));	// GRAY
 					}
-					FillRect(lpdis->hDC, &rect, hb = CreateSolidBrush(Profile.color_background));
+					FillRect(lpdis->hDC, &rect, hb = CreateSolidBrush(MsgListBg()));
 					DeleteObject(hb) ;
 				}
 
@@ -6489,7 +6676,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		if (!CenterWindow(hDlg)) return (FALSE);
 
-		sprintf(szTEMP, "PDW Filters (%u)", Profile.filters.size());
+		sprintf(szTEMP, "PDW Filters (%u)", (unsigned int)Profile.filters.size());
 		SetWindowText(hDlg, (LPSTR) szTEMP);
 
 		hFilterDlg = hDlg;
@@ -6540,11 +6727,13 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		font_listview.lfPitchAndFamily	= FIXED_PITCH | FF_MODERN;
 		lstrcpy(font_listview.lfFaceName, "MS Sans Serif");
 
-		SendDlgItemMessage(hDlg, IDC_FILTERS, WM_SETFONT, (WPARAM) CreateFontIndirect(&font_listview), 0);
+		if (hf) DeleteObject(hf);
+		hf = CreateFontIndirect(&font_listview);
+		SendDlgItemMessage(hDlg, IDC_FILTERS, WM_SETFONT, (WPARAM) hf, 0);
 
 		if (Profile.FilterWindowColors)
 		{
-			dwStyle = (DWORD)GetWindowLongPtr(hListView, GWL_STYLE);
+			dwStyle = GetWindowLongPtr(hListView, GWL_STYLE);
 			SetWindowLongPtr(hListView, GWL_STYLE, dwStyle | LVS_OWNERDRAWFIXED);
 			SendMessage(hListView, LVM_SETBKCOLOR, 0, Profile.color_background);
 		}
@@ -6561,6 +6750,10 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		ListView_SetItemState(hListView, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 
 		return (TRUE);
+
+		case WM_DESTROY:
+		if (hf) { DeleteObject(hf); hf = NULL; }
+		break;
 
 		case WM_TIMER:
 		OnTimer(wParam) ;
@@ -6593,12 +6786,12 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 			{
 				if (bEditFilter) break;
 
-				sprintf(szTEMP, "PDW Filters (%u) - %i filters selected", Profile.filters.size(), ListView_GetSelectedCount(hListView));
+				sprintf(szTEMP, "PDW Filters (%u) - %i filters selected", (unsigned int)Profile.filters.size(), ListView_GetSelectedCount(hListView));
 				SetWindowText(hDlg, (LPSTR) szTEMP);
 			}
 			else if ((index = ListView_GetNextItem(hListView, -1, LVNI_SELECTED)) != CB_ERR)
 			{
-				sprintf(szTEMP, "PDW Filters (%u) - ", Profile.filters.size());
+				sprintf(szTEMP, "PDW Filters (%u) - ", (unsigned int)Profile.filters.size());
 
 				if (filter.type == TEXT_FILTER)
 				{
@@ -6787,7 +6980,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			case IDT_MENU_PASTE :
 				PasteFilter() ;
-				sprintf(szTEMP,"PDW Filters (%u)", Profile.filters.size());
+				sprintf(szTEMP,"PDW Filters (%u)", (unsigned int)Profile.filters.size());
 				SetWindowText(hDlg, (LPSTR) szTEMP);
 			break;
 
@@ -6843,7 +7036,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(FILTEREDITDLGBOX),
 									 hDlg, (DLGPROC) FilterEditDlgProc, 0L);
 
-				sprintf(szTEMP, "PDW Filters (%u)",Profile.filters.size());
+				sprintf(szTEMP, "PDW Filters (%u)",(unsigned int)Profile.filters.size());
 				SetWindowText(hDlg, (LPSTR) szTEMP);
 
 			break;
@@ -6917,9 +7110,9 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			bDeletingFilters = false;
 
-			sprintf(szTEMP, "PDW Filters (%u)",Profile.filters.size());
+			sprintf(szTEMP, "PDW Filters (%u)",(unsigned int)Profile.filters.size());
 			SetWindowText(hDlg, (LPSTR) szTEMP);
-            
+
 			break;
 
 			case IDC_FILTEROPTIONS:
@@ -6934,7 +7127,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 			{
 				ListView_DeleteAllItems(hListView);
 
-				dwStyle = (DWORD)GetWindowLongPtr(hListView, GWL_STYLE);
+				dwStyle = GetWindowLongPtr(hListView, GWL_STYLE);
 
 				if (Profile.FilterWindowColors)
 				{
@@ -7371,6 +7564,29 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 }	// end of FilterOptionsDlgProc()
 
 
+// Subclass proc for IDC_FILTERLABELCOLOR: intercepts WM_CTLCOLORLISTBOX at
+// the combobox level (ComboLBox sends it to its parent = the combobox, NOT the dialog).
+static WNDPROC s_pfnOrigLabelColorProc = NULL;
+
+static LRESULT CALLBACK FilterLabelColorSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	if (uMsg == WM_CTLCOLORLISTBOX)
+	{
+		COLORREF clr = FilterDropBg();
+		SetBkColor((HDC)wParam, clr);
+		static HBRUSH s_hbr    = NULL;
+		static COLORREF s_last = (COLORREF)-1;
+		if (clr != s_last) {
+			if (s_hbr) DeleteObject(s_hbr);
+			s_hbr  = CreateSolidBrush(clr);
+			s_last = clr;
+		}
+		return (LRESULT)s_hbr;
+	}
+	return CallWindowProc(s_pfnOrigLabelColorProc, hWnd, uMsg, wParam, lParam);
+}
+
+
 BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	static char szFilterLog[] = {"Text File (*.txt)\0*.txt\0All Files (*.*)\0*.*\0\0"};
@@ -7393,6 +7609,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 	static int offset=0, sep_filterfiles=0, initializing=1, focus, lastfocus;
 
 	static bool bApplying=false, bFilterJump=false;
+	static HFONT hfLabelColor = NULL;
 
 	int type=0, monitor_only=0, reject=0, match_exact=0, label_en=0, smtp=0;
 	int filter_cmd=0, color=0, audio=0, iHits=0;
@@ -7406,6 +7623,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 	char szFileFilter[MAX_PATH]="",
 		 szFilename[MAX_PATH]="",
 		 szPathname[MAX_PATH]="",
+		 szSepFullPath[MAX_PATH]="",	// Full path for separate filter file — local, sized to MAX_PATH
 		 szFileTitle[256],
 		 szFileFilterExt[5]="txt",
 		 szFilterEditHelpText[128];
@@ -7613,32 +7831,54 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 	switch (uMsg)
 	{
+		case WM_CTLCOLORLISTBOX:
+		case WM_CTLCOLORSTATIC:
+		{
+			if (GetDlgCtrlID((HWND)lParam) == IDC_FILTERLABELCOLOR ||
+			    GetParent((HWND)lParam) == GetDlgItem(hDlg, IDC_FILTERLABELCOLOR))
+			{
+				static HBRUSH hbComboFilter = NULL;
+				static COLORREF clrComboFilter = (COLORREF)-1;
+				COLORREF clrNew = FilterDropBg();
+				if (clrNew != clrComboFilter)
+				{
+					if (hbComboFilter) DeleteObject(hbComboFilter);
+					hbComboFilter = CreateSolidBrush(clrNew);
+					clrComboFilter = clrNew;
+				}
+				SetBkColor((HDC)wParam, clrNew);
+				return (INT_PTR)hbComboFilter;
+			}
+			break;
+		}
+
 		case WM_DRAWITEM:
 		{
-			LPDRAWITEMSTRUCT lpdis = (LPDRAWITEMSTRUCT) lParam;		// item-drawing information 
-			UINT idCtl = (UINT) wParam;								// control identifier 
+			LPDRAWITEMSTRUCT lpdis = (LPDRAWITEMSTRUCT) lParam;		// item-drawing information
+			UINT idCtl = (UINT) wParam;								// control identifier
 			RECT rect  = lpdis->rcItem ;
 
 			if (idCtl != IDC_FILTERLABELCOLOR) break;
+			if (lpdis->itemID == (UINT)-1) return TRUE;
 
-			if (lpdis->itemAction == ODA_DRAWENTIRE)
+			if (lpdis->itemAction & ODA_DRAWENTIRE)
 			{
-				FillRect(lpdis->hDC, &rect, hb = CreateSolidBrush(Profile.color_background)) ;
+				FillRect(lpdis->hDC, &rect, hb = CreateSolidBrush(FilterDropBg())) ;
 				DeleteObject(hb) ;
-				SetBkColor(lpdis->hDC, Profile.color_background) ;
-				SetTextColor(lpdis->hDC, GetColorRGB(COLOR_FILTERLABEL+lpdis->itemID));
+				SetBkColor(lpdis->hDC, FilterDropBg()) ;
+				SetTextColor(lpdis->hDC, ApplyContrastRemap(GetColorRGB(COLOR_FILTERLABEL+lpdis->itemID)));
 				DrawText(lpdis->hDC,label_colors[lpdis->itemID], strlen(label_colors[lpdis->itemID]), &rect, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
 
-				if (lpdis->itemState == ODS_SELECTED)
+				if (lpdis->itemState & ODS_SELECTED)
 				{
 					DrawFocusRect(lpdis->hDC, &rect) ;
 				}
-				if (lpdis->itemState == ODS_FOCUS)
+				if (lpdis->itemState & ODS_FOCUS)
 				{
 					DrawFocusRect(lpdis->hDC, &rect) ;
 				}
 			}
-			if (lpdis->itemAction == ODA_SELECT)
+			if (lpdis->itemAction & ODA_SELECT)
 			{
 				DrawFocusRect(lpdis->hDC, &rect) ;
 			}
@@ -7646,11 +7886,21 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		}
 		break ;
 
+		case WM_DESTROY:
+		if (hfLabelColor) { DeleteObject(hfLabelColor); hfLabelColor = NULL; }
+		if (s_pfnOrigLabelColorProc)
+		{
+			HWND hColorCombo = GetDlgItem(hDlg, IDC_FILTERLABELCOLOR);
+			if (hColorCombo) SetWindowLongPtr(hColorCombo, GWLP_WNDPROC, (LONG_PTR)s_pfnOrigLabelColorProc);
+			s_pfnOrigLabelColorProc = NULL;
+		}
+		break;
+
 		case WM_WINDOWPOSCHANGED: // Give focus to the Text edit control
 
 		SetFocus(GetDlgItem(hDlg, (filter.type == TEXT_FILTER) ? IDC_FILTERTEXT : IDC_FILTERCAPCODE));
 
-		break;   
+		break;
 
 		case WM_INITDIALOG:
 
@@ -7658,7 +7908,12 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		{
 			if (!CenterWindow(hDlg)) return (FALSE);
 
-			SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, WM_SETFONT, (WPARAM) CreateFontIndirect(&font_labelcolor), 0);
+			if (hfLabelColor) DeleteObject(hfLabelColor);
+			hfLabelColor = CreateFontIndirect(&font_labelcolor);
+			SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, WM_SETFONT, (WPARAM) hfLabelColor, 0);
+
+			s_pfnOrigLabelColorProc = (WNDPROC)SetWindowLongPtr(
+				GetDlgItem(hDlg, IDC_FILTERLABELCOLOR), GWLP_WNDPROC, (LONG_PTR)FilterLabelColorSubclassProc);
 
 			for (i=0; i<6; i++)		// show filter types
 			{
@@ -7697,7 +7952,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		}
 		else	 // Edit Filter
 		{
-			SetWindowText(hDlg, (LPSTR) multiple_edit ? "PDW (multiple) Edit Filter" : "PDW Edit Filter");
+			SetWindowText(hDlg, multiple_edit ? "PDW (multiple) Edit Filter" : "PDW Edit Filter");
 
 			if (multiple_edit)	// If more than one filter is selected
 			{
@@ -8162,7 +8417,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 			case IDOK:
 
-			filter.reject = IsDlgButtonChecked(hDlg, IDC_FILTERREJECT);
+			filter.reject = (IsDlgButtonChecked(hDlg, IDC_FILTERREJECT) == BST_CHECKED);
 
 			if (filter.type != TEXT_FILTER) // If no TEXT filter
 			{
@@ -8256,7 +8511,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					{
 						if (SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_GETCURSEL, 0, 0L))
 						{
-							sprintf(temp, "-%i", SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_GETCURSEL, 0, 0L));
+							sprintf(temp, "-%i", (int)SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_GETCURSEL, 0, 0L));
 							strcat(filter.capcode, temp);
 						}
 					}
@@ -8353,23 +8608,24 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					}
 					else
 					{
-						strcpy(szFilenameDate, "");
+						szSepFullPath[0] = 0;
 
 						if (strstr(szFileFilter, "\\") != 0)
 						{
 							if (szFileFilter[1] == ':')
 							{
-								strcpy(szFilenameDate, szFileFilter); // Full path
+								_snprintf(szSepFullPath, sizeof(szSepFullPath)-1, "%s", szFileFilter); // Full path
 							}
-							else sprintf(szFilenameDate, "%s\\%s", szPath, szFileFilter);
+							else _snprintf(szSepFullPath, sizeof(szSepFullPath)-1, "%s\\%s", szPath, szFileFilter);
 						}
-						else sprintf(szFilenameDate, "%s\\%s", szLogPathName, szFileFilter);
+						else _snprintf(szSepFullPath, sizeof(szSepFullPath)-1, "%s\\%s", szLogPathName, szFileFilter);
+						szSepFullPath[sizeof(szSepFullPath)-1] = 0;
 
 						if (!FileExists(szLogPathName)) CreateDirectory(szLogPathName, NULL);
 
-						if (!FileExists(szFilenameDate))
+						if (!FileExists(szSepFullPath))
 						{
-							if ((pSepFile = fopen(szFilenameDate, "a")) == NULL)
+							if ((pSepFile = fopen(szSepFullPath, "a")) == NULL)
 							{
 								MessageBox(hDlg,"Error opening separate filter file!","PDW Separate Filterfile",MB_ICONERROR);
 								filter.sep_filterfile_en = 0;
@@ -8379,7 +8635,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 							else
 							{
 								fclose(pSepFile);
-								DeleteFile(szFilenameDate);
+								DeleteFile(szSepFullPath);
 							}
 						}
 					}
@@ -8433,7 +8689,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					Profile.filters[index].reject = filter.reject;
 				}
 
-				if (!filter.reject)
+				if (IsDlgButtonChecked(hDlg, IDC_FILTERREJECT) != BST_CHECKED)
 				{
 					if (IsDlgButtonChecked(hDlg, IDC_FILTER_MONITOR_ONLY) != BST_INDETERMINATE)
 					{
@@ -8770,7 +9026,7 @@ BOOL FAR PASCAL FilterCheckDuplicateDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam,
 				calculate= nFilters2-((nFilters-index1)*(nFilters-index1));
 				calculate/=nFilters2;
 
-				percentage=(calculate*100)+1;
+				percentage = (int)(calculate * 100) + 1;
 
 				if (percentage != oldpercentage)
 				{
@@ -9118,6 +9374,250 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	}
 	return (FALSE);
 } // end of MailDlgProc
+
+
+BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_WEBHOOK_ENABLED,       Profile.webhookEnabled);
+		SetDlgItemText(hDlg, IDC_WEBHOOK_URL,            Profile.szWebhookURL);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_TRUST_SS,      Profile.webhookTrustSelfSigned);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_LOG,            Profile.webhookLogToFile);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_PAD_CAPCODES,  Profile.webhookPadCapcodes);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_PAGERMON_FMT,  Profile.webhookPagermonFormat);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_CSV,     (Profile.webhookFields & 0x01)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_PERCAP,  (Profile.webhookFields & 0x80)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_ARRAY,   (Profile.webhookFields & 0x100) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_FIELD_TIME,    (Profile.webhookFields & 0x02) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_FIELD_DATE,    (Profile.webhookFields & 0x04) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_FIELD_TS,      (Profile.webhookFields & 0x08) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_FIELD_MODE,    (Profile.webhookFields & 0x10) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_FIELD_TYPE,    (Profile.webhookFields & 0x20) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_WEBHOOK_FIELD_BITRATE, (Profile.webhookFields & 0x40) ? BST_CHECKED : BST_UNCHECKED);
+		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"All messages");
+		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered messages only");
+		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered + monitor-only messages");
+		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_SETCURSEL, (WPARAM)Profile.webhookSendIn, 0);
+		SetDlgItemText(hDlg, IDC_WEBHOOK_STATUS,         "Status: Idle");
+		WebhookSetStatusWnd(hDlg);
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_DESTROY:
+		WebhookSetStatusWnd(NULL);
+		break;
+
+	case WM_WEBHOOK_STATUS:
+	{
+		char szStatus[64];
+		switch ((int)wParam)
+		{
+		case WHS_IDLE:     strcpy(szStatus, "Status: Idle");                break;
+		case WHS_SENDING:  strcpy(szStatus, "Status: Sending...");          break;
+		case WHS_OK:       sprintf(szStatus, "Status: OK %d", (int)lParam); break;
+		case WHS_RETRY:    sprintf(szStatus, "Status: Retry %d/3", (int)lParam); break;
+		case WHS_ERROR:    strcpy(szStatus, "Status: Error");               break;
+		case WHS_DISABLED: strcpy(szStatus, "Status: Disabled");            break;
+		default:           strcpy(szStatus, "Status: ...");                  break;
+		}
+		SetDlgItemText(hDlg, IDC_WEBHOOK_STATUS, szStatus);
+		break;
+	}
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDC_WEBHOOK_LABEL_CSV:
+			if (HIWORD(wParam) == BN_CLICKED && IsDlgButtonChecked(hDlg, IDC_WEBHOOK_LABEL_CSV)) {
+				CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_PERCAP, BST_UNCHECKED);
+				CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_ARRAY,  BST_UNCHECKED);
+			}
+			break;
+		case IDC_WEBHOOK_LABEL_PERCAP:
+			if (HIWORD(wParam) == BN_CLICKED && IsDlgButtonChecked(hDlg, IDC_WEBHOOK_LABEL_PERCAP)) {
+				CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_CSV,   BST_UNCHECKED);
+				CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_ARRAY, BST_UNCHECKED);
+			}
+			break;
+		case IDC_WEBHOOK_LABEL_ARRAY:
+			if (HIWORD(wParam) == BN_CLICKED && IsDlgButtonChecked(hDlg, IDC_WEBHOOK_LABEL_ARRAY)) {
+				CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_CSV,    BST_UNCHECKED);
+				CheckDlgButton(hDlg, IDC_WEBHOOK_LABEL_PERCAP, BST_UNCHECKED);
+			}
+			break;
+		case IDOK:
+			Profile.webhookEnabled         = IsDlgButtonChecked(hDlg, IDC_WEBHOOK_ENABLED)      ? 1 : 0;
+			Profile.webhookTrustSelfSigned = IsDlgButtonChecked(hDlg, IDC_WEBHOOK_TRUST_SS)     ? 1 : 0;
+			Profile.webhookLogToFile       = IsDlgButtonChecked(hDlg, IDC_WEBHOOK_LOG)           ? 1 : 0;
+			Profile.webhookPadCapcodes     = IsDlgButtonChecked(hDlg, IDC_WEBHOOK_PAD_CAPCODES) ? 1 : 0;
+			Profile.webhookPagermonFormat  = IsDlgButtonChecked(hDlg, IDC_WEBHOOK_PAGERMON_FMT) ? 1 : 0;
+			Profile.webhookFields =
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_LABEL_CSV)     ? 0x01 : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_FIELD_TIME)    ? 0x02 : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_FIELD_DATE)    ? 0x04 : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_FIELD_TS)      ? 0x08 : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_FIELD_MODE)    ? 0x10 : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_FIELD_TYPE)    ? 0x20 : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_FIELD_BITRATE) ? 0x40  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_LABEL_PERCAP)  ? 0x80  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_WEBHOOK_LABEL_ARRAY)   ? 0x100 : 0);
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_GETCURSEL, 0, 0);
+				Profile.webhookSendIn = (iSel == CB_ERR) ? 0 : iSel;
+			}
+			SendDlgItemMessage(hDlg, IDC_WEBHOOK_URL, WM_GETTEXT,
+			                   sizeof(Profile.szWebhookURL), (LPARAM)Profile.szWebhookURL);
+			WebhookInit();
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+
+		case IDCANCEL:
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of WebhookDlgProc
+
+
+BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	char szBuf[32];
+
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_MQTT_ENABLED,      Profile.mqttEnabled);
+		SetDlgItemText(hDlg, IDC_MQTT_BROKER,        Profile.szMqttBroker);
+		SetDlgItemInt (hDlg, IDC_MQTT_PORT,          Profile.mqttPort > 0 ? Profile.mqttPort : 1883, FALSE);
+		SetDlgItemText(hDlg, IDC_MQTT_CLIENTID,      Profile.szMqttClientId);
+		SetDlgItemText(hDlg, IDC_MQTT_USER,          Profile.szMqttUser);
+		SetDlgItemText(hDlg, IDC_MQTT_PASSWORD,      Profile.szMqttPassword);
+		SetDlgItemText(hDlg, IDC_MQTT_TOPIC,         Profile.szMqttTopic[0] ? Profile.szMqttTopic : "pdw/messages");
+		SendDlgItemMessage(hDlg, IDC_MQTT_TOPIC_SUFFIX, CB_ADDSTRING, 0, (LPARAM)"None - all messages to base topic (1 sensor)");
+		SendDlgItemMessage(hDlg, IDC_MQTT_TOPIC_SUFFIX, CB_ADDSTRING, 0, (LPARAM)"/{capcode} - separate sub-topic per capcode");
+		SendDlgItemMessage(hDlg, IDC_MQTT_TOPIC_SUFFIX, CB_SETCURSEL, (WPARAM)(Profile.mqttTopicSuffix ? 1 : 0), 0);
+		SendDlgItemMessage(hDlg, IDC_MQTT_QOS, CB_ADDSTRING, 0, (LPARAM)"0 (at most once)");
+		SendDlgItemMessage(hDlg, IDC_MQTT_QOS, CB_ADDSTRING, 0, (LPARAM)"1 (at least once)");
+		SendDlgItemMessage(hDlg, IDC_MQTT_QOS, CB_ADDSTRING, 0, (LPARAM)"2 (exactly once)");
+		SendDlgItemMessage(hDlg, IDC_MQTT_QOS, CB_SETCURSEL, (WPARAM)(Profile.mqttQos >= 0 && Profile.mqttQos <= 2 ? Profile.mqttQos : 0), 0);
+		CheckDlgButton(hDlg, IDC_MQTT_RETAIN,        Profile.mqttRetain);
+		CheckDlgButton(hDlg, IDC_MQTT_LOG,           Profile.mqttLogToFile);
+		CheckDlgButton(hDlg, IDC_MQTT_PAD_CAPCODES,  Profile.mqttPadCapcodes);
+		CheckDlgButton(hDlg, IDC_MQTT_FLAT_JSON,     Profile.mqttFlatJson);
+		CheckDlgButton(hDlg, IDC_MQTT_LABEL_CSV,     (Profile.mqttFields & 0x01)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_LABEL_PERCAP,  (Profile.mqttFields & 0x80)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_LABEL_ARRAY,   (Profile.mqttFields & 0x100) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_FIELD_TIME,    (Profile.mqttFields & 0x02)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_FIELD_DATE,    (Profile.mqttFields & 0x04)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_FIELD_TS,      (Profile.mqttFields & 0x08)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_FIELD_MODE,    (Profile.mqttFields & 0x10)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_FIELD_TYPE,    (Profile.mqttFields & 0x20)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MQTT_FIELD_BITRATE, (Profile.mqttFields & 0x40)  ? BST_CHECKED : BST_UNCHECKED);
+		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"All messages");
+		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered messages only");
+		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered + monitor-only messages");
+		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_SETCURSEL, (WPARAM)Profile.mqttSendIn, 0);
+		SetDlgItemText(hDlg, IDC_MQTT_STATUS, "Status: Idle");
+		MqttSetStatusWnd(hDlg);
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_DESTROY:
+		MqttSetStatusWnd(NULL);
+		break;
+
+	case WM_MQTT_STATUS:
+	{
+		char szStatus[64];
+		switch ((int)wParam)
+		{
+		case MHS_IDLE:     strcpy(szStatus, "Status: Idle");              break;
+		case MHS_SENDING:  strcpy(szStatus, "Status: Sending...");        break;
+		case MHS_OK:       strcpy(szStatus, "Status: OK");                break;
+		case MHS_RETRY:    sprintf(szStatus, "Status: Retry %d/2", (int)lParam); break;
+		case MHS_ERROR:    strcpy(szStatus, "Status: Error");             break;
+		case MHS_DISABLED: strcpy(szStatus, "Status: Disabled");          break;
+		default:           strcpy(szStatus, "Status: ...");                break;
+		}
+		SetDlgItemText(hDlg, IDC_MQTT_STATUS, szStatus);
+		break;
+	}
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDC_MQTT_LABEL_CSV:
+			if (HIWORD(wParam) == BN_CLICKED && IsDlgButtonChecked(hDlg, IDC_MQTT_LABEL_CSV)) {
+				CheckDlgButton(hDlg, IDC_MQTT_LABEL_PERCAP, BST_UNCHECKED);
+				CheckDlgButton(hDlg, IDC_MQTT_LABEL_ARRAY,  BST_UNCHECKED);
+			}
+			break;
+		case IDC_MQTT_LABEL_PERCAP:
+			if (HIWORD(wParam) == BN_CLICKED && IsDlgButtonChecked(hDlg, IDC_MQTT_LABEL_PERCAP)) {
+				CheckDlgButton(hDlg, IDC_MQTT_LABEL_CSV,   BST_UNCHECKED);
+				CheckDlgButton(hDlg, IDC_MQTT_LABEL_ARRAY, BST_UNCHECKED);
+			}
+			break;
+		case IDC_MQTT_LABEL_ARRAY:
+			if (HIWORD(wParam) == BN_CLICKED && IsDlgButtonChecked(hDlg, IDC_MQTT_LABEL_ARRAY)) {
+				CheckDlgButton(hDlg, IDC_MQTT_LABEL_CSV,    BST_UNCHECKED);
+				CheckDlgButton(hDlg, IDC_MQTT_LABEL_PERCAP, BST_UNCHECKED);
+			}
+			break;
+		case IDOK:
+			Profile.mqttEnabled     = IsDlgButtonChecked(hDlg, IDC_MQTT_ENABLED)     ? 1 : 0;
+			Profile.mqttRetain      = IsDlgButtonChecked(hDlg, IDC_MQTT_RETAIN)      ? 1 : 0;
+			Profile.mqttLogToFile   = IsDlgButtonChecked(hDlg, IDC_MQTT_LOG)         ? 1 : 0;
+			Profile.mqttPadCapcodes = IsDlgButtonChecked(hDlg, IDC_MQTT_PAD_CAPCODES)? 1 : 0;
+			Profile.mqttFlatJson    = IsDlgButtonChecked(hDlg, IDC_MQTT_FLAT_JSON)   ? 1 : 0;
+			Profile.mqttFields =
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_LABEL_CSV)     ? 0x01  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_FIELD_TIME)    ? 0x02  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_FIELD_DATE)    ? 0x04  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_FIELD_TS)      ? 0x08  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_FIELD_MODE)    ? 0x10  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_FIELD_TYPE)    ? 0x20  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_FIELD_BITRATE) ? 0x40  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_LABEL_PERCAP)  ? 0x80  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MQTT_LABEL_ARRAY)   ? 0x100 : 0);
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_MQTT_TOPIC_SUFFIX, CB_GETCURSEL, 0, 0);
+				Profile.mqttTopicSuffix = (iSel == CB_ERR || iSel == 0) ? 0 : 1;
+			}
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_MQTT_QOS, CB_GETCURSEL, 0, 0);
+				Profile.mqttQos = (iSel == CB_ERR) ? 0 : iSel;
+			}
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_GETCURSEL, 0, 0);
+				Profile.mqttSendIn = (iSel == CB_ERR) ? 0 : iSel;
+			}
+			GetDlgItemText(hDlg, IDC_MQTT_BROKER,   Profile.szMqttBroker,   sizeof(Profile.szMqttBroker)   - 1);
+			GetDlgItemText(hDlg, IDC_MQTT_CLIENTID, Profile.szMqttClientId, sizeof(Profile.szMqttClientId) - 1);
+			GetDlgItemText(hDlg, IDC_MQTT_USER,     Profile.szMqttUser,     sizeof(Profile.szMqttUser)     - 1);
+			GetDlgItemText(hDlg, IDC_MQTT_PASSWORD, Profile.szMqttPassword, sizeof(Profile.szMqttPassword) - 1);
+			GetDlgItemText(hDlg, IDC_MQTT_TOPIC,    Profile.szMqttTopic,    sizeof(Profile.szMqttTopic)    - 1);
+			GetDlgItemText(hDlg, IDC_MQTT_PORT,     szBuf,                  sizeof(szBuf)                  - 1);
+			Profile.mqttPort = atoi(szBuf);
+			if (Profile.mqttPort <= 0) Profile.mqttPort = 1883;
+			MqttInit();
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+
+		case IDCANCEL:
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of MqttDlgProc
 
 
 BOOL FAR PASCAL MonStatDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -9661,6 +10161,40 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	
 	MailInit(Profile.szMailHost, Profile.szMailHeloDomain, Profile.szMailFrom, Profile.szMailTo, Profile.szMailUser, Profile.szMailPassword, Profile.iMailPort, Profile.nMailOptions);
 
+	pProfile->webhookEnabled         = (INT) GetPrivateProfileInt("Webhook", TEXT("Enabled"),         0,  lpszIniPathName);
+	GetPrivateProfileString("Webhook", TEXT("URL"), "", pProfile->szWebhookURL, sizeof(pProfile->szWebhookURL), lpszIniPathName);
+	pProfile->webhookTrustSelfSigned = (INT) GetPrivateProfileInt("Webhook", TEXT("TrustSelfSigned"), 0,  lpszIniPathName);
+	pProfile->webhookLogToFile       = (INT) GetPrivateProfileInt("Webhook", TEXT("LogToFile"),       0,  lpszIniPathName);
+	pProfile->webhookPadCapcodes     = (INT) GetPrivateProfileInt("Webhook", TEXT("PadCapcodes"),     0,    lpszIniPathName);
+	pProfile->webhookPagermonFormat  = (INT) GetPrivateProfileInt("Webhook", TEXT("PagermonFormat"),  0,    lpszIniPathName);
+	pProfile->webhookSendIn          = (INT) GetPrivateProfileInt("Webhook", TEXT("SendIn"),          0,    lpszIniPathName);
+	pProfile->webhookFields          = (INT) GetPrivateProfileInt("Webhook", TEXT("Fields"),          0x7F, lpszIniPathName);
+	WebhookInit();
+
+	pProfile->mqttEnabled     = (INT) GetPrivateProfileInt("MQTT", TEXT("Enabled"),     0,              lpszIniPathName);
+	GetPrivateProfileString("MQTT", TEXT("Broker"),   "localhost", pProfile->szMqttBroker,   sizeof(pProfile->szMqttBroker),   lpszIniPathName);
+	pProfile->mqttPort        = (INT) GetPrivateProfileInt("MQTT", TEXT("Port"),        1883,           lpszIniPathName);
+	GetPrivateProfileString("MQTT", TEXT("ClientId"), "PDW-01",    pProfile->szMqttClientId, sizeof(pProfile->szMqttClientId), lpszIniPathName);
+	GetPrivateProfileString("MQTT", TEXT("User"),     "",          pProfile->szMqttUser,     sizeof(pProfile->szMqttUser),     lpszIniPathName);
+	GetPrivateProfileString("MQTT", TEXT("Password"), "",          pProfile->szMqttPassword, sizeof(pProfile->szMqttPassword), lpszIniPathName);
+	GetPrivateProfileString("MQTT", TEXT("Topic"),    "pdw/messages", pProfile->szMqttTopic, sizeof(pProfile->szMqttTopic),    lpszIniPathName);
+	pProfile->mqttQos         = (INT) GetPrivateProfileInt("MQTT", TEXT("QoS"),         0,              lpszIniPathName);
+	pProfile->mqttRetain      = (INT) GetPrivateProfileInt("MQTT", TEXT("Retain"),      0,              lpszIniPathName);
+	pProfile->mqttLogToFile   = (INT) GetPrivateProfileInt("MQTT", TEXT("LogToFile"),   0,              lpszIniPathName);
+	pProfile->mqttPadCapcodes = (INT) GetPrivateProfileInt("MQTT", TEXT("PadCapcodes"), 0,              lpszIniPathName);
+	pProfile->mqttFlatJson     = (INT) GetPrivateProfileInt("MQTT", TEXT("FlatJson"),     0,    lpszIniPathName);
+	pProfile->mqttTopicSuffix  = (INT) GetPrivateProfileInt("MQTT", TEXT("TopicSuffix"),  0,    lpszIniPathName);
+	pProfile->mqttSendIn       = (INT) GetPrivateProfileInt("MQTT", TEXT("SendIn"),       0,    lpszIniPathName);
+	pProfile->mqttFields       = (INT) GetPrivateProfileInt("MQTT", TEXT("Fields"),       0x7F, lpszIniPathName);
+	MqttInit();
+
+	pProfile->bDebugLog        = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),  0,    lpszIniPathName);
+
+	pProfile->betterContrast    = (INT) GetPrivateProfileInt("Display", TEXT("better_contrast"),   0, lpszIniPathName);
+	pProfile->lighterBackground = (INT) GetPrivateProfileInt("Display", TEXT("lighter_background"), 0, lpszIniPathName);
+	g_betterContrast    = (BOOL) pProfile->betterContrast;
+	g_lighterBackground = (BOOL) pProfile->lighterBackground;
+
 	/***** Get Filter settings *****/
 
 	pProfile->filterfile_enabled = (INT) GetPrivateProfileInt("Filter", TEXT("FilterFileEnabled"), pProfile->filterfile_enabled, lpszIniPathName);
@@ -9784,8 +10318,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 							if (szLine[pos+1] != '"')
 							{
-								strncpy(filter.capcode, &szLine[pos+1], strlen(szLine));
-								filter.capcode[strchr(filter.capcode, '"') - filter.capcode] = 0;
+								strncpy(filter.capcode, &szLine[pos+1], FILTER_CAPCODE_LEN + 1);
+								filter.capcode[FILTER_CAPCODE_LEN] = '\0';
+								{ char* pQ = strchr(filter.capcode, '"'); if (pQ) *pQ = '\0'; }
 								pos += strlen(filter.capcode) + 1;	// + 1 to start at last "
 
 								// Convert 9-digit short addresses to 7-digits
@@ -9804,8 +10339,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 							if (szLine[pos+1] != '"')
 							{
-								strncpy(filter.label, &szLine[pos+1], strlen(szLine));
-								filter.label[strchr(filter.label, '"') - filter.label] = 0;
+								strncpy(filter.label, &szLine[pos+1], FILTER_LABEL_LEN + 1);
+								filter.label[FILTER_LABEL_LEN] = '\0';
+								{ char* pQ = strchr(filter.label, '"'); if (pQ) *pQ = '\0'; }
 								pos += strlen(filter.label) + 1;	// + 1 to start at last "
 							}
 							else filter.label[0] = 0;
@@ -9816,8 +10352,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 							if (szLine[pos+1] != '"')
 							{
-								strncpy(filter.text, &szLine[pos+1], strlen(szLine));
-								filter.text[strchr(filter.text, '"') - filter.text] = 0;
+								strncpy(filter.text, &szLine[pos+1], FILTER_TEXT_LEN + 1);
+								filter.text[FILTER_TEXT_LEN] = '\0';
+								{ char* pQ = strchr(filter.text, '"'); if (pQ) *pQ = '\0'; }
 								pos += strlen(filter.text) + 1;	// + 1 to start at last "
 							}
 							else filter.text[0] = 0;
@@ -9877,8 +10414,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 							if (szLine[pos+1] != '"')
 							{
-								strncpy(szSepfiles, &szLine[pos+1], strlen(szLine));
-								szSepfiles[strchr(szSepfiles, '"') - szSepfiles] = 0;
+								strncpy(szSepfiles, &szLine[pos+1], MAX_STR_LEN - 1);
+								szSepfiles[MAX_STR_LEN - 1] = '\0';
+								{ char* pQ = strchr(szSepfiles, '"'); if (pQ) *pQ = '\0'; }
 								pos += strlen(szSepfiles);
 								token = strtok(szSepfiles, ";");
 
@@ -10116,6 +10654,40 @@ void WriteSettings()
 		fprintf(pFile, "Options=%i\n",					Profile.nMailOptions);
 		fprintf(pFile, "SSL=%i\n",                      Profile.ssl);
 
+		fprintf(pFile, "\n[Webhook]\n");
+		fprintf(pFile, "Enabled=%i\n",          Profile.webhookEnabled);
+		fprintf(pFile, "URL=%s\n",              Profile.szWebhookURL);
+		fprintf(pFile, "TrustSelfSigned=%i\n",  Profile.webhookTrustSelfSigned);
+		fprintf(pFile, "LogToFile=%i\n",        Profile.webhookLogToFile);
+		fprintf(pFile, "PadCapcodes=%i\n",      Profile.webhookPadCapcodes);
+		fprintf(pFile, "PagermonFormat=%i\n",   Profile.webhookPagermonFormat);
+		fprintf(pFile, "SendIn=%i\n",           Profile.webhookSendIn);
+		fprintf(pFile, "Fields=%i\n",           Profile.webhookFields);
+
+		fprintf(pFile, "\n[MQTT]\n");
+		fprintf(pFile, "Enabled=%i\n",       Profile.mqttEnabled);
+		fprintf(pFile, "Broker=%s\n",        Profile.szMqttBroker);
+		fprintf(pFile, "Port=%i\n",          Profile.mqttPort);
+		fprintf(pFile, "ClientId=%s\n",      Profile.szMqttClientId);
+		fprintf(pFile, "User=%s\n",          Profile.szMqttUser);
+		fprintf(pFile, "Password=%s\n",      Profile.szMqttPassword);
+		fprintf(pFile, "Topic=%s\n",         Profile.szMqttTopic);
+		fprintf(pFile, "QoS=%i\n",           Profile.mqttQos);
+		fprintf(pFile, "Retain=%i\n",        Profile.mqttRetain);
+		fprintf(pFile, "LogToFile=%i\n",     Profile.mqttLogToFile);
+		fprintf(pFile, "PadCapcodes=%i\n",   Profile.mqttPadCapcodes);
+		fprintf(pFile, "FlatJson=%i\n",      Profile.mqttFlatJson);
+		fprintf(pFile, "TopicSuffix=%i\n",   Profile.mqttTopicSuffix);
+		fprintf(pFile, "SendIn=%i\n",        Profile.mqttSendIn);
+		fprintf(pFile, "Fields=%i\n",        Profile.mqttFields);
+
+		fprintf(pFile, "\n[Logging]\n");
+		fprintf(pFile, "DebugLog=%i\n",      Profile.bDebugLog);
+
+		fprintf(pFile, "\n[Display]\n");
+		fprintf(pFile, "better_contrast=%i\n",    Profile.betterContrast);
+		fprintf(pFile, "lighter_background=%i\n", Profile.lighterBackground);
+
 		fprintf(pFile, "\n[Filter]\n");
 		fprintf(pFile, "FilterFileEnabled=%i\n",		Profile.filterfile_enabled);
 		fprintf(pFile, "FilterFile=%s\n",				Profile.filterfile);
@@ -10134,7 +10706,7 @@ void WriteSettings()
 
 void WriteFilters(PPROFILE pProfile, int backup)
 {
-	char szLine[256];
+	char szLine[MAX_STR_LEN];
 	char szFilename[MAX_PATH];
 	char szPathname[MAX_PATH];
 	char ext[10];
@@ -10153,7 +10725,7 @@ void WriteFilters(PPROFILE pProfile, int backup)
 	}
 	if ((pFiltersFile = fopen(szFilterPathName, "w+")) != NULL)
 	{
-		fprintf(pFiltersFile, "[Filter]\n\nFilterCount=%i\n\n", pProfile->filters.size());
+		fprintf(pFiltersFile, "[Filter]\n\nFilterCount=%u\n\n", (unsigned int)pProfile->filters.size());
 		
 		for (int index=0; index<pProfile->filters.size(); index++)
 		{
@@ -10261,6 +10833,7 @@ bool LoadDriver(void)	// HWi
 
 	char szErrorMSG[128];
 	
+#if !defined(_WIN64)
 	if (bWin9x && !Profile.comPortRS232)	// Using Windows 95/98/ME
 	{
 		hDriver = CreateFile("\\\\.\\COMPRT.VXD", 0, 0, 0, 0, FILE_FLAG_DELETE_ON_CLOSE, 0);
@@ -10284,19 +10857,21 @@ bool LoadDriver(void)	// HWi
 		nDriverLoaded = DRIVER_VXD_LOADED;	    // HWi must be only TRUE when all is OK
 	}
 	else	// Using RS232 or Windows 2000/XP/Vista/7
+#endif
 	{
 		slicer_in.irq = Profile.comPortIRQ;
 //		Use comport number instead of comport address
 		slicer_in.com_port = Profile.comPort;
-		hDriver = (HANDLE) rs232_connect(&slicer_in, &slicer_out);
-
-		if (hDriver != RS232_SUCCESS)
 		{
-			MessageBox(ghWnd,"Unable to open the selected Comport", "PDW Driver", MB_ICONWARNING);
-//			OUTPUTDEBUGMSG((("Error: rs232_connect() = %d\n"), hDriver));		
-			nDriverLoaded = DRIVER_NOT_LOADED;
-			return(false);
+			int nRs232Result = rs232_connect(&slicer_in, &slicer_out);
+			if (nRs232Result != RS232_SUCCESS)
+			{
+				MessageBox(ghWnd,"Unable to open the selected Comport", "PDW Driver", MB_ICONWARNING);
+				nDriverLoaded = DRIVER_NOT_LOADED;
+				return(false);
+			}
 		}
+		hDriver = NULL;                         // RS232 path uses internal handle; not a Win32 HANDLE
 		nDriverLoaded = DRIVER_COM_LOADED;	    // HWi must be only TRUE when all is OK
 	}
 
@@ -10871,7 +11446,7 @@ void SortFilter(HWND hDlg, bool bAddress)
 		} 
 		ListView_SetItemState(hListView, i, LVIS_FOCUSED, LVIS_FOCUSED);
 
-		if (sprintf(szTEMP, "PDW Filters (%u)", Profile.filters.size()) != EOF)
+		if (sprintf(szTEMP, "PDW Filters (%u)", (unsigned int)Profile.filters.size()) != EOF)
 		SetWindowText(hDlg, (LPSTR) szTEMP);
 	}
 	bSortingFilters = false;
@@ -11128,11 +11703,29 @@ void SystemTrayIcon(bool bRemoveIcon)
 }
 
 
+static void UpdateModeLabel()
+{
+	if (Profile.monitor_acars)
+		strcpy(g_szModeLabel, " [ACARS]");
+	else if (Profile.monitor_mobitex)
+		strcpy(g_szModeLabel, " [MOBITEX]");
+	else if (Profile.monitor_ermes)
+		strcpy(g_szModeLabel, " [ERMES]");
+	else if (Profile.decodeflex && Profile.decodepocsag)
+		strcpy(g_szModeLabel, " [FLEX/POCSAG]");
+	else if (Profile.decodeflex)
+		strcpy(g_szModeLabel, " [FLEX]");
+	else
+		strcpy(g_szModeLabel, " [POCSAG]");
+}
+
+
 void SetNewWindowText(char *text)
 {
 //	extern bool bMode_IDLE;			// Set if no signal
 
 	strcpy(szTEMP, szWindowText[0]);
+	strcat(szTEMP, g_szModeLabel);
 
 	if (text[0]) strcat(szTEMP, text);
 	else

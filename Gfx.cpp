@@ -448,15 +448,15 @@ bool GetLogFONTS(void)
 			case FONT_LABELS:
 
 			lstrcpy(logfont.lfFaceName, "Verdana");
-			logfont.lfHeight = -11;
+			logfont.lfHeight = -MulDiv(11, (int)g_dpi, 96);
 			logfont.lfWeight = FW_NORMAL;
-			
+
 			break;
 
 			case FONT_RXQUAL:
 
 			lstrcpy(logfont.lfFaceName, "Verdana");
-			logfont.lfHeight = -11;
+			logfont.lfHeight = -MulDiv(11, (int)g_dpi, 96);
 			logfont.lfWeight = FW_BOLD;
 
 			break;
@@ -492,7 +492,7 @@ void FreeLogFONTS(void)
 // Setup a box font
 bool SetBoxFONT(void)
 {
-	boxfontInfo.lfHeight		= -11;
+	boxfontInfo.lfHeight		= -MulDiv(11, (int)g_dpi, 96);
 	boxfontInfo.lfWidth			= 0;
 	boxfontInfo.lfEscapement	= 0;
 	boxfontInfo.lfOrientation	= 0;
@@ -583,10 +583,11 @@ bool Get_Drawing_Objects(void)	// Get pain1/pain2/font drawing objects.
 void Free_Drawing_Objects(void)	// Free drawing objects allocated by Get_Drawing_Objects()
 {
 	// Free main win/pain1/pain2 related stuff
-	if(hbr)		DeleteObject(hbr);
-	if(hboxbr)	DeleteObject(hboxbr);
-	if(hfont)	DeleteObject(hfont);
-	if(hboxfont)DeleteObject(hboxfont);
+	if(hbr)       { DeleteObject(hbr);       hbr       = NULL; }
+	if(hboxbr)    { DeleteObject(hboxbr);    hboxbr    = NULL; }
+	if(hfont)     { DeleteObject(hfont);     hfont     = NULL; }
+	if(hboxfont)  { DeleteObject(hboxfont);  hboxfont  = NULL; }
+	if(hbm_exclam){ DeleteObject(hbm_exclam);hbm_exclam= NULL; }
 }
 
 void SetAPEN(HDC hdc, int fpen, int bpen)	// This simplifies pen color selection

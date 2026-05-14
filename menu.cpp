@@ -115,6 +115,8 @@ void set_menu_items(void)
 
 		last_lang = Profile.lang_mi_index;
 	}
+
+	check_menu_item(3, IDM_DEBUGLOG, Profile.bDebugLog);  // Options menu: Live Debug Log
 }
 
 // Add required language menu items.

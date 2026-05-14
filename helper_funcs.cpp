@@ -25,26 +25,28 @@ void GetFileName(const char* filepath, char* buffer, int buffersize)
 	// post: the filename in filepath is stored in buffer, this means that from filepath
 	//		 c:\blabla\yada.png buffer is filled with yada.png
 
-	if (!filepath || !buffer) return;
+	if (!filepath || !buffer || buffersize <= 0) return;
 
-	int i=strlen(filepath)-1;
-	while (i>=0 && buffersize-- >0 && filepath[i]!='\\' && filepath[i]!='/') i--;
-	strcpy(buffer,filepath+i+1);
+	const char* last_sep = strrchr(filepath, '\\');
+	if (!last_sep) last_sep = strrchr(filepath, '/');
+	const char* fname = last_sep ? last_sep + 1 : filepath;
+	strncpy(buffer, fname, buffersize - 1);
+	buffer[buffersize - 1] = '\0';
 }
 //--------------------------------------------------------------------------------------------
 
 void GetFilePath(const char* filepath, char* buffer, int buffersize)
 {
-	if (!filepath || !buffer) return;
+	if (!filepath || !buffer || buffersize <= 0) return;
 
 	if ((filepath[1] == ':') || (filepath[1] == '\\'))
 	{
-		int i=strrchr(filepath, '\\') - filepath;
-
-		strncpy(buffer,filepath,i);
-		buffer[i]='\0';
+		int i = (int)(strrchr(filepath, '\\') - filepath);
+		int n = (i < buffersize - 1) ? i : buffersize - 1;
+		strncpy(buffer, filepath, n);
+		buffer[n] = '\0';
 	}
-	else strcpy(buffer,"");
+	else strcpy(buffer, "");
 }
 //--------------------------------------------------------------------------------------------
 

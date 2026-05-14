@@ -50,7 +50,7 @@ int au_offset_center[10] = { 0, 1, -1, 2, -2, 3, -3, 4, -4, 5 };
 HWAVEIN  hWaveIn;                    // Handle to audio device
 HWAVEOUT hWaveOut;                   // Handle to audio device
 WAVEHDR WaveHeader[NUMBER_BUFFERS];  // Audio buffers to be put into audio queue
-int buffers_ready=0;                 // Used by callback function to indicate buffer(s) ready
+volatile LONG buffers_ready=0;       // Used by callback function to indicate buffer(s) ready
 int last_buff_processed = -1;        // Used for predicting next buffer to be filled.
 bool bCapturing=false;               // Used to check to see if capturing is enabled.
 char high_audio=DEFAULT_HI_AUDIO;
@@ -129,10 +129,10 @@ BOOL Start_Capturing(void)
 
 	// Open audio device meeting our requirements
 	waveOutOpen(&hWaveOut, WAVE_MAPPER, &my_wave_format,
-			(DWORD)Callback_Function, 0, CALLBACK_FUNCTION);
+			(DWORD_PTR)Callback_Function, 0, CALLBACK_FUNCTION);
 
 	result = waveInOpen(&hWaveIn, Profile.audioDevice, &my_wave_format,
-			(DWORD)Callback_Function, 0, CALLBACK_FUNCTION);
+			(DWORD_PTR)Callback_Function, 0, CALLBACK_FUNCTION);
 
 	if (result) // error?
 	{
@@ -266,7 +266,7 @@ void free_audio_buffers(void)
 //
 void Process_ReadyBuffers(HWND hwnd)
 {
-	int old_buffs_ready;
+	LONG old_buffs_ready;
 
 	if (flex_timer)	// If dropping out of FLEX mode reset and start over
 	{
@@ -326,7 +326,7 @@ void Process_ReadyBuffers(HWND hwnd)
 		waveInAddBuffer(hWaveIn, &WaveHeader[last_buff_processed],
 							(UINT)sizeof(WaveHeader[last_buff_processed]));
 	}
-	buffers_ready -= old_buffs_ready;
+	InterlockedExchangeAdd(&buffers_ready, -(LONG)old_buffs_ready);
 }
 
 //   Callback_Function
@@ -338,7 +338,7 @@ void Process_ReadyBuffers(HWND hwnd)
 //
 void CALLBACK Callback_Function(HWAVEIN hwi, UINT uMsg, DWORD dwInstance, DWORD dwParam1, DWORD dwParam2)
 {
-	if (uMsg == WIM_DATA) buffers_ready++;
+	if (uMsg == WIM_DATA) InterlockedIncrement(&buffers_ready);
 }
 
 

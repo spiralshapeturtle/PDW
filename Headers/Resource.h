@@ -27,6 +27,7 @@
 #define CLEARSCREENDLGBOX          123
 #define MAIL_DLGBOX                124
 #define SCREENOPTIONSDLGBOX        125
+#define WEBHOOK_DLGBOX             131
 
 #define IDM_LOGFILE                201
 #define IDM_EXIT                   202
@@ -43,6 +44,7 @@
 #define IDM_OPTIONS                230
 #define IDM_GENERAL                231
 #define IDM_MAIL                   232
+#define IDM_WEBHOOK                233
 
 #define IDM_FILTERS                240
 #define IDM_FILTEROPTIONS          241
@@ -440,3 +442,56 @@
 #define IDT_FILTERCHECKDUPLICATE  1306
 
 #define IDT_MENU_RESTORE          1310
+
+#define IDC_WEBHOOK_ENABLED       1320
+#define IDC_WEBHOOK_URL           1321
+#define IDC_WEBHOOK_TRUST_SS      1322
+#define IDC_WEBHOOK_LOG           1323
+#define IDC_WEBHOOK_STATUS        1324
+#define IDC_WEBHOOK_PAD_CAPCODES  1325
+#define IDC_WEBHOOK_PAGERMON_FMT  1326
+#define IDC_WEBHOOK_SEND_IN       1327
+#define IDC_WEBHOOK_LABEL_CSV     1328   // label – CSV mode (bit 0)
+#define IDC_WEBHOOK_FIELD_TIME    1329
+#define IDC_WEBHOOK_FIELD_DATE    1330
+#define IDC_WEBHOOK_FIELD_TS      1331
+#define IDC_WEBHOOK_FIELD_MODE    1332
+#define IDC_WEBHOOK_FIELD_TYPE    1333
+#define IDC_WEBHOOK_FIELD_BITRATE 1334
+#define IDC_WEBHOOK_LABEL_PERCAP  1335   // label – per-capcode mode (bit 7)
+#define IDC_WEBHOOK_LABEL_ARRAY   1336   // label – subscribers array mode (bit 8)
+
+#define MQTT_DLGBOX               132
+#define IDM_MQTT                  234
+#define IDM_DEBUGLOG              235
+
+#define IDC_MQTT_ENABLED          1340
+#define IDC_MQTT_BROKER           1341
+#define IDC_MQTT_PORT             1342
+#define IDC_MQTT_CLIENTID         1343
+#define IDC_MQTT_USER             1344
+#define IDC_MQTT_PASSWORD         1345
+#define IDC_MQTT_TOPIC            1346
+#define IDC_MQTT_QOS              1347
+#define IDC_MQTT_RETAIN           1348
+#define IDC_MQTT_LOG              1349
+#define IDC_MQTT_PAD_CAPCODES     1350
+#define IDC_MQTT_FLAT_JSON        1351
+#define IDC_MQTT_TOPIC_SUFFIX     1352
+#define IDC_MQTT_SEND_IN          1353
+#define IDC_MQTT_STATUS           1354
+#define IDC_MQTT_LABEL_CSV        1355   // label - CSV mode (bit 0)
+#define IDC_MQTT_FIELD_TIME       1356
+#define IDC_MQTT_FIELD_DATE       1357
+#define IDC_MQTT_FIELD_TS         1358
+#define IDC_MQTT_FIELD_MODE       1359
+#define IDC_MQTT_FIELD_TYPE       1360
+#define IDC_MQTT_FIELD_BITRATE    1361
+#define IDC_MQTT_LABEL_PERCAP     1362   // label - per-capcode mode (bit 7)
+#define IDC_MQTT_LABEL_ARRAY      1363   // label - subscribers array mode (bit 8)
+
+#define DISPLAYOPTIONSDLGBOX      133
+#define IDM_DISPLAYOPTIONS        236
+#define IDC_DISPLAY_BETTER_CONTRAST  1370
+#define IDC_DISPLAY_LIGHTER_BG       1371
+#define IDC_DISPLAYOPTIONS_BTN       1372

@@ -84,7 +84,13 @@
     <ClCompile Include="utils\smtp.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="utils\OSTYPE.C">
+    <ClCompile Include="utils\webhook.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="utils\mqtt.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="utils\debuglog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -377,10 +383,72 @@
     <ClInclude Include="utils\smtp_int.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="utils\mqtt.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\webhook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\debuglog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Rsrc.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="GFX\open.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\copy.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\cpyUP.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\cpyLO.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\save.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\prt.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\options.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\filter.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\stats.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\pause.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\help.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\clr.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\mode.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\sigind.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\exclamation.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\pdwlogo2.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="GFX\pdw.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
   </ItemGroup>
 </Project>

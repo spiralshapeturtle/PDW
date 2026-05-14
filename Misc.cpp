@@ -16,7 +16,10 @@
 #include "headers\sound_in.h"
 #include "headers\helper_funcs.h"
 #include "utils\binary.h"
+#include "utils\debuglog.h"
 #include "utils\smtp.h"
+#include "utils\webhook.h"
+#include "utils\mqtt.h"
 
 #define FILTER_PARAM_LEN	500
 #define MAXIMUM_GROUPSIZE	1000
@@ -379,10 +382,27 @@ void display_line(PaneStruct *pane)
 
 void AddAssignment(int assignedframe, int groupbit, int capcode)
 {
+	int prevGroupFrame = (groupbit >= 0 && groupbit < 17) ? GroupFrame[groupbit] : -999;
+
+	if (groupbit < 0 || groupbit > 15)
+	{
+		DebugLog("[AddAssignment] iCurrentFrame=%d  groupbit=%d OUT OF RANGE  capcode=%07d  SKIPPED",
+			iCurrentFrame, groupbit, capcode);
+		if (iMessageIndex)
+		{
+			message_buffer[iMessageIndex] = 0;
+			iMessageIndex = 0;
+		}
+		return;
+	}
+
 	if ((GroupFrame[groupbit] != assignedframe) &&
 		(GroupFrame[groupbit] != -1) &&
 		(aGroupCodes[groupbit][CAPCODES_INDEX]))
 	{
+		DebugLog("[AddAssignment] iCurrentFrame=%d  groupbit=%d  REASSIGN  GroupFrame:%d->%d  prior capcodes=%d  -> Remove_MissedGroupcall",
+			iCurrentFrame, groupbit, GroupFrame[groupbit], assignedframe,
+			aGroupCodes[groupbit][CAPCODES_INDEX]);
 		if (groupbit < 16) Remove_MissedGroupcall(groupbit);
 	}
 
@@ -392,9 +412,17 @@ void AddAssignment(int assignedframe, int groupbit, int capcode)
 		aGroupCodes[groupbit][aGroupCodes[groupbit][CAPCODES_INDEX]] = capcode;
 
 		GroupFrame[groupbit] = assignedframe;
+		DebugLog("[AddAssignment] iCurrentFrame=%d  groupbit=%d  capcode=%07d  GroupFrame[%d]:%d->%d  capcodes=%d",
+			iCurrentFrame, groupbit, capcode, groupbit, prevGroupFrame, assignedframe,
+			aGroupCodes[groupbit][CAPCODES_INDEX]);
+	}
+	else
+	{
+		DebugLog("[AddAssignment] iCurrentFrame=%d  groupbit=%d  capcode=%07d  GROUP FULL (count=%d) - capcode NOT added",
+			iCurrentFrame, groupbit, capcode, aGroupCodes[groupbit][CAPCODES_INDEX]);
 	}
 	if (iMessageIndex)
-	{	
+	{
 		message_buffer[iMessageIndex] = 0;		// terminate the buffer string
 		iMessageIndex = 0;
 	}
@@ -414,8 +442,15 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 
 	if (capcode >= 2029568 && capcode <= 2029583)	// PH: If current capcode is a groupcode
 	{
+		DebugLog("[ConvertGroupcall] iCurrentFrame=%d  capcode=%07d  groupbit=%d  GroupFrame[%d]=%d  capcodes=%d  msglen=%d",
+			iCurrentFrame, capcode, groupbit, groupbit,
+			GroupFrame[groupbit], aGroupCodes[groupbit][CAPCODES_INDEX], iMessageIndex);
+
 		if (GroupFrame[groupbit] == iCurrentFrame)
 		{
+			DebugLog("[ConvertGroupcall] HAPPY path: groupbit=%d  capcodes=%d  text='%s'",
+				groupbit, aGroupCodes[groupbit][CAPCODES_INDEX], message_buffer);
+
 			SortGroupCall(groupbit);	// PH: Sort current groupcall in ascending order
 
 			if (Profile.BlockDuplicate)
@@ -480,30 +515,57 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 			GroupFrame[groupbit] = -1;
 
 			iConvertingGroupcall=0;		// PH: Reset for next groupmessage
+			WebhookFlushGroup(groupbit);
+			MqttFlushGroup(groupbit);
 		}
 		else
 		{
-			if (GroupFrame[groupbit] != -1) Remove_MissedGroupcall(groupbit);
-			if (Current_MSG[MSG_BITRATE][3] == '0')
-			{
-				nCount_Missed[1]++;
+			int savedGroupFrame = GroupFrame[groupbit]; // capture before Remove_MissedGroupcall resets it to -1
+			extern bool g_flexAssembled;                // set by Flex.cpp on successful fragment assembly
+			bool bWasAssembled = g_flexAssembled;       // capture before any ShowMessage call clears it
 
-				FILE *pFLEX_nosi = NULL;
-				sprintf(szFile, "%s\\no-si-groupcalls.txt", szPath);
-				if (!FileExists(szFile))
+			DebugLog("[ConvertGroupcall] ELSE path: groupbit=%d  GroupFrame=%d  iCurrentFrame=%d  reason=%s  assembled=%s  text='%s'",
+				groupbit, savedGroupFrame, iCurrentFrame,
+				(savedGroupFrame == -1) ? "no-SI" : "SI-frame-mismatch",
+				bWasAssembled ? "yes" : "no",
+				message_buffer);
+
+			if (bWasAssembled && savedGroupFrame != -1)
+			{
+				// Multi-fragment group message just assembled, with a prior SI announcement.
+				// The SI-frame-mismatch is expected: SI announced frame N for the first
+				// fragment; we are now at frame N+k where the last fragment completes.
+				// This is NOT a missed event — clear GroupFrame and skip both X++ and Y++.
+				GroupFrame[groupbit] = -1;
+				DebugLog("[ConvertGroupcall] ELSE path: assembled chain with prior SI -> X/Y SUPPRESSED, GroupFrame cleared");
+			}
+			else
+			{
+				if (GroupFrame[groupbit] != -1) Remove_MissedGroupcall(groupbit);
+				if (Current_MSG[MSG_BITRATE][3] == '0')
 				{
-					if ((pFLEX_nosi = fopen(szFile, "a")) != NULL)
-						fprintf(pFLEX_nosi, " Group calls received without matching Short Instruction (Y++ events):\n\n");
-				}
-				else pFLEX_nosi = fopen(szFile, "a");
-				if (pFLEX_nosi)
-				{
-					Get_Date_Time();
-					fprintf(pFLEX_nosi, " %s %s  capcode=%i  GroupFrame=%i  iCurrentFrame=%i  %s\n",
-						szCurrentDate, szCurrentTime,
-						capcode, GroupFrame[groupbit], iCurrentFrame,
-						message_buffer);
-					fclose(pFLEX_nosi);
+					nCount_Missed[1]++;
+					DebugLog("[ConvertGroupcall] Y++ now=%d (X=%d)", nCount_Missed[1], nCount_Missed[0]);
+
+					FILE *pFLEX_nosi = NULL;
+					sprintf(szFile, "%s\\no-si-groupcalls.txt", szPath);
+					if (!FileExists(szFile))
+					{
+						if ((pFLEX_nosi = fopen(szFile, "a")) != NULL)
+							fprintf(pFLEX_nosi, " Group calls received without matching Short Instruction (Y++ events):\n\n");
+					}
+					else pFLEX_nosi = fopen(szFile, "a");
+					if (pFLEX_nosi)
+					{
+						Get_Date_Time();
+						const char *szReason = (savedGroupFrame == -1) ? "no-SI" : "SI-frame-mismatch";
+						fprintf(pFLEX_nosi, " %s %s  capcode=%i  GroupFrame=%i  iCurrentFrame=%i  reason=%s  %s\n",
+							szCurrentDate, szCurrentTime,
+							capcode, savedGroupFrame, iCurrentFrame,
+							szReason,
+							message_buffer);
+						fclose(pFLEX_nosi);
+					}
 				}
 			}
 			CountBiterrors(5);
@@ -533,24 +595,51 @@ void SortGroupCall(int groupbit)	// PH: Sort aGroupCodes[groupbit]
 }
 
 
+// Tolerance window for late group-message delivery. A group message that
+// arrives within GROUP_GRACE_FRAMES of the SI-assigned frame is still in
+// time; only declare missed once we are strictly past the grace window.
+// Matches the model used by other FLEX decoders to absorb network slop.
+#define GROUP_GRACE_FRAMES 5
+
 void Check4_MissedGroupcalls()
 {
 	int difference, assignedframe;
 	int currentframe=iCurrentFrame;
+	extern bool flex_has_pending_fragment(long capcode);
 
 	for (int groupbit=0; groupbit<16; groupbit++)
 	{
 		if (GroupFrame[groupbit] != -1)		// Check if assignment in buffer for this groupcode
 		{
+			// Guard: if a multi-fragment group message is currently in progress for this groupbit's
+			// capcode, the chain will assemble in a later frame. Firing X++ here would be a false
+			// positive — the group call is not missed, just spread across frames.
+			long groupCapcode = 2029568 + groupbit;
+			if (flex_has_pending_fragment(groupCapcode))
+			{
+				DebugLog("[Check4] iCurrentFrame=%d  groupbit=%d  GroupFrame=%d  pending fragment chain on capcode=%07li -> X++ SUPPRESSED",
+					iCurrentFrame, groupbit, GroupFrame[groupbit], groupCapcode);
+				continue;
+			}
+
 			assignedframe = GroupFrame[groupbit];	// Get assigned frame
+			int origAssigned = assignedframe;
+			int origCurrent  = currentframe;
 
 			if ((assignedframe > 120) && (currentframe < 8)) currentframe  += 128;	// Assigned frame was in previous cycle
 			if ((assignedframe < 8) && (currentframe > 120)) assignedframe += 128;	// Assigned frame is in next cycle
 
-			difference = assignedframe-currentframe;	// Calculate difference
+			difference = assignedframe-currentframe;	// >0 = expected in future; <=0 = at/past expected
 
-			if (difference <= 0)	// If difference is 0 or lower, a groupcall has been missed
+			// Declare missed only when we are MORE than GROUP_GRACE_FRAMES past the
+			// expected frame. Previously this fired at difference <= 0, which marked
+			// the group missed (X++) the instant we reached the assigned frame —
+			// and a group message arriving one frame later then triggered a
+			// false-positive Y++ (no-SI) because GroupFrame had already been cleared.
+			if (difference < -GROUP_GRACE_FRAMES)
 			{
+				DebugLog("[Check4] iCurrentFrame=%d  groupbit=%d  GroupFrame=%d (orig=%d, adj=%d)  diff=%d  past grace=%d -> MISSED -> Remove_MissedGroupcall, X++",
+					iCurrentFrame, groupbit, origAssigned, origCurrent, assignedframe, difference, GROUP_GRACE_FRAMES);
 				Remove_MissedGroupcall(groupbit);
 			}
 		}
@@ -620,7 +709,11 @@ void ShowMessage()
 	bool bNumeric=false;
 	bool bNewFile, bNewLine;					// PH: To indicate if the logfile is new / already exists
 	bool bSeparator[2] = { true, true };		// PH: Set if a separator is needed
-	bool bCombine = false;						// PH: Used for grouping not-group messages
+	bool bCombine[2] = { false, false };		// PH: Used for grouping not-group messages (per pane)
+	// Per-pane combine decision: each pane only collapses against its own Previous_MSG[pane].
+	// Single-valued bCombine (driven by Previous_MSG[MONITOR]) suppressed the filter pane's
+	// time/date/type/message header when the prior message — still in MONITOR's history —
+	// had never been shown in the filter pane, leaving an orphan capcode-only row.
 
 	static bool bPlayWaveFile, bPreviousDoubleDisplay=false;
 	static bool bPreviousNumeric[2]= { false, false };	// PH: Was prev.MSG numeric?
@@ -820,23 +913,43 @@ void ShowMessage()
 		{
 			if (!iConvertingGroupcall && (Profile.FlexGroupMode & FLEXGROUPMODE_COMBINE))
 			{
-				if (CompareMessage(MSG_MESSAGE, MONITOR) &&	!CompareMessage(MSG_CAPCODE, MONITOR))
+				for (int p = 0; p < 2; p++)
 				{
-					if (memcmp(Current_MSG[MSG_CAPCODE], Previous_MSG[MONITOR][MSG_CAPCODE], 2) == 0)
+					if (CompareMessage(MSG_MESSAGE, p) && !CompareMessage(MSG_CAPCODE, p))
 					{
-						bCombine=true;
+						if (memcmp(Current_MSG[MSG_CAPCODE], Previous_MSG[p][MSG_CAPCODE], 2) == 0)
+						{
+							bCombine[p] = true;
+						}
 					}
 				}
 			}
 		}
-		if (!bShown[MONITOR] && !bCombine) memset(szSepfilenames, 0, sizeof(szSepfilenames));
+		if (!bShown[MONITOR] && !bCombine[MONITOR]) memset(szSepfilenames, 0, sizeof(szSepfilenames));
+
+		// Set fragment flags before pane loop so they're visible even when bCombine skips the pane body.
+		if (bFlexAssembledNow)
+		{
+			sprintf(szFragment, "[fragmented]");
+			bFragment  = true;
+			bAssembled = true;
+		}
+		else if (iFlexOrphanNow)
+		{
+			const char *fragType = (iFlexOrphanNow == 2) ? "last" : "first";
+			if (Profile.FlexGroupMode)
+				sprintf(szFragment, "  [%s fragment - incomplete]", fragType);
+			else
+				sprintf(szFragment, "[%s fragment - incomplete]", fragType);
+			bFragment = true;
+		}
 
 		for (pane=0; pane<2; pane++)	// Loop trough messageitems, first show MONITOR,
 		{								// then show FILTER
 
 			if (pane == MONITOR)
 			{
-				if (!bMONITOR || bCombine) continue;
+				if (!bMONITOR || bCombine[MONITOR]) continue;
 				else
 				{
 					pPane = &Pane1;		// Show message in Pane1
@@ -844,7 +957,7 @@ void ShowMessage()
 			}
 			else if (pane == FILTER)
 			{
-				if (!bFILTERED || bCombine) break;
+				if (!bFILTERED || bCombine[FILTER]) break;
 				else
 				{
 					pPane = &Pane2;		// Show message in Pane2
@@ -869,7 +982,7 @@ void ShowMessage()
 				{
 					bSeparator[pane] = false;
 				}
-				else if (CompareMessage(MSG_MESSAGE, MONITOR) && !Profile.FlexGroupMode)	// Compare messages
+				else if (CompareMessage(MSG_MESSAGE, pane) && !Profile.FlexGroupMode)	// Compare messages against this pane's own history
 				{
 					bSeparator[pane] = false;
 				}
@@ -882,24 +995,6 @@ void ShowMessage()
 			{
 				bSeparator[pane] = false;
 				continue;
-			}
-
-			if (bFlexAssembledNow)
-			{
-				sprintf(szFragment, "[fragmented]"); // searchable logfile annotation; display uses * on capcode
-				bFragment  = true;
-				bAssembled = true;
-				// already cleared at top of ShowMessage
-			}
-			else if (iFlexOrphanNow)
-			{
-				const char *fragType = (iFlexOrphanNow == 2) ? "last" : "first";
-				if (Profile.FlexGroupMode)
-					sprintf(szFragment, "  [%s fragment - incomplete]", fragType);
-				else
-					sprintf(szFragment, "[%s fragment - incomplete]", fragType);
-				bFragment = true;
-				// already cleared at top of ShowMessage
 			}
 
 			if (bSeparator[pane] && pPane->Bottom) // If pane is not empty, add an empty line
@@ -1214,7 +1309,7 @@ void ShowMessage()
 
 			if (Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING)
 			{
-				if (isdigit(szLogFileLine[0]) && !bLogged[MONITOR] && !bCombine)
+				if (isdigit(szLogFileLine[0]) && !bLogged[MONITOR] && !bCombine[MONITOR])
 				{
 					fprintf(pLogFile, "%s%s", bNewLine ? "\n" : "", szLogFileLine);
 				}
@@ -1236,8 +1331,14 @@ void ShowMessage()
 					if (Profile.LabelNewline)
 					{
 						strcat(szLogFileLine, "\n");
-						memset(szLabelspacing,  0, sizeof(szLabelspacing));
-						memset(szLabelspacing, 32, iLabelspace_Logfile[MONITOR]+1);
+						memset(szLabelspacing, 0, sizeof(szLabelspacing));
+						{
+							int nSp = iLabelspace_Logfile[MONITOR] + 1;
+							if (nSp < 0) nSp = 0;
+							if (nSp > (int)sizeof(szLabelspacing) - 1)
+								nSp = (int)sizeof(szLabelspacing) - 1;
+							if (nSp > 0) memset(szLabelspacing, ' ', (size_t)nSp);
+						}
 						strcat(szLogFileLine, szLabelspacing);
 					}
 					else strcat(szLogFileLine, " ");
@@ -1262,8 +1363,14 @@ void ShowMessage()
 					if (Profile.LabelNewline)
 					{
 						strcat(szLogFileLine, "\n");
-						memset(szLabelspacing, 0,  sizeof(szLabelspacing));
-						memset(szLabelspacing, 32, iLabelspace_Logfile[FILTER]+1);
+						memset(szLabelspacing, 0, sizeof(szLabelspacing));
+						{
+							int nSp = iLabelspace_Logfile[FILTER] + 1;
+							if (nSp < 0) nSp = 0;
+							if (nSp > (int)sizeof(szLabelspacing) - 1)
+								nSp = (int)sizeof(szLabelspacing) - 1;
+							if (nSp > 0) memset(szLabelspacing, ' ', (size_t)nSp);
+						}
 						strcat(szLogFileLine, szLabelspacing);
 					}
 					else strcat(szLogFileLine, " ");
@@ -1287,7 +1394,7 @@ void ShowMessage()
 
 					if (Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING)
 					{
-						if (isdigit(szLogFileLine[0]) && !bLogged[FILTER] && !bCombine)
+						if (isdigit(szLogFileLine[0]) && !bLogged[FILTER] && !bCombine[FILTER])
 						{
 							fprintf(pFilterFile, "%s%s", bNewLine ? "\n" : "", szLogFileLine);
 							bLogged[FILTER]=true;
@@ -1382,6 +1489,54 @@ void ShowMessage()
 					Current_MSG[MSG_BITRATE],
 					iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 					szCurrentLabel[0]);
+	}
+
+	if (Profile.webhookEnabled)
+	{
+		bool bWebhookSend;
+		switch (Profile.webhookSendIn)
+		{
+		case 1:  bWebhookSend = bMATCH; break;
+		case 2:  bWebhookSend = bMATCH || bMONITOR_ONLY; break;
+		default: bWebhookSend = true; break;
+		}
+		if (bWebhookSend)
+		{
+			WebhookNotify(Current_MSG[MSG_CAPCODE],
+			              iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			              szCurrentLabel[0],
+			              Current_MSG[MSG_TIME],
+			              Current_MSG[MSG_DATE],
+			              Current_MSG[MSG_MODE],
+			              Current_MSG[MSG_TYPE],
+			              Current_MSG[MSG_BITRATE],
+			              iConvertingGroupcall > 0,
+			              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+		}
+	}
+
+	if (Profile.mqttEnabled)
+	{
+		bool bMqttSend;
+		switch (Profile.mqttSendIn)
+		{
+		case 1:  bMqttSend = bMATCH; break;
+		case 2:  bMqttSend = bMATCH || bMONITOR_ONLY; break;
+		default: bMqttSend = true; break;
+		}
+		if (bMqttSend)
+		{
+			MqttNotify(Current_MSG[MSG_CAPCODE],
+			           iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			           szCurrentLabel[0],
+			           Current_MSG[MSG_TIME],
+			           Current_MSG[MSG_DATE],
+			           Current_MSG[MSG_MODE],
+			           Current_MSG[MSG_TYPE],
+			           Current_MSG[MSG_BITRATE],
+			           iConvertingGroupcall > 0,
+			           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+		}
 	}
 
 	if (Current_MSG[MSG_MOBITEX][0]) Current_MSG[MSG_MOBITEX][0] = '\0';
@@ -1686,7 +1841,7 @@ bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay)
 			{
 				strcpy(szCapcode, Profile.filters[iMatch].capcode+(strlen(Profile.filters[iMatch].capcode)-strlen(Current_MSG[MSG_CAPCODE])));
 
-				while (p=strchr(szCapcode, '?'))
+				while ((p=strchr(szCapcode, '?')))
 				{
 					*p='X';
 					PrioTMP[CURRENT]++;
@@ -1718,7 +1873,7 @@ bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay)
 		}
 		if (FileExists(szWavefileTMP[CURRENT]))		// PH: Check if code.wav exists
 		{
-			HANDLE hFile =  CreateFile(szWavefileTMP[CURRENT],
+			HANDLE hFile = CreateFile(szWavefileTMP[CURRENT],
 								GENERIC_READ,
 								FILE_SHARE_READ,
 								NULL,
@@ -1726,10 +1881,12 @@ bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay)
 								FILE_ATTRIBUTE_NORMAL,
 								NULL);
 
+			if (hFile == INVALID_HANDLE_VALUE) return (false);
+
 			dwFileSizeTMP[CURRENT] = GetFileSize(hFile, NULL);	// Get the current file size
 
 			CloseHandle(hFile);
-			hFile = NULL;
+			hFile = INVALID_HANDLE_VALUE;
 
 			if (((PrioTMP[CURRENT]  < PrioTMP[PREVIOUS]) && strcmp(szWavefileTMP[PREVIOUS], szWavefileTMP[CURRENT]) != 0) ||
 				((PrioTMP[CURRENT] == PrioTMP[PREVIOUS]) && (dwFileSizeTMP[PREVIOUS] < dwFileSizeTMP[CURRENT])) ||
@@ -2118,14 +2275,11 @@ void ActivateCommandFile()
 	ZeroMemory(&si,sizeof(si));	//Zero the STARTUPINFO struct
 	si.cb = sizeof(si);			//Must set size of structure
 
-	strcpy(szCommandFile, Profile.filter_cmd);
-
 	if (param_str[0])
-	{
-		strcat(szCommandFile, " ");
-		strcat(szCommandFile, param_str);
-	}
-	if (strlen(szCommandFile) > MAX_STR_LEN) szCommandFile[MAX_STR_LEN] = 0;
+		_snprintf(szCommandFile, MAX_STR_LEN, "%s %s", Profile.filter_cmd, param_str);
+	else
+		strncpy(szCommandFile, Profile.filter_cmd, MAX_STR_LEN - 1);
+	szCommandFile[MAX_STR_LEN - 1] = '\0';
 
 	CreateProcess(NULL, szCommandFile, NULL, NULL, FALSE, NULL, 0, NULL, &si, &pif);
 
@@ -2752,7 +2906,7 @@ void CountBiterrors(int errors)
 
 	if (nErrorChecks > 10000)
 	{
-		nErrorChecks/=1.999;
+		nErrorChecks = (int)(nErrorChecks / 1.999);
 		nErrors/=2;
 	}
 	if (noerrors > 50)
@@ -2792,6 +2946,7 @@ void Get_Date_Time(void)
 void InvertData(void)
 {
 	Profile.invert ^= 0x01; // Flip receive polarity
+	DebugLog("[InvertData] polarity now %s (caller: see call stack)", Profile.invert ? "INVERTED" : "normal");
 
 	low_audio  = Profile.invert ? DEFAULT_HI_AUDIO : DEFAULT_LO_AUDIO;
 	high_audio = Profile.invert ? DEFAULT_LO_AUDIO : DEFAULT_HI_AUDIO;

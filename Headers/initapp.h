@@ -49,6 +49,10 @@ extern TCHAR szFilterPathName[MAX_PATH];// full pathname of the application's fi
 extern TCHAR szFilterBackup[MAX_PATH];  // full pathname of the application's filter backupfile
 extern TCHAR szVolPathName[MAX_PATH];   // full pathname to the PDW volume control.
 
+// DPI support
+extern UINT g_dpi;          // current DPI (96 = 100 %, 144 = 150 %, 192 = 200 %)
+UINT PdwGetDpi(HWND hwnd);  // query DPI for a window; hwnd may be NULL for desktop
+
 // functions
 UINT GetPathFromFullPathName(LPCTSTR lpFullPathName, LPTSTR lpPathBuffer, UINT nPathBufferLength);
 BOOL NEAR InitApplication(HINSTANCE hInstance);

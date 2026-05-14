@@ -22,7 +22,7 @@
 // #define TOOLBAR_DEBUG  1
 
 TBBUTTON toolbar_btns[NUM_TB_BUTTONS];  // Toolbar buttons
-UINT tb_btn_image[NUM_TB_IMAGES];       // Bitmap Handles to Toolbar images
+HBITMAP tb_btn_image[NUM_TB_IMAGES];    // Bitmap Handles to Toolbar images
 
 
 // Allocate toolbar and return its window handle
@@ -88,7 +88,7 @@ BOOL GetToolBarImages(HINSTANCE hThisInstance)
 
 	for(int i=0; i<NUM_TB_IMAGES; i++)
 	{
-		if(!(tb_btn_image[i] =(UINT)LoadBitmap(hThisInstance,MAKEINTRESOURCE((WORD)btn_index))))
+		if(!(tb_btn_image[i] = LoadBitmap(hThisInstance,MAKEINTRESOURCE((WORD)btn_index))))
 		{
 			FreeToolBarImages(hThisInstance);
 			return(FALSE);
@@ -101,7 +101,7 @@ BOOL GetToolBarImages(HINSTANCE hThisInstance)
 // Free Toolbar Bitmap images
 void FreeToolBarImages(HINSTANCE hThisInstance)
 {
-	for(int i=0;i < NUM_TB_IMAGES;i++) if (tb_btn_image[i]) DeleteObject((HGDIOBJ)tb_btn_image[i]);
+	for(int i=0;i < NUM_TB_IMAGES;i++) if (tb_btn_image[i]) DeleteObject(tb_btn_image[i]);
 }
 
 
