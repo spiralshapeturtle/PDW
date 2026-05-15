@@ -64,7 +64,7 @@ extern int PL1_SCount;
 extern int PL2_SCount;
 
 extern int iItemPositions[8];
-extern int iItemWidths[7];
+extern int iItemWidths[8];	// FIX [ASan-G8]: extended to [8] to match iItemPositions; index 7 = Message column
 
 // Functions
 bool SetBoxFONT(void);

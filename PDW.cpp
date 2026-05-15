@@ -3500,7 +3500,10 @@ BOOL FAR PASCAL SetupDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				SendDlgItemMessage(hDlg, IDC_COMIRQ, CB_SETCURSEL, i, 0L);
 			}
 
-			sprintf(temp, "0x%03X", Profile.comPortAddr);
+			// FIX [M9]: %03X met int kan tot 11 chars produceren ("0xFFFFFFFF\0") als comPortAddr
+			//           via INI op een ongeldige waarde wordt gezet. EM_LIMITTEXT(5) op het GUI
+			//           dekt user-input maar niet INI-input. Safe truncate.
+			_snprintf_s(temp, sizeof(temp), _TRUNCATE, "0x%03X", Profile.comPortAddr);
 			SetDlgItemText(hDlg, IDC_COMADDR, (LPCSTR) temp);
 		}
 		else
@@ -3697,7 +3700,8 @@ BOOL FAR PASCAL SetupDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 						if (Profile.comPortIRQ == irqs[i])
 						SendDlgItemMessage(hDlg, IDC_COMIRQ, CB_SETCURSEL, i, 0L);
 					}
-					sprintf(temp, "0x%03X", Profile.comPortAddr);
+					// FIX [M9]: zie eerdere instantie (~regel 3503).
+					_snprintf_s(temp, sizeof(temp), _TRUNCATE, "0x%03X", Profile.comPortAddr);
 					SetDlgItemText(hDlg, IDC_COMADDR, (LPCSTR) temp);
 				}
 				else	// RS232 or win2k
@@ -11776,15 +11780,27 @@ void AutoRecording()
 	{
 		Stop_Recording();
 
-		strncpy(szFilename, szTMPfile, strlen(szTMPfile)-5);
-		 strcat(szFilename, "-");
-		strncat(szFilename, &szCurrentTime[0], 2);
-		strncat(szFilename, &szCurrentTime[3], 2);
-		strncat(szFilename, &szCurrentTime[6], 2);
-		 strcat(szFilename, "].rec");
+		// FIX [M6]: strlen(szTMPfile)-5 underflowt naar SIZE_MAX als szTMPfile minder
+		//           dan 5 chars heeft (bv. recovery-pad zonder geldige naam) → strncpy
+		//           overschrijft GB's stackgeheugen → onmiddellijke crash. Ook ontbrak
+		//           explicit null-terminator, waardoor de daaropvolgende strcat richting
+		//           uninitialised stack-bytes walked tot een toevallige 0.
+		size_t tmpLen = strlen(szTMPfile);
+		if (tmpLen > 5)
+		{
+			size_t copyLen = tmpLen - 5;
+			if (copyLen >= sizeof(szFilename)) copyLen = sizeof(szFilename) - 1;
+			strncpy(szFilename, szTMPfile, copyLen);
+			szFilename[copyLen] = '\0';
+			 strcat(szFilename, "-");
+			strncat(szFilename, &szCurrentTime[0], 2);
+			strncat(szFilename, &szCurrentTime[3], 2);
+			strncat(szFilename, &szCurrentTime[6], 2);
+			 strcat(szFilename, "].rec");
 
-		CopyFile(szTMPfile, szFilename, false);
-		DeleteFile(szTMPfile);
+			CopyFile(szTMPfile, szFilename, false);
+			DeleteFile(szTMPfile);
+		}
 	}
 
 	CreateDateFilename("", NULL);

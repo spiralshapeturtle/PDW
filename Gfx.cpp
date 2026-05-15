@@ -45,13 +45,20 @@ int iItemPositions[8] = { 0,
 						  DIVIDER_OFFSET+300,	// Bitrate
 						  DIVIDER_OFFSET+390 };	// Message
 
-int iItemWidths[7] = { 0,
+// FIX [ASan-G8]: array uitgebreid van [7] naar [8] zodat index 7 (Message-kolom)
+// niet OOB is. De loop in SetMessageItemPositionsWidth doet `iItemWidths[item]`
+// met item==7 wanneer ScreenColumns[i]==7 (INI default ScreenCol7=7).
+// iItemPositions[8] was al goed; iItemWidths bleef [7] achter. Message-kolom
+// heeft geen vaste breedte (vult resterende ruimte), dus index 7 init op 0 —
+// regel 711 `iItemWidths[7]/cxChar` levert dan netjes 0 op.
+int iItemWidths[8] = { 0,
 					  75,		// Address
 					  70,		// Time
 					  75,		// Date
 					  50,		// Mode
 					  55,		// Type
-					  55 };		// Bitrate
+					  55,		// Bitrate
+					  0 };		// Message (no fixed width — fills remainder)
 
 HBRUSH  hbr=NULL;		// background brush for main win, pain1/pain2
 HBRUSH  hboxbr=NULL;
@@ -662,6 +669,15 @@ void Draw3D_Box_INV(HDC hdc,int x, int y, int w, int h)
 void SetMessageItemPositionsWidth()
 {
 	int i, item, iTempPosition = 1;
+
+	// FIX [ASan-G7]: vroege WM_PAINT tijdens WM_CREATE / nested filter-dialog pump
+	// kan deze functie aanroepen voordat cxChar door GetTextMetrics gezet is
+	// (PDW.cpp:968). Resultaat: iItemWidths[item]/cxChar = divide-by-zero
+	// (0xC0000094) in KernelBase. ASan-build exposeert dit doordat instrumented
+	// layout voorkomt dat cxChar per ongeluk al een nonzero waarde uit
+	// aangrenzend geheugen leest. Skip; volgende paint na WM_CREATE-compleet
+	// zal de juiste positie-tabel alsnog vullen.
+	if (cxChar == 0) return;
 
 	iItemWidths[2] = 9*cxChar;	// Time
 	iItemWidths[3] = 9*cxChar;	// Date

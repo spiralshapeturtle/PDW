@@ -1560,7 +1560,13 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 	int BlockTimer   = (Profile.BlockDuplicate >> 4) * 60;
 	int BlockOnlyMsg =((Profile.BlockDuplicate & BLOCK_OPTION) == BLOCK_ONLYMSG);
 
-	char temp[10];
+	// FIX [M5]: was [10]. De digit-run loop hieronder kan (i-j) tot 10 laten lopen
+	//           (while-bound `i <= 10` is off-by-one), waarna temp[i-j]='\0' op temp[10]
+	//           schreef — 1-byte stack overflow op de /GS cookie. Triggerde deterministisch
+	//           op POCSAG-ALPHA berichten met exact 10 aaneengesloten cijfers, zoals
+	//           Belgische/Nederlandse mobiel-nummers in vorm (04XXXXXXXX).
+	//           sprintf "%i%s" op regel ~1613 schrijft max 1+9+1 = 11 bytes, dus [16] is ruim.
+	char temp[16];
 
 	unsigned long long lChecksum=0, lAddress=0;  // FIX [F3b]: overeenkomend met aMessages[][3] (64-bit)
 
@@ -1583,7 +1589,9 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 			if ((i < 10) && isdigit(message[i]))	// Treat strings of numbers as one big number
 			{
 				j=i;
-				while (isdigit(message[i]) && (i <= 10)) i++;
+				// FIX [M5]: bound aan buffergrootte gekoppeld i.p.v. magic `i <= 10`,
+				//           zodat `i-j` nooit groter wordt dan sizeof(temp)-1.
+				while (isdigit(message[i]) && ((i - j) < (int)sizeof(temp) - 1)) i++;
 				strncpy(temp, &message[j], i-j);
 				temp[i-j] = '\0';
 				sum += atoi(temp);
@@ -2170,9 +2178,13 @@ void ActivateCommandFile()
 		{
 			arg=atoi(&Profile.filter_cmd_args[i+1]);
 
+			// FIX [M7]: bound check moved INTO the inner loops. De outer-while breakte pas op
+			//           arg_pos > FILTER_PARAM_LEN (500) NA elke inner-loop, dus één enkele %7
+			//           substitutie van een 5120-byte MSG_MESSAGE kon param_str[MAX_STR_LEN]
+			//           ruim 4x oversprappen → stack corruption.
 			if (arg>0 && arg<8)
 			{
-				for (pos=0; Current_MSG[arg][pos] != 0; pos++, arg_pos++)
+				for (pos=0; Current_MSG[arg][pos] != 0 && arg_pos < (int)sizeof(param_str) - 1; pos++, arg_pos++)
 				{
 					if (Profile.monitor_mobitex && (arg==7) && (Current_MSG[7][pos] == '"' || Current_MSG[7][pos] == '\''))
 					{
@@ -2186,7 +2198,7 @@ void ActivateCommandFile()
 			{
 				MakeFilterLabel(Profile.filters[iMatch].label, Current_MSG[MSG_CAPCODE], szLabel);
 				pos = 0;
-				while (szLabel[pos] != 0)
+				while (szLabel[pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
 				{
 					param_str[arg_pos++] = szLabel[pos++];
 				}
@@ -2197,7 +2209,7 @@ void ActivateCommandFile()
 			{
 				sprintf(tmp, "%02i", iCurrentCycle);
 				pos = 0;
-				while (tmp[pos] != 0)
+				while (tmp[pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
 				{
 					param_str[arg_pos++] = tmp[pos++];
 				}
@@ -2208,7 +2220,7 @@ void ActivateCommandFile()
 			{
 				sprintf(tmp, "%03i", iCurrentFrame);
 				pos = 0;
-				while (tmp[pos] != 0)
+				while (tmp[pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
 				{
 					param_str[arg_pos++] = tmp[pos++];
 				}
