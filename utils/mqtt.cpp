@@ -600,15 +600,16 @@ static void EnqueueLocked(const MqttJob *job)
 // Public API
 // ---------------------------------------------------------------------------
 
+static BOOL s_mqttCsInit = FALSE; // FIX [L4]: file-scope so MqttDestroy() can check it
+
 void MqttInit(void)
 {
-    static BOOL s_csInit = FALSE;
-    if (!s_csInit)
+    if (!s_mqttCsInit)
     {
         InitializeCriticalSection(&g_cs);
         InitializeCriticalSection(&g_logCs);
         g_logCsInit = TRUE;
-        s_csInit = TRUE;
+        s_mqttCsInit = TRUE;
     }
 
     MqttShutdown();
@@ -672,6 +673,20 @@ void MqttShutdown(void)
 
     ZeroMemory(g_groupAcc, sizeof(g_groupAcc));
     g_qHead = g_qTail = 0;
+}
+
+// FIX [L4]: final teardown — stops thread and releases the CRITICAL_SECTIONs.
+// Call from WM_DESTROY instead of MqttShutdown().
+void MqttDestroy(void)
+{
+    MqttShutdown();
+    if (s_mqttCsInit)
+    {
+        g_logCsInit = FALSE;
+        DeleteCriticalSection(&g_logCs);
+        DeleteCriticalSection(&g_cs);
+        s_mqttCsInit = FALSE;
+    }
 }
 
 void MqttNotify(const char *capcode, const char *message, const char *label,

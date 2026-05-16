@@ -19,6 +19,7 @@ EXTERN_C int rs232_get_rx_data(unsigned char buffer[], int nBytes);
 EXTERN_C int rs232_disconnect(void);
 EXTERN_C int rs232_read(void) ;
 EXTERN_C int slicer_read(void) ;
+EXTERN_C void rs232_cleanup(void) ; // FIX [L2]: delete g_handleCs on final shutdown
 
 
 EXTERN_C int OpenComPort(void) ;

@@ -79,6 +79,8 @@ ACARS::ACARS()
 
 ACARS::~ACARS()
 {
+	// FIX [L1]: free linked lists if WM_DESTROY hasn't already done so
+	free_data();
 }
 
 // Reset routine. Required for switching data mode and also
@@ -820,12 +822,14 @@ void ACARS::read_data(void)
 // Free all database memory.
 void ACARS::free_data(void)
 {
-	if (db_label != NULL)			free_db_info(db_label);				// Label info
-	if (db_aircraft_type != NULL)	free_db_info(db_aircraft_type);		// Aircraft type
-	if (db_origin != NULL)			free_db_info(db_origin);			// Origin of aircraft
-	if (db_airline != NULL)			free_db_info(db_airline);			// Airline
-	if (db_gnd_station != NULL)		free_db_info(db_gnd_station);		// Ground station
-	if (db_routes != NULL)			free_db_info(db_routes);			// Routes
+	// FIX [L1]: null each pointer after freeing so a second call (e.g. from the
+	// destructor after WM_DESTROY has already called free_data()) is a no-op.
+	if (db_label        != NULL) { free_db_info(db_label);        db_label        = NULL; }
+	if (db_aircraft_type!= NULL) { free_db_info(db_aircraft_type);db_aircraft_type= NULL; }
+	if (db_origin       != NULL) { free_db_info(db_origin);       db_origin       = NULL; }
+	if (db_airline      != NULL) { free_db_info(db_airline);      db_airline      = NULL; }
+	if (db_gnd_station  != NULL) { free_db_info(db_gnd_station);  db_gnd_station  = NULL; }
+	if (db_routes       != NULL) { free_db_info(db_routes);       db_routes       = NULL; }
 }
 
 // Reads ACARS database text files.

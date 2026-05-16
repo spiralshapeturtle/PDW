@@ -36,6 +36,15 @@ static inline void rs232_ensure_handle_cs(void) {
 		g_handleCsInited = TRUE;
 	}
 }
+
+// FIX [L2]: release the CRITICAL_SECTION on final shutdown (called from WM_DESTROY).
+void rs232_cleanup(void)
+{
+	if (g_handleCsInited) {
+		DeleteCriticalSection(&g_handleCs);
+		g_handleCsInited = FALSE;
+	}
+}
 double  nTiming ;	// was int
 BOOL    bOrgcomPortRS232 ;
 BOOL    bSlicerDriver = FALSE;

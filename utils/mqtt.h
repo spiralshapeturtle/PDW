@@ -14,6 +14,7 @@
 
 void MqttInit(void);
 void MqttShutdown(void);
+void MqttDestroy(void); // FIX [L4]: full teardown incl. DeleteCriticalSection
 void MqttNotify(const char *capcode, const char *message, const char *label,
                 const char *szTime, const char *szDate,
                 const char *szMode, const char *szType, const char *szBitrate,

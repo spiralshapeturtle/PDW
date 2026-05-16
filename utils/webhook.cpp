@@ -676,17 +676,18 @@ static void EnqueueLocked(const WebhookJob *job)
 // Public API
 // ---------------------------------------------------------------------------
 
+static BOOL s_webhookCsInit = FALSE; // FIX [L3]: file-scope so WebhookDestroy() can check it
+
 void WebhookInit(void)
 {
     // Always initialize synchronisation objects first (WebhookSetStatusWnd
     // uses g_cs even when the thread is not running, e.g. from the dialog).
-    static BOOL s_csInit = FALSE;
-    if (!s_csInit)
+    if (!s_webhookCsInit)
     {
         InitializeCriticalSection(&g_cs);
         InitializeCriticalSection(&g_logCs);
         g_logCsInit = TRUE;
-        s_csInit = TRUE;
+        s_webhookCsInit = TRUE;
     }
 
     WebhookShutdown();   // stop existing thread cleanly first
@@ -736,6 +737,20 @@ void WebhookShutdown(void)
 
     ZeroMemory(g_groupAcc, sizeof(g_groupAcc));
     g_qHead = g_qTail = 0;
+}
+
+// FIX [L3]: final teardown — stops thread and releases the CRITICAL_SECTIONs.
+// Call from WM_DESTROY instead of WebhookShutdown().
+void WebhookDestroy(void)
+{
+    WebhookShutdown();
+    if (s_webhookCsInit)
+    {
+        g_logCsInit = FALSE;
+        DeleteCriticalSection(&g_logCs);
+        DeleteCriticalSection(&g_cs);
+        s_webhookCsInit = FALSE;
+    }
 }
 
 void WebhookNotify(const char *capcode, const char *message, const char *label,
