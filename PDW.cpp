@@ -380,6 +380,7 @@ int iMouseClick=0;					// PH: Used for detecting double click
 //int Notification=0;				// PH: Used for notification windows
 
 bool bTrayed=false;					// PH: Is true if trayed
+bool g_bTrayIconActive=false;       // FIX [TrayBalloon]: true als tray-icoon aanwezig is
 bool bLBUTTONDBLCLK=false;			// PH: Is true after 2 WM_LBUTTONDOWN messages
 bool bFilterFindCASE=false;			// PH: Filter Find Case Sensitive?
 
@@ -403,6 +404,7 @@ char szWindowText[6][1000];			// [0] = PDW version
 
 char g_szModeLabel[20];			// Protocol label shown in title: " [FLEX]", " [POCSAG]", etc.
 static void UpdateModeLabel();	// forward declaration
+static void SystemTrayUpdateTooltip(); // FIX [TrayBalloon]: forward declaration
 
 // Text editing globals
 unsigned int iSelectionStartCol, iSelectionStartRow, iSelectionEndCol, iSelectionEndRow;
@@ -518,6 +520,8 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 
 	Profile.SystemTray	        = 0;	// Flag for enabeling the system tray
 	Profile.SystemTrayRestore	= 0;	// Flag for enabeling auto restore from tray
+	Profile.trayNotifyMode      = 0;	// FIX [TrayBalloon]: balloon-tips standaard uit
+	Profile.trayNotifyShowLabel = 1;	// FIX [TrayBalloon]: filter label standaard aan
 	Profile.SMTP = 0;					// Flag for SMTP-email
 
 	Profile.webhookEnabled         = 0;
@@ -735,6 +739,8 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	SetTimer(ghWnd, MINUTE_TIMER, 1000*60, (TIMERPROC) NULL); // start minute timer
 	SetTimer(ghWnd, SECOND_TIMER, 1000,    (TIMERPROC) NULL); // start second timer
 
+	if (Profile.trayNotifyMode > 0) SystemTrayIcon(false); // FIX [TrayBalloon]: icon bij opstarten als notificaties aan
+
 	if (Max_X_Client < 800)	// PH: Check if the screen width is less than 800
 	{
 		MessageBox(ghWnd, "WARNING! PDW is optimized for 800x600 resolution (and higher)\nYour computer seems to be using a lower resolution...", "PDW Resolution", MB_ICONWARNING);
@@ -830,6 +836,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 				case MINUTE_TIMER:	// Handle minute timer
 				{
+				SystemTrayUpdateTooltip(); // FIX [TrayBalloon]: verplaatst van SECOND_TIMER — elke minuut volstaat en voorkomt annulering van lopende balloon
 				if (bMode_IDLE || bEmpty_Frame || Profile.monitor_acars || Profile.monitor_mobitex)
 				{
 					if (bUpdateFilters)
@@ -1708,12 +1715,23 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 	    case SYSTEMTRAY_ICON_MESSAGE:
 
-		switch(lParam)
+		// FIX [TrayBalloon]: LOWORD(lParam) i.p.v. raw lParam — NOTIFYICON_VERSION_4 codeert
+		// lParam als MAKELPARAM(event, uID) zodat raw lParam nooit meer matcht op WM_* constanten
+		switch(LOWORD(lParam))
         {
 			case WM_LBUTTONDBLCLK:
 
 			if (bTrayed) SystemTrayWindow(false); // PH: Restore PDW from systemtray
 
+			break;
+
+			case NIN_BALLOONUSERCLICK: // FIX [TrayBalloon]: klik op balloon opent/herstelt het venster
+			if (bTrayed) SystemTrayWindow(false);
+			else
+			{
+				if (IsIconic(ghWnd)) ShowWindow(ghWnd, SW_RESTORE);
+				SetForegroundWindow(ghWnd);
+			}
 			break;
 
 			case WM_CONTEXTMENU:
@@ -1725,6 +1743,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			}
 			break;
 		}
+		break; // FIX [TrayBalloon]: ontbrekende break veroorzaakte fall-through naar WM_GETMINMAXINFO → crash als bTrayed=false en lParam > 1000
 
 		case WM_GETMINMAXINFO:
 
@@ -1901,6 +1920,13 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		break;
 
 		case WM_CLOSE:
+
+		// FIX [TrayClose]: X-knop stuurt venster naar tray als SystemTray ingeschakeld is
+		if (Profile.SystemTray && !bTrayed)
+		{
+			SystemTrayWindow(false);
+			break;
+		}
 
 		if (Profile.confirmExit)
 		{
@@ -3086,6 +3112,18 @@ BOOL FAR PASCAL SystemTrayDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			CheckDlgButton(hDlg, IDC_SYSTEMTRAY_FILTER, BST_CHECKED);
 			break;
 		}
+
+		// FIX [TrayBalloon]: initialiseer balloon-tip combobox
+		{
+			HWND hCombo = GetDlgItem(hDlg, IDC_SYSTEMTRAY_NOTIFY);
+			SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)"Off");
+			SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)"All messages");
+			SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)"Monitor-only or filtered");
+			SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)"Filtered messages only");
+			SendMessage(hCombo, CB_SETCURSEL, Profile.trayNotifyMode, 0);
+			EnableWindow(hCombo, TRUE); // FIX [TrayBalloon]: notificaties werken onafhankelijk van tray-modus
+		}
+		CheckDlgButton(hDlg, IDC_SYSTEMTRAY_LABEL, Profile.trayNotifyShowLabel); // FIX [TrayBalloon]
 		return (TRUE);
 
 		case WM_COMMAND:
@@ -3100,10 +3138,13 @@ BOOL FAR PASCAL SystemTrayDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 				EnableWindow(GetDlgItem(hDlg, IDC_SYSTEMTRAY_NEW),     false);
 				EnableWindow(GetDlgItem(hDlg, IDC_SYSTEMTRAY_MONLY),   false);
 				EnableWindow(GetDlgItem(hDlg, IDC_SYSTEMTRAY_FILTER),  false);
-
+				// FIX [TrayBalloon]: notify combobox blijft altijd enabled — onafhankelijk van tray-modus
 				iRestore=0;
 			}
-			else EnableWindow(GetDlgItem(hDlg, IDC_SYSTEMTRAY_RESTORE), true);
+			else
+			{
+				EnableWindow(GetDlgItem(hDlg, IDC_SYSTEMTRAY_RESTORE), true);
+			}
 
 			break;
 
@@ -3143,12 +3184,15 @@ BOOL FAR PASCAL SystemTrayDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 			Profile.SystemTray        = IsDlgButtonChecked(hDlg, IDC_SYSTEMTRAY);
 			Profile.SystemTrayRestore = iRestore;
+			Profile.trayNotifyMode      = (INT) SendDlgItemMessage(hDlg, IDC_SYSTEMTRAY_NOTIFY, CB_GETCURSEL, 0, 0); // FIX [TrayBalloon]
+			Profile.trayNotifyShowLabel = IsDlgButtonChecked(hDlg, IDC_SYSTEMTRAY_LABEL);                           // FIX [TrayBalloon]
 
 			if (!Profile.SystemTray)
 			{
 				if (bTrayed) SystemTrayWindow(false);
-				SystemTrayIcon(true); // PH: Remove PDW-icon from systemtray
+				if (!Profile.trayNotifyMode) SystemTrayIcon(true); // PH: Remove PDW-icon from systemtray; FIX [TrayBalloon]: alleen als notificaties ook uit
 			}
+			if (Profile.trayNotifyMode) SystemTrayIcon(false); // FIX [TrayBalloon]: icon toevoegen als notificaties aan
 			WriteSettings();
 
 			hSystemTrayDlg = NULL;
@@ -10159,6 +10203,8 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->FlexGroupMode	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("FlexGroupMode"), pProfile->FlexGroupMode, lpszIniPathName);
 	pProfile->SystemTray	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("SystemTray"), pProfile->SystemTray, lpszIniPathName);
 	pProfile->SystemTrayRestore = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("SystemTrayRestore"), pProfile->SystemTrayRestore, lpszIniPathName);
+	pProfile->trayNotifyMode      = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("TrayNotifyMode"),      pProfile->trayNotifyMode,      lpszIniPathName); // FIX [TrayBalloon]
+	pProfile->trayNotifyShowLabel = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("TrayNotifyShowLabel"), pProfile->trayNotifyShowLabel, lpszIniPathName); // FIX [TrayBalloon]
 
 	/***** Get SMTP settings *****/
 
@@ -10657,6 +10703,8 @@ void WriteSettings()
 		fprintf(pFile, "FlexGroupMode=%i\n",			Profile.FlexGroupMode);
 		fprintf(pFile, "SystemTray=%i\n",				Profile.SystemTray);
 		fprintf(pFile, "SystemTrayRestore=%i\n",		Profile.SystemTrayRestore);
+		fprintf(pFile, "TrayNotifyMode=%i\n",           Profile.trayNotifyMode);      // FIX [TrayBalloon]
+		fprintf(pFile, "TrayNotifyShowLabel=%i\n",      Profile.trayNotifyShowLabel); // FIX [TrayBalloon]
 
 		fprintf(pFile, "\n[SMTP]\n");
 		fprintf(pFile, "Enable=%i\n",					Profile.SMTP);
@@ -11674,6 +11722,7 @@ void SystemTrayWindow(bool bHideWindow)
 		ShowWindow(ghWnd, SW_HIDE);
 
 		SystemTrayIcon(false);
+		SystemTrayUpdateTooltip(); // FIX [TrayBalloon]: tooltip direct actueel bij minimize naar tray
 
 		Profile.minimize_flg=1;
 		bTrayed=true;
@@ -11692,8 +11741,6 @@ void SystemTrayWindow(bool bHideWindow)
 
 void SystemTrayIcon(bool bRemoveIcon)
 {
-	static bool bIcon=false;
-
 	NOTIFYICONDATA nid = { 0 };
 
 	nid.cbSize           = sizeof(NOTIFYICONDATA);
@@ -11707,15 +11754,38 @@ void SystemTrayIcon(bool bRemoveIcon)
 
 	if (bRemoveIcon)	// PH: Remove PDW-icon from systemtray
 	{
-		if (bIcon) Shell_NotifyIcon(NIM_DELETE, &nid);
-		bIcon=false;
+		if (g_bTrayIconActive) Shell_NotifyIcon(NIM_DELETE, &nid); // FIX [TrayBalloon]
+		g_bTrayIconActive = false;
 		return;
 	}
-	else if (!bIcon)
+	else if (!g_bTrayIconActive) // FIX [TrayBalloon]
 	{
 		Shell_NotifyIcon(NIM_ADD, &nid);
-		bIcon=true;
+		nid.uVersion = NOTIFYICON_VERSION_4; // FIX [TrayBalloon]: vereist op Vista+ voor betrouwbare balloon-tips
+		Shell_NotifyIcon(NIM_SETVERSION, &nid);
+		g_bTrayIconActive = true;
 	}
+}
+
+
+// FIX [TrayBalloon]: bijwerken van de tray-tooltip met actuele status
+static void SystemTrayUpdateTooltip()
+{
+	if (!g_bTrayIconActive) return;
+
+	NOTIFYICONDATA nid = { 0 };
+	nid.cbSize = sizeof(NOTIFYICONDATA);
+	nid.hWnd   = ghWnd;
+	nid.uID    = 110;
+	nid.uFlags = NIF_TIP;
+
+	unsigned long long h = iSecondsElapsed / 3600;
+	unsigned long long m = (iSecondsElapsed % 3600) / 60;
+	_snprintf(nid.szTip, sizeof(nid.szTip) - 1,
+	          "%s%s  msgs: %d  up: %02llu:%02llu",
+	          pdw_version, g_szModeLabel, nCount_Messages, h, m);
+
+	Shell_NotifyIcon(NIM_MODIFY, &nid);
 }
 
 

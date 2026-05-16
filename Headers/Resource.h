@@ -302,6 +302,8 @@
 #define IDC_SYSTEMTRAY_NEW        1002
 #define IDC_SYSTEMTRAY_MONLY      1003
 #define IDC_SYSTEMTRAY_FILTER     1004
+#define IDC_SYSTEMTRAY_NOTIFY     1005  // FIX [TrayBalloon]: combobox balloon-tip modus
+#define IDC_SYSTEMTRAY_LABEL      1006  // FIX [TrayBalloon]: checkbox filter label in balloon
 
 #define IDC_CLEAR_PANE1           1010
 #define IDC_CLEAR_PANE2           1011

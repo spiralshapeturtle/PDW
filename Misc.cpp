@@ -9,6 +9,7 @@
 #include <windows.h>
 #include "headers\pdw.h"
 #include "headers\initapp.h"
+#include "headers\resource.h"
 #include "headers\gfx.h"
 #include "headers\decode.h"
 #include "headers\misc.h"
@@ -116,6 +117,12 @@ FILE *pBlocked = NULL;						// PH: Used for blocked messages
 
 void ResetBools();
 bool BlockChecker(char *address, int fnu, char *message, bool reject);
+
+// FIX [TrayBalloon]: accumulator voor groepsoproep balloon-tip
+static char  s_trayAccumLabels[256] = "";
+static char  s_trayAccumMsg   [MAX_STR_LEN] = "";
+static bool  s_trayAccumActive = false;
+extern bool  g_bTrayIconActive; // defined in PDW.cpp
 
 // Displays debug messages in the filter pane.
 void misc_debug_msg(char *msg)
@@ -431,6 +438,30 @@ void AddAssignment(int assignedframe, int groupbit, int capcode)
 	}
 }
 
+// FIX [TrayBalloon]: verstuur geaccumuleerde groepsoproep balloon-tip
+static void TrayBalloonFlush()
+{
+	if (!s_trayAccumActive) return;
+	s_trayAccumActive = false;
+	if (!g_bTrayIconActive) { s_trayAccumLabels[0] = '\0'; s_trayAccumMsg[0] = '\0'; return; } // FIX [TrayBalloon]: icon vereist; reset volledig
+	NOTIFYICONDATA nid = {0};
+	nid.cbSize      = sizeof(NOTIFYICONDATA);
+	nid.hWnd        = ghWnd;
+	nid.uID         = 110;
+	nid.uFlags      = NIF_INFO;
+	// FIX [TrayBalloon]: LoadImage met SM_CXSMICON ipv LoadIcon(32x32) — Windows 11 weigert NIIF_USER met verkeerde icongrootte
+	nid.hBalloonIcon = (HICON)LoadImage(ghInstance, MAKEINTRESOURCE(PDWICON), IMAGE_ICON,
+	                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+	nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
+	nid.uTimeout     = 5000;
+	// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
+	_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", Profile.trayNotifyShowLabel ? s_trayAccumLabels : "");
+	_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", s_trayAccumMsg);
+	Shell_NotifyIcon(NIM_MODIFY, &nid);
+	if (nid.hBalloonIcon) { DestroyIcon(nid.hBalloonIcon); nid.hBalloonIcon = NULL; }
+	s_trayAccumLabels[0] = '\0';
+}
+
 void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 {
 	char szFile[MAX_PATH];
@@ -521,6 +552,7 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 			iConvertingGroupcall=0;		// PH: Reset for next groupmessage
 			WebhookFlushGroup(groupbit);
 			MqttFlushGroup(groupbit);
+			TrayBalloonFlush(); // FIX [TrayBalloon]
 		}
 		else
 		{
@@ -574,6 +606,9 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 			}
 			CountBiterrors(5);
 			ShowMessage();		// PH: Display only groupcode
+			// FIX [TrayBalloon]: flush accumulator — else-branch keert terug zonder de normale
+			// flush-aanroepen; s_trayAccumActive=true zou anders lekken naar de volgende groepoproep
+			TrayBalloonFlush();
 			return;
 		}
 	}
@@ -1542,6 +1577,58 @@ void ShowMessage()
 			           Current_MSG[MSG_BITRATE],
 			           iConvertingGroupcall > 0,
 			           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+		}
+	}
+
+	// FIX [TrayBalloon]: balloon-tip bij overeenkomend bericht
+	// bRejected: iMatch is gezet vóór bShowMessage-check, dus ook geldig als bShowMessage=false
+	// (FLEXGROUPMODE_HIDEGROUPCODES). Zonder deze check verschijnen rejected 20295xx-groepscodes
+	// toch in de balloon omdat de early-return in if(bShowMessage) nooit bereikt wordt.
+	const bool bRejected = (iMatch != -1 && Profile.filters[iMatch].reject);
+	if (Profile.trayNotifyMode && g_bTrayIconActive && !bRejected)
+	{
+		bool bSendBalloon;
+		switch (Profile.trayNotifyMode)
+		{
+		case 1:  bSendBalloon = true; break;
+		case 2:  bSendBalloon = (bMATCH || bMONITOR_ONLY); break;
+		case 3:  bSendBalloon = (bMATCH && !bMONITOR_ONLY); break;
+		default: bSendBalloon = false; break;
+		}
+		if (bSendBalloon)
+		{
+			const char *szBalloonLabel = szCurrentLabel[0][0] ? szCurrentLabel[0] : Current_MSG[MSG_CAPCODE];
+			const char *szBalloonMsg   = iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE];
+			if (iConvertingGroupcall)
+			{
+				if (!s_trayAccumActive)
+				{
+					s_trayAccumActive = true;
+					_snprintf(s_trayAccumMsg, sizeof(s_trayAccumMsg)-1, "%s", szBalloonMsg);
+					s_trayAccumLabels[0] = '\0';
+				}
+				if (s_trayAccumLabels[0] != '\0')
+					strncat_s(s_trayAccumLabels, sizeof(s_trayAccumLabels), ", ", _TRUNCATE);
+				strncat_s(s_trayAccumLabels, sizeof(s_trayAccumLabels), szBalloonLabel, _TRUNCATE);
+			}
+			else
+			{
+				NOTIFYICONDATA nid = {0};
+				nid.cbSize       = sizeof(NOTIFYICONDATA);
+				nid.hWnd         = ghWnd;
+				nid.uID          = 110;
+				nid.uFlags       = NIF_INFO;
+				// FIX [TrayBalloon]: LoadImage met SM_CXSMICON ipv LoadIcon(32x32) — Windows 11 weigert NIIF_USER met verkeerde icongrootte
+				nid.hBalloonIcon = (HICON)LoadImage(ghInstance, MAKEINTRESOURCE(PDWICON), IMAGE_ICON,
+				                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+				nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
+				nid.uTimeout     = 5000;
+				// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
+				_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", Profile.trayNotifyShowLabel ? szBalloonLabel : "");
+				_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", szBalloonMsg);
+				Shell_NotifyIcon(NIM_MODIFY, &nid);
+				if (nid.hBalloonIcon) { DestroyIcon(nid.hBalloonIcon); nid.hBalloonIcon = NULL; }
+			}
 		}
 	}
 
