@@ -431,7 +431,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.4";			// Current version info
+char *pdw_version = "PDW v3.4.1";			// Current version info
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;
@@ -744,8 +744,11 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	{
 		if (!TranslateAccelerator(ghWnd, ghAccel, &msg))
 		{
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
+			if (!(hDebugDlg && IsDialogMessage(hDebugDlg, &msg)))
+			{
+				TranslateMessage(&msg);
+				DispatchMessage(&msg);
+			}
 		}
 	}
 	return ((int) msg.wParam);
@@ -1589,9 +1592,12 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				break;
 
 				case IDM_DEBUG:
-
-					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(DEBUGDLGBOX),
-												 hWnd, (DLGPROC) DebugDlgProc, 0L);
+					// FIX [F12]: modeless so TranslateAccelerator keeps running (Shift+F12 reset).
+					if (hDebugDlg)
+						SetForegroundWindow(hDebugDlg);
+					else
+						CreateDialogParam(ghInstance, MAKEINTRESOURCE(DEBUGDLGBOX),
+						                  hWnd, (DLGPROC) DebugDlgProc, 0L);
 				break;
 
 				case IDM_FILTERFILE_EN:
@@ -1608,6 +1614,50 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 				case IDM_PANE_SWITCH:
 					SetWindowPaneSize(PANE_SWITCH);
+				break;
+
+				case IDM_RESET_COUNTERS:  // Shift+F12: missed / buffer / fragmented only
+				{
+					nCount_Missed[0]      = 0;
+					nCount_Missed[1]      = 0;
+					nCount_BlockBuffer[0] = 0;
+					nCount_BlockBuffer[1] = 0;
+					nCount_Fragments      = 0;
+					if (hDebugDlg)
+					{
+						SYSTEMTIME st;
+						GetLocalTime(&st);
+						sprintf(szTEMP, "[Missed/buffer/frag reset at %02d:%02d:%02d]",
+							st.wHour, st.wMinute, st.wSecond);
+						SetDlgItemText(hDebugDlg, IDC_DEBUG_RESET, szTEMP);
+						SendMessage(hDebugDlg, WM_WININICHANGE, 0, 0L);
+					}
+				}
+				break;
+
+				case IDM_RESET_ALL:  // Alt+Shift+F12: full reset, feedback only in F12 dialog
+				{
+					nCount_Messages       = 0;
+					nCount_Groupcalls     = 0;
+					nCount_Biterrors      = 0;
+					nCount_Rejected       = 0;
+					nCount_Blocked        = 0;
+					nCount_Missed[0]      = 0;
+					nCount_Missed[1]      = 0;
+					nCount_BlockBuffer[0] = 0;
+					nCount_BlockBuffer[1] = 0;
+					nCount_Fragments      = 0;
+
+					if (hDebugDlg)
+					{
+						SYSTEMTIME st2;
+						GetLocalTime(&st2);
+						sprintf(szTEMP, "[Full reset at %02d:%02d:%02d]",
+							st2.wHour, st2.wMinute, st2.wSecond);
+						SetDlgItemText(hDebugDlg, IDC_DEBUG_RESET, szTEMP);
+						SendMessage(hDebugDlg, WM_WININICHANGE, 0, 0L);
+					}
+				}
 				break;
 
 				case IDM_GENERAL:
@@ -1885,9 +1935,10 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		// HWi, stop Mail thread.....
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
-		WebhookShutdown();
-		MqttShutdown();
+		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
+		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
 		DebugLogShutdown();
+		rs232_cleanup();   // FIX [L2]: DeleteCriticalSection g_handleCs
 
 		if (bCapturing)	Stop_Capturing();		// Reset and close audio device.
 		if (bPlayback)	Stop_Playback();		// RAH: stop playback
@@ -2991,6 +3042,9 @@ BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		}
 		SetDlgItemText(hDlg, IDC_DEBUG_INPUT, szTEMP);
 		SetDlgItemText(hDlg, IDC_DEBUG_FLEXTIME, bFlexTIME_detected ? "Detected" : "Not detected");
+		SetDlgItemText(hDlg, IDC_DEBUG_RESET,
+			"Shift+F12 : reset missed / buffer / fragmented\r\n"
+			"Alt+Shift+F12 : full reset (incl. messages + groupcalls)");
 
 		SendMessage(hDlg, WM_WININICHANGE, 0, 0L);
 
@@ -3032,15 +3086,16 @@ BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 		return (TRUE);
 
+		case WM_DESTROY:
+		hDebugDlg = NULL;
+		break;
+
 		case WM_COMMAND:
 
 		switch (LOWORD(wParam))
 		{
 			case IDCANCEL:
-
-			EndDialog(hDlg, TRUE);
-			hDebugDlg = NULL;
-
+			DestroyWindow(hDlg); // FIX [F12]: modeless — use DestroyWindow, not EndDialog
 			break;
 		}
 		break;

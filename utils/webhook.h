@@ -16,6 +16,7 @@
 
 void WebhookInit(void);
 void WebhookShutdown(void);
+void WebhookDestroy(void); // FIX [L3]: full teardown incl. DeleteCriticalSection
 void WebhookNotify(const char *capcode, const char *message, const char *label,
                    const char *szTime, const char *szDate,
                    const char *szMode, const char *szType, const char *szBitrate,

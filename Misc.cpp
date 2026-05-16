@@ -1664,7 +1664,7 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 		}
 	}
 
-	for (i=0; aMessages[i][BLOCK_ADDRESS]; i++);
+	for (i=0; i < 1000 && aMessages[i][BLOCK_ADDRESS]; i++);  // FIX [B1]: bovengrens bewaakt UB bij volledig gevulde array
 
 	nCount_BlockBuffer[0] = i;
 

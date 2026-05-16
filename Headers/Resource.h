@@ -71,6 +71,8 @@
 
 #define IDM_DEBUG                  290
 #define IDM_PANE_SWITCH            291
+#define IDM_RESET_COUNTERS         292  // Shift+F12: reset diagnostic counters (missed/buffer/frag)
+#define IDM_RESET_ALL              293  // Alt+Shift+F12: full reset + separator line
 
 #define IDM_PLAYBACK               295
 #define IDM_RECORD                 296
@@ -377,6 +379,7 @@
 #define IDC_DEBUG_GROUPMSG        1180
 #define IDC_DEBUG_TEST            1181
 #define IDC_DEBUG_FRAGMSG         1182
+#define IDC_DEBUG_RESET           1183  // Reset confirmation label (F11)
 
 #define IDW_TOOL_BAR              1200
 #define IDT_TOOLBAR_BTN0          1201
