@@ -140,6 +140,8 @@ typedef struct
 
 	int  SystemTray;				// Flag for enabeling the system tray
 	int  SystemTrayRestore;			// Flag for enabeling auto restore from tray
+	int  trayNotifyMode;			// FIX [TrayBalloon]: 0=off,1=all,2=filtered+monitor,3=filtered only
+	int  trayNotifyShowLabel;		// FIX [TrayBalloon]: 1=filter label als balloon-titel, 0=alleen bericht
 
 	int  FlexTIME;					// Flag for FlexTIME as systemtime
 	int  FlexGroupMode;				// Flag for FlexGroupMode
