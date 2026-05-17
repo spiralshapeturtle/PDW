@@ -104,7 +104,7 @@ BEGIN
         MENUITEM "&Webhook...\tCtrl-W",         IDM_WEBHOOK
         MENUITEM "MQ&TT...\tCtrl-Q",            IDM_MQTT
         MENUITEM SEPARATOR
-        MENUITEM "Live &Debug Log",             IDM_DEBUGLOG
+        MENUITEM "Live &Debug Log (FLEX)",      IDM_DEBUGLOG
     END
     POPUP "Filters"
     BEGIN
@@ -419,6 +419,8 @@ BEGIN
     CONTROL         "Convert '>' character to linefeed",IDC_LINEFEEDS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,15,62,122,10
     CONTROL         "Separate/group messages with empty line",IDC_SEPARATOR,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,142,62,154,10
+    CONTROL         "Also in filter window",IDC_SEPARATOR_FILTER,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,152,73,144,10
     LTEXT           "Date format (as logfile name) :",IDC_STATIC,15,82,103,8
     CONTROL         "050324.LOG",IDC_MONTHNUMBER,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,142,82,56,10
     CONTROL         "05mar24.LOG",IDC_MONTHNUMBER2,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,202,82,61,10

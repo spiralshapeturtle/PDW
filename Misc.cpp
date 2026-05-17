@@ -455,6 +455,7 @@ static void TrayBalloonFlush()
 	nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
 	nid.uTimeout     = 5000;
 	// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
+	// Geen "PDW" fallback: Windows toont FileDescription ("PDW") al als attributieregel boven de ballon
 	_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", Profile.trayNotifyShowLabel ? s_trayAccumLabels : "");
 	_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", s_trayAccumMsg);
 	Shell_NotifyIcon(NIM_MODIFY, &nid);
@@ -462,10 +463,11 @@ static void TrayBalloonFlush()
 	s_trayAccumLabels[0] = '\0';
 }
 
+static FILE *OpenGroupcallLog(void);  // FIX [GroupCallLog]: forward declaration
+
 void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 {
 	char szFile[MAX_PATH];
-
 	extern int nCount_Blocked;	// PH: To keep track of the number of blocked messages
 	extern int nCount_Missed[2];
 
@@ -582,25 +584,20 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 				{
 					nCount_Missed[1]++;
 					DebugLog("[ConvertGroupcall] Y++ now=%d (X=%d)", nCount_Missed[1], nCount_Missed[0]);
-
-					FILE *pFLEX_nosi = NULL;
-					_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\no-si-groupcalls.txt", szPath);  // FIX [M5]: szPath kan MAX_PATH zijn
-					if (!FileExists(szFile))
 					{
-						if ((pFLEX_nosi = fopen(szFile, "a")) != NULL)
-							fprintf(pFLEX_nosi, " Group calls received without matching Short Instruction (Y++ events):\n\n");
-					}
-					else pFLEX_nosi = fopen(szFile, "a");
-					if (pFLEX_nosi)
-					{
-						Get_Date_Time();
-						const char *szReason = (savedGroupFrame == -1) ? "no-SI" : "SI-frame-mismatch";
-						fprintf(pFLEX_nosi, " %s %s  capcode=%i  GroupFrame=%i  iCurrentFrame=%i  reason=%s  %s\n",
-							szCurrentDate, szCurrentTime,
-							capcode, savedGroupFrame, iCurrentFrame,
-							szReason,
-							message_buffer);
-						fclose(pFLEX_nosi);
+						// FIX [GroupCallLog]: merged into missed-groupcalls.log in Logs dir
+						FILE *fp = OpenGroupcallLog();
+						if (fp)
+						{
+							Get_Date_Time();
+							const char *szReason = (savedGroupFrame == -1) ? "no Short Instruction" : "SI frame mismatch";
+							fprintf(fp, " %s %s  NO-SI    capcode %i frame %i  %s  %s\n",
+								szCurrentDate, szCurrentTime,
+								capcode, iCurrentFrame,
+								szReason,
+								message_buffer);
+							fclose(fp);
+						}
 					}
 				}
 			}
@@ -686,42 +683,46 @@ void Check4_MissedGroupcalls()
 }
 
 
+// FIX [GroupCallLog]: combined missed-groupcalls.log in Profile.LogfilePath (replaces missed-groupcalls.txt + no-si-groupcalls.txt)
+static FILE *OpenGroupcallLog(void)
+{
+	char szFile[MAX_PATH];
+	const char *logDir = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char *)szPath;
+	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\missed-groupcalls.log", logDir);
+	bool bNew = !FileExists(szFile);
+	FILE *fp = fopen(szFile, "a");
+	if (!fp) return NULL;
+	if (bNew)
+	{
+		fprintf(fp, " PDW Missed Groupcalls\n");
+		fprintf(fp, " MISSED = Short Instruction received, group message did not arrive\n");
+		fprintf(fp, " NO-SI  = Group message received without prior Short Instruction\n\n");
+	}
+	return fp;
+}
+
+
 void Remove_MissedGroupcall(int groupbit)
 {
 	extern int nCount_Missed[2], nCount_Messages, nCount_Groupcalls;
-	char szFile[MAX_PATH];
-	
-	FILE *pFLEX_missed = NULL;			// PH: file: "missed-groupcalls.txt"
 
-	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\missed-groupcalls.txt", szPath);  // FIX [M5]: szPath kan MAX_PATH zijn
+	Get_Date_Time();
+	SortGroupCall(groupbit);	// PH: Sort current groupcall in ascending order
 
-	if (!FileExists(szFile))
+	FILE *fp = OpenGroupcallLog();  // FIX [GroupCallLog]
+	if (fp)
 	{
-		if ((pFLEX_missed = fopen(szFile, "a")) != NULL)
+		fprintf(fp, " %s %s  MISSED   group %i frame %03i  members:",
+			szCurrentDate, szCurrentTime, groupbit + 2029568, GroupFrame[groupbit]);
+		for (int nCapcode = 1; aGroupCodes[groupbit][nCapcode] > 0; nCapcode++)
 		{
-			fprintf(pFLEX_missed, " Missed Groupcalls:\n\n");
+			if (aGroupCodes[groupbit][nCapcode] == 9999999) fprintf(fp, " ???????");
+			else fprintf(fp, " %07i", aGroupCodes[groupbit][nCapcode]);
 		}
+		fprintf(fp, "\n");
+		fclose(fp);
 	}
-	else if (pFLEX_missed == NULL) pFLEX_missed = fopen(szFile, "a");
-
-	if (pFLEX_missed)
-	{
-		Get_Date_Time();
-		fprintf(pFLEX_missed, " %s %s (%i-%03i) : ", szCurrentDate, szCurrentTime, groupbit+2029568, GroupFrame[groupbit]);
-
-		SortGroupCall(groupbit);	// PH: Sort current groupcall in ascending order
-
-		for (int nCapcode=1; aGroupCodes[groupbit][nCapcode] > 0; nCapcode++)
-		{
-			if (aGroupCodes[groupbit][nCapcode] == 9999999) fprintf(pFLEX_missed, "??????? ");
-			else fprintf(pFLEX_missed, "%07i ", aGroupCodes[groupbit][nCapcode]);
-		}
-		memset(aGroupCodes[groupbit], 0, sizeof(int) * MAXIMUM_GROUPSIZE);
-
-		fwrite("\n", 1, 1, pFLEX_missed);
-		fclose(pFLEX_missed);
-		pFLEX_missed = NULL;
-	}
+	memset(aGroupCodes[groupbit], 0, sizeof(int) * MAXIMUM_GROUPSIZE);
 
 	strcpy(szWindowText[5], "MISSED GROUPCALL!");
 
@@ -730,6 +731,22 @@ void Remove_MissedGroupcall(int groupbit)
 	nCount_Missed[0]++;
 
 	CountBiterrors(10);
+}
+
+
+void MissedGroupcallSessionSummary(void)
+{
+	extern int nCount_Missed[2];
+	char szFile[MAX_PATH];
+	const char *logDir = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char *)szPath;
+	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\missed-groupcalls.log", logDir);
+	if (!FileExists(szFile)) return;
+	FILE *fp = fopen(szFile, "a");
+	if (!fp) return;
+	Get_Date_Time();
+	fprintf(fp, "\n Session end  %s %s  Missed: %i  No-SI: %i\n",
+		szCurrentDate, szCurrentTime, nCount_Missed[0], nCount_Missed[1]);
+	fclose(fp);
 }
 
 
@@ -1029,6 +1046,9 @@ void ShowMessage()
 				}
 			}
 			else bSeparator[pane] = false;
+
+			if (pane == FILTER && !Profile.FlexGroupMode && !Profile.SeparatorFilter)
+				bSeparator[pane] = false;
 
 			if (!bDoubleDisplay) bPreviousNumeric[pane] = bNumeric;
 
@@ -1624,6 +1644,7 @@ void ShowMessage()
 				nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
 				nid.uTimeout     = 5000;
 				// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
+				// Geen "PDW" fallback: Windows toont FileDescription ("PDW") al als attributieregel boven de ballon
 				_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", Profile.trayNotifyShowLabel ? szBalloonLabel : "");
 				_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", szBalloonMsg);
 				Shell_NotifyIcon(NIM_MODIFY, &nid);

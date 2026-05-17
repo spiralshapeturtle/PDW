@@ -130,6 +130,7 @@ typedef struct
 	char ColFilterfile[10];			// Flag for columns to be logged in filterfile
 	int  Linefeed;					// Flag for converting \xbb to linefeed
 	int  Separator;					// Flag for separating messages (empty line)
+	int  SeparatorFilter;			// Flag for separator in filter window too
 	int  MonthNumber;				// Flag for using monthnumber in logfilenames
 	int  DateFormat;				// Flag for date format
 	int  Date_USA;					// Flag for using MM-DD-YY in stead of DD-MM-YY

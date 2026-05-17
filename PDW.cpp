@@ -512,6 +512,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.ColFilterfile[0]	= '\0';	// Flag for columns in filterfiles
 	Profile.Linefeed			= 1;	// Flag for converting \xbb to linefeed
 	Profile.Separator			= 1;	// Flag for separating messages (empty line)
+	Profile.SeparatorFilter		= 0;	// Flag for separator in filter window too (default off)
 	Profile.MonthNumber			= 1;	// Flag for using monthnumber in logfilenames
 	Profile.DateFormat			= 0;	// Flag for date format
 	Profile.BlockDuplicate		= 0;	// Flag for blocking duplicate messages
@@ -1956,6 +1957,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
 		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
 		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
+		MissedGroupcallSessionSummary();  // FIX [GroupCallLog]: write X/Y counters to missed-groupcalls.log
 		DebugLogShutdown();
 		rs232_cleanup();   // FIX [L2]: DeleteCriticalSection g_handleCs
 
@@ -6071,6 +6073,8 @@ BOOL FAR PASCAL GeneralOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 
 		CheckDlgButton(hDlg, Profile.MonthNumber ? IDC_MONTHNUMBER : IDC_MONTHNUMBER2, BST_CHECKED);
 		CheckDlgButton(hDlg, IDC_SEPARATOR, Profile.Separator);
+		CheckDlgButton(hDlg, IDC_SEPARATOR_FILTER, Profile.SeparatorFilter);
+		EnableWindow(GetDlgItem(hDlg, IDC_SEPARATOR_FILTER), Profile.Separator ? TRUE : FALSE);
 
 		SendDlgItemMessage(hDlg, IDC_DATEFORMAT, CB_ADDSTRING, 0, (LPARAM) (LPSTR) "DD-MM-YY");
 		SendDlgItemMessage(hDlg, IDC_DATEFORMAT, CB_ADDSTRING, 0, (LPARAM) (LPSTR) "MM-DD-YY");
@@ -6113,6 +6117,11 @@ BOOL FAR PASCAL GeneralOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 				}
 			}
 
+			break;
+
+			case IDC_SEPARATOR:
+
+			EnableWindow(GetDlgItem(hDlg, IDC_SEPARATOR_FILTER), IsDlgButtonChecked(hDlg, IDC_SEPARATOR));
 			break;
 
 			case IDC_BLOCKDUPLICATE:
@@ -6177,8 +6186,9 @@ BOOL FAR PASCAL GeneralOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 				Profile.BlockDuplicate += GetDlgItemInt(hDlg, IDC_BLOCKDUPTIMER, NULL, FALSE) << 4;
 			}
 			Profile.Linefeed	= IsDlgButtonChecked(hDlg, IDC_LINEFEEDS);
-			Profile.Separator	= IsDlgButtonChecked(hDlg, IDC_SEPARATOR);
-			Profile.DateFormat	= SendDlgItemMessage(hDlg, IDC_DATEFORMAT, CB_GETCURSEL, 0, 0L);
+			Profile.Separator		= IsDlgButtonChecked(hDlg, IDC_SEPARATOR);
+			Profile.SeparatorFilter	= IsDlgButtonChecked(hDlg, IDC_SEPARATOR_FILTER);
+			Profile.DateFormat		= SendDlgItemMessage(hDlg, IDC_DATEFORMAT, CB_GETCURSEL, 0, 0L);
                               
 			GetDlgItemText(hDlg, IDC_LOGFILEPATH, (LPTSTR)Profile.LogfilePath, sizeof(Profile.LogfilePath) - 1);
 
@@ -8919,7 +8929,11 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			{
 				bApplying=false;
 			}
-			else EndDialog(hDlg, TRUE);
+			else
+			{
+				bUpdateFilters = true;	// FIX [Filter]: schrijf filters.ini na edit-subdialoog
+				EndDialog(hDlg, TRUE);
+			}
 
 			return (TRUE);
 
@@ -10250,8 +10264,9 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->LabelNewline	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("LabelNewline"), pProfile->LabelNewline, lpszIniPathName);
 //	Notification			= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("Notification"), Notification, lpszIniPathName);
 	pProfile->Linefeed		= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("Linefeed"), pProfile->Linefeed, lpszIniPathName);
-	pProfile->Separator		= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("Separator"), pProfile->Separator, lpszIniPathName);
-	pProfile->MonthNumber	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("MonthNumber"), pProfile->MonthNumber, lpszIniPathName);
+	pProfile->Separator			= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("Separator"), pProfile->Separator, lpszIniPathName);
+	pProfile->SeparatorFilter	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("SeparatorFilter"), pProfile->SeparatorFilter, lpszIniPathName);
+	pProfile->MonthNumber		= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("MonthNumber"), pProfile->MonthNumber, lpszIniPathName);
 	pProfile->DateFormat	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("DateFormat"), pProfile->DateFormat, lpszIniPathName);
 	pProfile->BlockDuplicate= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("BlockDuplicate"), pProfile->BlockDuplicate, lpszIniPathName);
 	pProfile->FlexTIME		= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("FlexTIME"), pProfile->FlexTIME, lpszIniPathName);
@@ -10751,6 +10766,7 @@ void WriteSettings()
 //		fprintf(pFile, "Notification=%i\n",				Notification);
 		fprintf(pFile, "Linefeed=%i\n",					Profile.Linefeed);
 		fprintf(pFile, "Separator=%i\n",				Profile.Separator);
+		fprintf(pFile, "SeparatorFilter=%i\n",			Profile.SeparatorFilter);
 		fprintf(pFile, "MonthNumber=%i\n",				Profile.MonthNumber);
 		fprintf(pFile, "DateFormat=%i\n",				Profile.DateFormat);
 		fprintf(pFile, "BlockDuplicate=%i\n",			Profile.BlockDuplicate);

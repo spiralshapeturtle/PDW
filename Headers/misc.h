@@ -39,6 +39,7 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode);
 void SortGroupCall(int groupbit);
 void Check4_MissedGroupcalls(void);
 void Remove_MissedGroupcall(int groupbit);
+void MissedGroupcallSessionSummary(void);
 
 char LogFileHandling(int file, char *szFileName, int action);
 

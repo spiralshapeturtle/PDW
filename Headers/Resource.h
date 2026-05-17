@@ -159,6 +159,7 @@
 #define IDC_MONTHNUMBER            701
 #define IDC_MONTHNUMBER2           702
 #define IDC_SEPARATOR              703
+#define IDC_SEPARATOR_FILTER       704
 
 #define IDC_COLORBACKGND           710
 #define IDC_COLORCAPCODE           711
