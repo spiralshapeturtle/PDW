@@ -15,6 +15,7 @@ set( PDW_INCLUDES
   ${CMAKE_CURRENT_SOURCE_DIR}/smtp.h
   ${CMAKE_CURRENT_SOURCE_DIR}/smtp_int.h
   ${CMAKE_CURRENT_SOURCE_DIR}/webhook.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/winrt_toast.h
 
   PARENT_SCOPE
 )
@@ -31,6 +32,7 @@ set( PDW_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/rs232.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/smtp.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/webhook.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/winrt_toast.cpp
 
   PARENT_SCOPE
 )

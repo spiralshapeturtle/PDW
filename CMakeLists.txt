@@ -68,6 +68,7 @@ add_executable( PDW WIN32
 
 # Required libraries
 target_link_libraries( PDW
+        runtimeobject.lib
         Comctl32.lib
         Winmm.lib
         Ws2_32.lib

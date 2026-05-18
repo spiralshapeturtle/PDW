@@ -317,6 +317,7 @@
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
 #include "utils\debuglog.h"
+#include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
 #include "headers\helper_funcs.h"	// Extra functies van Andreas
 
@@ -692,6 +693,9 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 		MessageBox(ghWnd, "PDW is already running", "Warning", MB_ICONINFORMATION);
 		return (FALSE);
 	}
+
+	// FIX [WinRTToast]: initialiseer WinRT Toast vóór het hoofdvenster; g_bWinRTAvail=false op pre-Win8
+	g_bWinRTAvail = WinRTToastInit();
 
 	if ((ghWnd = InitInstance(hInstance, nCmdShow)) == NULL)
 	{

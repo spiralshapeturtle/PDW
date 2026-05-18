@@ -21,6 +21,7 @@
 #include "utils\smtp.h"
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
+#include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
 #define FILTER_PARAM_LEN	500
 #define MAXIMUM_GROUPSIZE	1000
@@ -444,22 +445,31 @@ static void TrayBalloonFlush()
 	if (!s_trayAccumActive) return;
 	s_trayAccumActive = false;
 	if (!g_bTrayIconActive) { s_trayAccumLabels[0] = '\0'; s_trayAccumMsg[0] = '\0'; return; } // FIX [TrayBalloon]: icon vereist; reset volledig
-	NOTIFYICONDATA nid = {0};
-	nid.cbSize      = sizeof(NOTIFYICONDATA);
-	nid.hWnd        = ghWnd;
-	nid.uID         = 110;
-	nid.uFlags      = NIF_INFO;
-	// FIX [TrayBalloon]: LoadImage met SM_CXSMICON ipv LoadIcon(32x32) — Windows 11 weigert NIIF_USER met verkeerde icongrootte
-	nid.hBalloonIcon = (HICON)LoadImage(ghInstance, MAKEINTRESOURCE(PDWICON), IMAGE_ICON,
-	                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
-	nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
-	nid.uTimeout     = 5000;
-	// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
-	// Geen "PDW" fallback: Windows toont FileDescription ("PDW") al als attributieregel boven de ballon
-	_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", Profile.trayNotifyShowLabel ? s_trayAccumLabels : "");
-	_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", s_trayAccumMsg);
-	Shell_NotifyIcon(NIM_MODIFY, &nid);
-	if (nid.hBalloonIcon) { DestroyIcon(nid.hBalloonIcon); nid.hBalloonIcon = NULL; }
+	const char *szTitle = Profile.trayNotifyShowLabel ? s_trayAccumLabels : "";
+	const char *szBody  = s_trayAccumMsg;
+	if (g_bWinRTAvail) // FIX [WinRTToast]: WinRT toast vervangt balloon voor Action Center persistentie
+	{
+		WinRTToastNotify(szTitle, szBody);
+	}
+	else
+	{
+		NOTIFYICONDATA nid = {0};
+		nid.cbSize      = sizeof(NOTIFYICONDATA);
+		nid.hWnd        = ghWnd;
+		nid.uID         = 110;
+		nid.uFlags      = NIF_INFO;
+		// FIX [TrayBalloon]: LoadImage met SM_CXSMICON ipv LoadIcon(32x32) — Windows 11 weigert NIIF_USER met verkeerde icongrootte
+		nid.hBalloonIcon = (HICON)LoadImage(ghInstance, MAKEINTRESOURCE(PDWICON), IMAGE_ICON,
+		                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+		nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
+		nid.uTimeout     = 5000;
+		// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
+		// Geen "PDW" fallback: Windows toont FileDescription ("PDW") al als attributieregel boven de ballon
+		_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", szTitle);
+		_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", szBody);
+		Shell_NotifyIcon(NIM_MODIFY, &nid);
+		if (nid.hBalloonIcon) { DestroyIcon(nid.hBalloonIcon); nid.hBalloonIcon = NULL; }
+	}
 	s_trayAccumLabels[0] = '\0';
 }
 
@@ -1633,22 +1643,30 @@ void ShowMessage()
 			}
 			else
 			{
-				NOTIFYICONDATA nid = {0};
-				nid.cbSize       = sizeof(NOTIFYICONDATA);
-				nid.hWnd         = ghWnd;
-				nid.uID          = 110;
-				nid.uFlags       = NIF_INFO;
-				// FIX [TrayBalloon]: LoadImage met SM_CXSMICON ipv LoadIcon(32x32) — Windows 11 weigert NIIF_USER met verkeerde icongrootte
-				nid.hBalloonIcon = (HICON)LoadImage(ghInstance, MAKEINTRESOURCE(PDWICON), IMAGE_ICON,
-				                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
-				nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
-				nid.uTimeout     = 5000;
-				// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
-				// Geen "PDW" fallback: Windows toont FileDescription ("PDW") al als attributieregel boven de ballon
-				_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", Profile.trayNotifyShowLabel ? szBalloonLabel : "");
-				_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", szBalloonMsg);
-				Shell_NotifyIcon(NIM_MODIFY, &nid);
-				if (nid.hBalloonIcon) { DestroyIcon(nid.hBalloonIcon); nid.hBalloonIcon = NULL; }
+				const char *szTitle = Profile.trayNotifyShowLabel ? szBalloonLabel : "";
+				if (g_bWinRTAvail) // FIX [WinRTToast]: WinRT toast vervangt balloon voor Action Center persistentie
+				{
+					WinRTToastNotify(szTitle, szBalloonMsg);
+				}
+				else
+				{
+					NOTIFYICONDATA nid = {0};
+					nid.cbSize       = sizeof(NOTIFYICONDATA);
+					nid.hWnd         = ghWnd;
+					nid.uID          = 110;
+					nid.uFlags       = NIF_INFO;
+					// FIX [TrayBalloon]: LoadImage met SM_CXSMICON ipv LoadIcon(32x32) — Windows 11 weigert NIIF_USER met verkeerde icongrootte
+					nid.hBalloonIcon = (HICON)LoadImage(ghInstance, MAKEINTRESOURCE(PDWICON), IMAGE_ICON,
+					                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+					nid.dwInfoFlags  = nid.hBalloonIcon ? NIIF_USER : NIIF_INFO;
+					nid.uTimeout     = 5000;
+					// FIX [TrayBalloon]: label als titel (63 chars, labels altijd kort); bericht in body (255 chars)
+					// Geen "PDW" fallback: Windows toont FileDescription ("PDW") al als attributieregel boven de ballon
+					_snprintf(nid.szInfoTitle, sizeof(nid.szInfoTitle)-1, "%s", szTitle);
+					_snprintf(nid.szInfo,      sizeof(nid.szInfo)-1,      "%s", szBalloonMsg);
+					Shell_NotifyIcon(NIM_MODIFY, &nid);
+					if (nid.hBalloonIcon) { DestroyIcon(nid.hBalloonIcon); nid.hBalloonIcon = NULL; }
+				}
 			}
 		}
 	}
