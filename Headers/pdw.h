@@ -7,7 +7,7 @@
 
 #define FILTER_CAPCODE_LEN  9	// longest is FLEX long (9 chars)
 #define FILTER_LABEL_LEN    256	// was 70, see issue #21
-#define FILTER_TEXT_LEN     40	// PH: was 25
+#define FILTER_TEXT_LEN     120	// FIX [FilterText]: was 40 (PH: was 25) — bumped naar 120 voor langere roepnummerlijsten
 #define FILTER_FILE_LEN     128	// PH: was 256
 
 #define MAX_STR_LEN			5120

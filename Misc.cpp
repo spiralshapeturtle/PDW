@@ -2071,6 +2071,23 @@ bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay)
 }
 
 
+// FIX [FilterText]: case-insensitive substring search voor de '&'-multi-match branch.
+// De andere filterpaden gebruiken stricmp/strnicmp (case-insensitive); alleen het
+// '&'-pad gebruikte strstr (case-sensitive). Dit helpertje maakt het consistent.
+static char *stristr_local(const char *haystack, const char *needle)
+{
+	size_t needle_len;
+	if (!haystack || !needle) return NULL;
+	if (!*needle) return (char *)haystack;
+	needle_len = strlen(needle);
+	for (; *haystack; haystack++)
+	{
+		if (_strnicmp(haystack, needle, needle_len) == 0) return (char *)haystack;
+	}
+	return NULL;
+}
+
+
 int Check_4_Filtermatch()
 {
 	int msg_len, code_len, txt_len, nFilters;
@@ -2224,7 +2241,7 @@ int Check_4_Filtermatch()
 						}
 						szTextTMP[j]='\0';
 
-						pSearch = strstr(&Current_MSG[MSG_MESSAGE][k], szTextTMP);
+						pSearch = stristr_local(&Current_MSG[MSG_MESSAGE][k], szTextTMP);	// FIX [FilterText]: was strstr (case-sensitive) — nu consistent met overige filterpaden
 
 						if (!pSearch)
 						{

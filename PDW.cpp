@@ -434,7 +434,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.4.1";			// Current version info
+char *pdw_version = "PDW v3.4.2";			// Current version info
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;
@@ -3075,7 +3075,7 @@ BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemText(hDlg, IDC_DEBUG_INPUT, szTEMP);
 		SetDlgItemText(hDlg, IDC_DEBUG_FLEXTIME, bFlexTIME_detected ? "Detected" : "Not detected");
 		SetDlgItemText(hDlg, IDC_DEBUG_RESET,
-			"Shift+F12 : reset missed / buffer / fragmented\r\n"
+			"Shift+F12     : reset missed / buffer / fragmented\r\n"
 			"Alt+Shift+F12 : full reset (incl. messages + groupcalls)");
 
 		SendMessage(hDlg, WM_WININICHANGE, 0, 0L);
@@ -9628,7 +9628,7 @@ BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemText(hDlg, IDC_MQTT_CLIENTID,      Profile.szMqttClientId);
 		SetDlgItemText(hDlg, IDC_MQTT_USER,          Profile.szMqttUser);
 		SetDlgItemText(hDlg, IDC_MQTT_PASSWORD,      Profile.szMqttPassword);
-		SetDlgItemText(hDlg, IDC_MQTT_TOPIC,         Profile.szMqttTopic[0] ? Profile.szMqttTopic : "pdw/messages");
+		SetDlgItemText(hDlg, IDC_MQTT_TOPIC,         Profile.szMqttTopic[0] ? Profile.szMqttTopic : "pdw");
 		SendDlgItemMessage(hDlg, IDC_MQTT_TOPIC_SUFFIX, CB_ADDSTRING, 0, (LPARAM)"None - all messages to base topic (1 sensor)");
 		SendDlgItemMessage(hDlg, IDC_MQTT_TOPIC_SUFFIX, CB_ADDSTRING, 0, (LPARAM)"/{capcode} - separate sub-topic per capcode");
 		SendDlgItemMessage(hDlg, IDC_MQTT_TOPIC_SUFFIX, CB_SETCURSEL, (WPARAM)(Profile.mqttTopicSuffix ? 1 : 0), 0);
@@ -10308,10 +10308,10 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->mqttEnabled     = (INT) GetPrivateProfileInt("MQTT", TEXT("Enabled"),     0,              lpszIniPathName);
 	GetPrivateProfileString("MQTT", TEXT("Broker"),   "localhost", pProfile->szMqttBroker,   sizeof(pProfile->szMqttBroker),   lpszIniPathName);
 	pProfile->mqttPort        = (INT) GetPrivateProfileInt("MQTT", TEXT("Port"),        1883,           lpszIniPathName);
-	GetPrivateProfileString("MQTT", TEXT("ClientId"), "PDW-01",    pProfile->szMqttClientId, sizeof(pProfile->szMqttClientId), lpszIniPathName);
+	GetPrivateProfileString("MQTT", TEXT("ClientId"), "PDW",    pProfile->szMqttClientId, sizeof(pProfile->szMqttClientId), lpszIniPathName);
 	GetPrivateProfileString("MQTT", TEXT("User"),     "",          pProfile->szMqttUser,     sizeof(pProfile->szMqttUser),     lpszIniPathName);
 	GetPrivateProfileString("MQTT", TEXT("Password"), "",          pProfile->szMqttPassword, sizeof(pProfile->szMqttPassword), lpszIniPathName);
-	GetPrivateProfileString("MQTT", TEXT("Topic"),    "pdw/messages", pProfile->szMqttTopic, sizeof(pProfile->szMqttTopic),    lpszIniPathName);
+	GetPrivateProfileString("MQTT", TEXT("Topic"),    "pdw", pProfile->szMqttTopic, sizeof(pProfile->szMqttTopic),    lpszIniPathName);
 	pProfile->mqttQos         = (INT) GetPrivateProfileInt("MQTT", TEXT("QoS"),         0,              lpszIniPathName);
 	pProfile->mqttRetain      = (INT) GetPrivateProfileInt("MQTT", TEXT("Retain"),      0,              lpszIniPathName);
 	pProfile->mqttLogToFile   = (INT) GetPrivateProfileInt("MQTT", TEXT("LogToFile"),   0,              lpszIniPathName);

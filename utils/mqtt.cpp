@@ -53,10 +53,10 @@ extern TCHAR szPath[];   // from Initapp.cpp — PDW executable directory
 // ---------------------------------------------------------------------------
 
 static char g_szBroker  [256]  = "";
-static char g_szClientId[64]   = "PDW-01";
+static char g_szClientId[64]   = "PDW";
 static char g_szUser    [64]   = "";
 static char g_szPassword[128]  = "";
-static char g_szTopic   [256]  = "pdw/messages";
+static char g_szTopic   [256]  = "pdw";
 static int  g_iPort            = 1883;
 static int  g_iQos             = 0;
 static int  g_iRetain          = 0;
@@ -413,7 +413,7 @@ static BOOL ClientCreate(void)
     szURI[sizeof(szURI) - 1] = '\0';
 
     char szId[80];
-    strncpy(szId, g_szClientId[0] ? g_szClientId : "PDW-01", sizeof(szId) - 1);
+    strncpy(szId, g_szClientId[0] ? g_szClientId : "PDW", sizeof(szId) - 1);
     szId[sizeof(szId) - 1] = '\0';
 
     int rc = MQTTClient_create(&g_mqttClient, szURI, szId,
@@ -628,7 +628,7 @@ void MqttInit(void)
     g_szPassword[sizeof(g_szPassword) - 1] = '\0';
     g_szTopic   [sizeof(g_szTopic)    - 1] = '\0';
 
-    if (!g_szTopic[0]) strcpy(g_szTopic, "pdw/messages");
+    if (!g_szTopic[0]) strcpy(g_szTopic, "pdw");
 
     g_iPort        = Profile.mqttPort  > 0 ? Profile.mqttPort : 1883;
     g_iQos         = Profile.mqttQos  >= 0 && Profile.mqttQos <= 2 ? Profile.mqttQos : 0;
