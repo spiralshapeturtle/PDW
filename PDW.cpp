@@ -1272,7 +1272,15 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				break;
 
 				case IDM_EXIT:
-					PostMessage(hWnd, WM_CLOSE, 0, 0L);
+					// FIX [ExitConfirm]: menu/tray Exit PDW gaat NIET via WM_CLOSE,
+					// zodat de SystemTray-bypass (FIX [TrayClose]) niet getriggerd wordt
+					// en de Confirm-Exit dialoog ook werkt als SystemTray aan staat.
+					if (Profile.confirmExit)
+					{
+						if (MessageBox(ghWnd, "Exit PDW - Sure?", "PDW Exit",
+									   MB_ICONQUESTION | MB_OKCANCEL) == IDCANCEL) break;
+					}
+					DestroyWindow(hWnd);   // direct naar WM_DESTROY, slaat WM_CLOSE over
 				break;
 
 				case IDT_TOOLBAR_BTN4:
@@ -1792,8 +1800,12 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			case WM_CONTEXTMENU:
 			case WM_RBUTTONUP:
 			{
-				ShowContextMenu(HMENU_SYSTRAY, ghWnd);
+				// FIX [TrayMenu]: SetForegroundWindow MOET vóór TrackPopupMenu (KB135788),
+				// anders dismist het tray-menu zichzelf bij de eerstvolgende input — het
+				// menu "flasht" en is weg. PostMessage(WM_NULL) na afloop ruimt een
+				// bekende Win9x-quirk op (laat staan; geen kwaad voor moderne Windows).
 				SetForegroundWindow(ghWnd);
+				ShowContextMenu(HMENU_SYSTRAY, ghWnd);
 				PostMessage(ghWnd, WM_NULL, 0, 0);
 			}
 			break;
