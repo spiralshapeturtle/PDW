@@ -13,6 +13,9 @@
 
 #include "openssl\ssl.h"
 #include "openssl\err.h"
+#include "openssl\x509.h"
+#include <wincrypt.h>
+#pragma comment(lib, "crypt32.lib")
 
 #define MY_BUFF_SIZE 1024
 
@@ -130,6 +133,9 @@ enum SSLError
 	LOGIN_NOT_SUPPORTED
 };
 
+// FIX [SmtpTLS]: accept hostname so SNI and cert verification can be set per-connect
+static char g_szTlsHostname[256] = "";
+
 int initOpenSSL()
 {
 	SSL_library_init();
@@ -137,6 +143,25 @@ int initOpenSSL()
 	m_ctx = SSL_CTX_new (TLS_client_method());
 	if(m_ctx == NULL)
 		return SSL_PROBLEM;
+
+	// FIX [SmtpTLS]: enforce TLS 1.2 minimum; disable broken legacy versions
+	SSL_CTX_set_min_proto_version(m_ctx, TLS1_2_VERSION);
+
+	// FIX [SmtpTLS]: require certificate verification
+	SSL_CTX_set_verify(m_ctx, SSL_VERIFY_PEER, NULL);
+
+	// FIX [SmtpTLS]: load system CA store so Windows-trusted certificates are accepted
+	HCERTSTORE hStore = CertOpenSystemStoreA(0, "ROOT");
+	if (hStore) {
+		X509_STORE *x509Store = SSL_CTX_get_cert_store(m_ctx);
+		PCCERT_CONTEXT pCert  = NULL;
+		while ((pCert = CertEnumCertificatesInStore(hStore, pCert)) != NULL) {
+			const unsigned char *p = pCert->pbCertEncoded;
+			X509 *x = d2i_X509(NULL, &p, (long)pCert->cbCertEncoded);
+			if (x) { X509_STORE_add_cert(x509Store, x); X509_free(x); }
+		}
+		CertCloseStore(hStore, 0);
+	}
 
 	return CSMTP_NO_ERROR;
 }
@@ -149,12 +174,20 @@ int openSSLConnect()
 	if(m_ctx == NULL)
 		return SSL_PROBLEM;
 
-	m_ssl = SSL_new (m_ctx);   
+	m_ssl = SSL_new (m_ctx);
 	if(m_ssl == NULL)
 		return SSL_PROBLEM;
 
 	SSL_set_fd (m_ssl, (int)smtp_socket);
 	SSL_set_mode(m_ssl, SSL_MODE_AUTO_RETRY);
+
+	// FIX [SmtpTLS]: set SNI hostname so virtual-hosted servers send the right cert
+	if (g_szTlsHostname[0])
+		SSL_set_tlsext_host_name(m_ssl, g_szTlsHostname);
+
+	// FIX [SmtpTLS]: enable hostname verification against the peer certificate
+	if (g_szTlsHostname[0])
+		SSL_set1_host(m_ssl, g_szTlsHostname);
 
 	int res = 0;
 	fd_set fdwrite;
@@ -671,8 +704,13 @@ SOCKET clientSocket(char *address,int port)
 		AddResponse("clientSocket() : Could not create socket\n");
 		return(INVALID_SOCKET);
 	}
-	// connect
-	connect(s,(struct sockaddr *) &sa,sizeof(sa));
+	// FIX [SmtpConnect]: check connect() return; previous code silently returned a bad socket
+	if (connect(s, (struct sockaddr *) &sa, sizeof(sa)) == SOCKET_ERROR) {
+		OUTPUTDEBUGMSG((("clientSocket() : connect() failed WSAError=%d\n"), WSAGetLastError()));
+		AddResponse("clientSocket() : connect() failed\n");
+		closesocket(s);
+		return(INVALID_SOCKET);
+	}
 	return(s);
 }
 
@@ -745,12 +783,22 @@ static void smtpDisconnect(SOCKET sfd)
 	closesocket(sfd) ;
 }
 
+// FIX [SmtpHelo]: forward-declaratie — smtpResponse() wordt hieronder in smtpConnect()
+// aangeroepen maar pas later gedefinieerd (use-before-definition gaf C3861)
+static int smtpResponse(int sfd);
+
+// FIX [SmtpStartTls]: poort 465 = impliciete TLS (meteen handshaken); elke andere poort
+// met SSL aangevinkt (587/25) = STARTTLS — verbinding blijft plaintext tot na de eerste
+// EHLO en wordt dan in smtpHelo() versleuteld. Per connect opnieuw bepaald in smtpConnect().
+#define SMTP_IMPLICIT_TLS_PORT 465
+static BOOL g_useStartTls = FALSE;
+
 // connect to SMTP server and returns the socket fd
 static SOCKET smtpConnect(char *smtp_server,int port)
 {
 	SOCKET sfd;
 	int res;
-	
+
 	sfd = clientSocket(smtp_server,port);
 	if(sfd == INVALID_SOCKET) {
 		OUTPUTDEBUGMSG((("smtpConnect() : Could not connect to SMTP server \"%s\" at port %d\n"), smtp_server,port));
@@ -763,11 +811,28 @@ static SOCKET smtpConnect(char *smtp_server,int port)
 	// save it. we'll need it to clean up
 	smtp_socket = sfd;
 
+	// FIX [SmtpTLS]: save hostname for SNI / cert verification before initOpenSSL()
+	_snprintf(g_szTlsHostname, sizeof(g_szTlsHostname) - 1, "%s", smtp_server);
+	g_szTlsHostname[sizeof(g_szTlsHostname) - 1] = '\0';
+
+	// FIX [SmtpStartTls]: kies TLS-model op basis van de poort
+	g_useStartTls = FALSE;
 	if (Profile.ssl) {
-		if ((res = initOpenSSL()) == CSMTP_NO_ERROR)
-			res = openSSLConnect();
-		OUTPUTDEBUGMSG(("SSL Connect res = %d\n",res));
+		if (port == SMTP_IMPLICIT_TLS_PORT) {
+			// impliciete TLS (SMTPS): handshake direct na het TCP-connect
+			if ((res = initOpenSSL()) == CSMTP_NO_ERROR)
+				res = openSSLConnect();
+			OUTPUTDEBUGMSG(("SSL Connect res = %d\n",res));
+		} else {
+			// STARTTLS (submission 587 e.d.): TLS-upgrade gebeurt in smtpHelo() na de eerste EHLO
+			g_useStartTls = TRUE;
+		}
 	}
+
+	// FIX [SmtpHelo]: lees de 220-greeting hier — anders leest smtpHelo() hem als HELO-antwoord
+	// en wordt de echte HELO-response (bijv. 501) pas bij AUTH gelezen → AUTH faalt onterecht
+	// (bij STARTTLS wordt deze greeting in plaintext gelezen — correct, TLS komt pas na EHLO)
+	smtpResponse(sfd);
 
 	return(sfd);
 }
@@ -781,9 +846,17 @@ static int smtpResponse(int sfd)
 	memset(buf,0,sizeof(buf));
 
 	if (m_ssl != NULL)
-		err = receiveData_SSL(m_ssl,buf);
-	else
-		n = sockGets(sfd, buf, sizeof(buf)-1);
+		err = receiveData_SSL(m_ssl,buf);     // SSL-pad drained de hele reply al
+	else {
+		// FIX [SmtpStartTls]: lees de volledige (mogelijk multiline) SMTP-reply.
+		// EHLO antwoordt met meerdere "250-..." regels en sluit af met "250 ..." (spatie
+		// op positie 3). sockGets() leest één regel; zonder deze lus blijven de overige
+		// regels in de TCP-buffer staan en desynchroniseert het volgende commando.
+		do {
+			memset(buf,0,sizeof(buf));
+			n = sockGets(sfd, buf, sizeof(buf)-1);
+		} while (n > 0 && strlen(buf) >= 4 && buf[3] == '-');
+	}
 //	OUTPUTDEBUGMSG((("smtpResponse() : %s\n"),buf));
 	AddResponse(buf) ;
 	err = atoi(buf) ;
@@ -803,22 +876,81 @@ static int smtpResponse(int sfd)
 	return (-1);
 }
 
-// SMTP: HELO
+// FIX [SmtpHelo]: bouw een RFC 5321-geldig EHLO-argument.
+// Een kale "127.0.0.1" is ongeldig (numeriek = geen domeinnaam én geen address-literal) en
+// wordt door strikte servers geweigerd ("501 Please fix your HELO string", o.a. Telenet).
+// Voorkeur: (1) door de gebruiker ingesteld domein, anders (2) het lokale socket-IP als
+// address-literal "[a.b.c.d]" — syntactisch altijd geldig en door elke server geaccepteerd.
+static void smtpBuildHeloArg(char *out, size_t outlen)
+{
+	// 1. expliciet geconfigureerd domein (maar negeer het kapotte oude bare-IP default)
+	if (mail.helo_domain && mail.helo_domain[0] &&
+		strcmp(mail.helo_domain, "127.0.0.1") != 0) {
+		_snprintf(out, outlen - 1, "%s", mail.helo_domain);
+		out[outlen - 1] = '\0';
+		return;
+	}
+
+	// 2. lokaal IP van de verbonden socket als RFC 5321 address-literal
+	struct sockaddr_in sa;
+	int salen = sizeof(sa);
+	memset(&sa, 0, sizeof(sa));
+	if (smtp_socket != INVALID_SOCKET &&
+		getsockname(smtp_socket, (struct sockaddr *) &sa, &salen) == 0 &&
+		sa.sin_family == AF_INET) {
+		unsigned char *ip = (unsigned char *) &sa.sin_addr;
+		_snprintf(out, outlen - 1, "[%u.%u.%u.%u]", ip[0], ip[1], ip[2], ip[3]);
+		out[outlen - 1] = '\0';
+		return;
+	}
+
+	// 3. laatste redmiddel — bracketed literal (nooit een kale 127.0.0.1)
+	_snprintf(out, outlen - 1, "[127.0.0.1]");
+	out[outlen - 1] = '\0';
+}
+
+// FIX [SmtpHelo]: EHLO i.p.v. HELO — AUTH LOGIN vereist ESMTP; HELO kent geen extensies.
+// FIX [SmtpStartTls]: bij STARTTLS-modus (poort 587 e.d.) wordt na de eerste EHLO de
+// verbinding versleuteld en daarna verplicht een tweede EHLO over TLS gestuurd.
 static int smtpHelo(int sfd)
 {
-	// read off the greeting 
-	//smtpResponse(sfd);
-	_snprintf(buf,sizeof(buf)-1,"HELO %s\r\n", mail.helo_domain);
-//	_snprintf(buf,sizeof(buf)-1,"EHLO %s\r\n", mail.helo_domain);
+	char szHelo[300];
+	smtpBuildHeloArg(szHelo, sizeof(szHelo));
+
+	_snprintf(buf,sizeof(buf)-1,"EHLO %s\r\n", szHelo);
 	sockPuts(sfd,buf);
-	return (smtpResponse(sfd));
+	if (smtpResponse(sfd))
+		return (-1);
+
+	// STARTTLS-upgrade: alleen in STARTTLS-modus en zolang er nog geen TLS-laag is
+	if (g_useStartTls && m_ssl == NULL) {
+		_snprintf(buf,sizeof(buf)-1,"STARTTLS\r\n");
+		sockPuts(sfd,buf);
+		if (smtpResponse(sfd))                 // server moet 220 sturen
+			return (-1);
+
+		if (initOpenSSL() != CSMTP_NO_ERROR || openSSLConnect() != CSMTP_NO_ERROR) {
+			OUTPUTDEBUGMSG((("smtpHelo() : STARTTLS handshake mislukt\n")));
+			AddResponse("smtpHelo() : STARTTLS handshake failed\n");
+			return (-1);
+		}
+
+		// na STARTTLS verplicht opnieuw EHLO, nu over de versleutelde verbinding
+		_snprintf(buf,sizeof(buf)-1,"EHLO %s\r\n", szHelo);
+		sockPuts(sfd,buf);
+		if (smtpResponse(sfd))
+			return (-1);
+	}
+
+	return (0);
 }
 
 
 // SMTP: Authentication
 static int smtpLogin(int sfd)
 {
-	char szTmp[128] ;
+	// FIX [SmtpLogin]: base64 of MAIL_TEXT_LEN(100) bytes needs 136 bytes; 128 was too small
+	char szTmp[200] ;
 
 
 	if(mail.options & MAIL_OPTION_AUTH) {
@@ -938,12 +1070,26 @@ static int smtpEom(int sfd)
 	return (smtpResponse(sfd));
 }
 
+// FIX [SmtpDotStuff]: RFC 5321 s4.5.2 -- escape DATA lines starting with '.'
+static void smtpDotStuff(char *szOut, size_t outLen, const char *szIn)
+{
+	const char *p = szIn;
+	char *q = szOut, *qEnd = szOut + outLen - 1;
+	if (*p == '.' && q < qEnd) *q++ = '.';
+	while (*p && q < qEnd) {
+		*q++ = *p;
+		if (*p == '\n' && *(p + 1) == '.' && q < qEnd) *q++ = '.';
+		p++;
+	}
+	*q = '\0';
+}
+
 // SMTP: mail
 static int smtpMail(int sfd, char *data)
 {	
 	char szBuffer[128], *pTmp ;
-	char szSubject[1024]="";
-	char szBody[1024]="";
+	char szSubject[MAX_MAIL_LEN + 32]="";
+	char szBody[MAX_MAIL_LEN + 32]="";
 	extern int nSMTPemails;
 
 	for (int i=0; data[i]!=0; i++)
@@ -1019,7 +1165,10 @@ static int smtpMail(int sfd, char *data)
 	
 	if ((mail.options & MAIL_OPTION_MSG) && szBody[0])
 	{
-		sockPuts(sfd, szBody);
+		// FIX [SmtpDotStuff]: escape body lines starting with '.' per RFC 5321
+		char szBodyDs[2 * MAX_MAIL_LEN + 64];
+		smtpDotStuff(szBodyDs, sizeof(szBodyDs), szBody);
+		sockPuts(sfd, szBodyDs);
 		sockPuts(sfd,"\r\n");
 	}
 	nSMTPemails++;
@@ -1062,10 +1211,8 @@ int xSendMail(THEMAIL *pMail)
 		pTmp = MAILSEND_DEF_SUB;
 		OUTPUTDEBUGMSG((("No subject specified using default subject %s"), pTmp));
 	}
-	if (pMail->helo_domain == (char *) NULL || pMail->helo_domain[0] == '\0') {
-		pMail->helo_domain= "127.0.0.1" ;
-		OUTPUTDEBUGMSG((("No domain specified using default %s"), pMail->helo_domain));
-	}
+	// FIX [SmtpHelo]: geen helo-fallback meer hier — smtpHelo()/smtpBuildHeloArg() bepaalt het
+	// EHLO-argument pas wanneer de socket verbonden is (configured domein, anders [lokaal-IP]).
 
 	// Retry once: a stale persistent socket (server-side idle timeout) fails on the
 	// first transaction attempt; the second attempt reconnects fresh and succeeds.
