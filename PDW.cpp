@@ -434,7 +434,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.4.2";			// Current version info
+char *pdw_version = "PDW v3.4.3";			// Current version info
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;
@@ -8332,7 +8332,10 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 		if (filter.type != TEXT_FILTER)
 		{
-			if (!multiple_edit) EnableWindow(GetDlgItem(hDlg, IDC_FILTERCAPCODE), true);
+			// FIX [Filter]: Address/capcode ook in multiple-edit bewerkbaar, zodat een
+			// gekopieerde set filters in bulk een nieuwe capcode kan krijgen. "Don't change"
+			// blijft de sentinel die capcodes ongemoeid laat (zie IDOK: strncmp "Don't cha").
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTERCAPCODE), true);
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTERTEXT), capcode);
 		}
 		else	// if TEXT filter
@@ -10301,7 +10304,8 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	GetPrivateProfileString("SMTP", TEXT("From"), "", pProfile->szMailFrom, MAIL_TEXT_LEN, lpszIniPathName);
 	GetPrivateProfileString("SMTP", TEXT("User"), "", pProfile->szMailUser, MAIL_TEXT_LEN, lpszIniPathName);
 	GetPrivateProfileString("SMTP", TEXT("Password"), "", pProfile->szMailPassword, MAIL_TEXT_LEN, lpszIniPathName);
-	pProfile->iMailPort = (INT) GetPrivateProfileInt("SMTP", TEXT("Port"), 25, lpszIniPathName);
+	// FIX [SmtpPort]: default 587 (submission, RFC 8314) instead of legacy port 25
+	pProfile->iMailPort = (INT) GetPrivateProfileInt("SMTP", TEXT("Port"), 587, lpszIniPathName);
 	pProfile->nMailOptions = (INT) GetPrivateProfileInt("SMTP", TEXT("Options"), (MAIL_OPTION_ADDRESS | MAIL_OPTION_SUBJECT), lpszIniPathName);
 	pProfile->ssl = (INT) GetPrivateProfileInt("SMTP", TEXT("SSL"), 0, lpszIniPathName);
 	

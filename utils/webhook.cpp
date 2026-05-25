@@ -181,7 +181,13 @@ static void AppendEscaped(char *dst, int *pos, int maxLen, const char *src)
         else if (c == '\r') { dst[(*pos)++] = '\\'; dst[(*pos)++] = 'r';  }
         else if (c == '\n') { dst[(*pos)++] = '\\'; dst[(*pos)++] = 'n';  }
         else if (c == '\t') { dst[(*pos)++] = '\\'; dst[(*pos)++] = 't';  }
-        else if (c < 32)
+        // FIX [JSON UTF-8]: escape control chars (<0x20) AND high bytes (>=0x7F) as
+        // \u00XX. ASTRID/encrypted messages carry raw non-UTF-8 bytes (e.g. orphan
+        // 0xBB); emitting them raw makes the payload invalid UTF-8, so strict JSON
+        // consumers (Node-RED, HA) reject it or fall back to a raw byte array. Pure-
+        // ASCII \u escapes are always valid UTF-8 -> always parsed as JSON. For
+        // Latin-1 labels \u00XX is the correct code point, so accented text stays intact.
+        else if (c < 32 || c >= 0x7F)
         {
             char esc[8];
             sprintf(esc, "\\u%04X", c);
@@ -554,8 +560,11 @@ static void DoSend(const WebhookJob *job)
         szAddress[sizeof(szAddress) - 1] = '\0';
     }
 
-    // Build JSON in the configured format
-    char jsonBody[WEBHOOK_MSG_LEN + WEBHOOK_ADDR_LEN + 2048];
+    // Build JSON in the configured format.
+    // FIX [JSON UTF-8]: \u00XX escaping expands each byte up to 6 chars and the
+    // PDW-native format emits the message twice; size for that worst case so an
+    // encrypted/binary or long assembled message is never truncated into invalid JSON.
+    char jsonBody[2 * 6 * WEBHOOK_MSG_LEN + 6 * WEBHOOK_ADDR_LEN + WEBHOOK_SUBSCRIBERS_LEN + 1024];
     if (g_bPagermonFormat)
         BuildJSONFlat(jsonBody, sizeof(jsonBody), szAddress, job);
     else
