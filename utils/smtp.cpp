@@ -17,7 +17,8 @@
 #include <wincrypt.h>
 #pragma comment(lib, "crypt32.lib")
 
-#define MY_BUFF_SIZE 1024
+// FIX [L3]: increased from 1024 — verbose EHLO replies can exceed 1 kB
+#define MY_BUFF_SIZE 4096
 
 static SOCKET smtp_socket = INVALID_SOCKET;
 static char buf[MY_BUFF_SIZE];
@@ -746,6 +747,14 @@ int sockPuts(SOCKET sock,char *str)
 	return(sockWrite(sock,str,strlen(str)));
 }
 
+// FIX [M5]: send without echoing to the response listbox — used for AUTH credentials
+static int sockPutsSilent(SOCKET sock, const char *str)
+{
+	if (m_ssl != NULL)
+		return sendData_SSL(m_ssl, (char *)str);
+	return sockWrite(sock, (char *)str, strlen(str));
+}
+
 int sockGets(SOCKET sockfd,char *str,size_t count)
 {
 	int bytesRead;
@@ -866,7 +875,8 @@ static int smtpResponse(int sfd)
 		strcpy(buf+4, tmp) ;
 	}
 
-	if(buf[0] == '1' || buf[0] == '2' || buf[0] == '3' && buf[3] == A_SPACE) {
+	// FIX [L5]: add parentheses — && binds tighter than ||; 3xx needed A_SPACE check
+	if(buf[0] == '1' || buf[0] == '2' || (buf[0] == '3' && buf[3] == A_SPACE)) {
 		return (0);
 	}
 	OUTPUTDEBUGMSG((("smtpResponse(): ERROR!\n")));
@@ -958,12 +968,15 @@ static int smtpLogin(int sfd)
 		sockPuts(sfd,buf);
 		if(smtpResponse(sfd)) return(TRUE) ;
 
+		// FIX [M5]: send credentials silently — sockPuts echoes to response listbox
 		_snprintf(buf,sizeof(buf)-1, "%s\r\n", EncodeBase64(mail.user, szTmp));
-		sockPuts(sfd,buf);
+		AddResponse("[AUTH username - hidden]\n");
+		sockPutsSilent(sfd, buf);
 		if(smtpResponse(sfd)) return(TRUE) ;
 
 		_snprintf(buf,sizeof(buf)-1, "%s\r\n", EncodeBase64(mail.password, szTmp));
-		sockPuts(sfd,buf);
+		AddResponse("[AUTH password - hidden]\n");
+		sockPutsSilent(sfd, buf);
 		return(smtpResponse(sfd));
 	}
 	return(FALSE) ;
@@ -1070,14 +1083,19 @@ static int smtpEom(int sfd)
 	return (smtpResponse(sfd));
 }
 
-// FIX [SmtpDotStuff]: RFC 5321 s4.5.2 -- escape DATA lines starting with '.'
+// FIX [SmtpDotStuff]: RFC 5321 §4.5.2 — escape DATA lines starting with '.'.
+// FIX [M2b]: RFC 5321 §2.3.8 — normalize bare \n to \r\n in the same pass.
 static void smtpDotStuff(char *szOut, size_t outLen, const char *szIn)
 {
 	const char *p = szIn;
 	char *q = szOut, *qEnd = szOut + outLen - 1;
 	if (*p == '.' && q < qEnd) *q++ = '.';
 	while (*p && q < qEnd) {
+		// insert \r before bare \n (not already preceded by \r)
+		if (*p == '\n' && (p == szIn || *(p - 1) != '\r') && q + 1 < qEnd)
+			*q++ = '\r';
 		*q++ = *p;
+		// dot-stuff: escape leading dot on the line that follows a newline
 		if (*p == '\n' && *(p + 1) == '.' && q < qEnd) *q++ = '.';
 		p++;
 	}
