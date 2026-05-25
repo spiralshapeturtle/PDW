@@ -9294,7 +9294,8 @@ void SetMailOptions(HWND hDlg, int nOptions)
 	CheckDlgButton(hDlg, IDC_SMTP_MESSAGE, ((nOptions & MAIL_OPTION_MESSAGE) != 0)) ;
 	CheckDlgButton(hDlg, IDC_SMTP_LABEL,   ((nOptions & MAIL_OPTION_LABEL)   != 0)) ;
 	CheckDlgButton(hDlg, IDC_SMTP_AUTH,    ((nOptions & MAIL_OPTION_AUTH)    != 0)) ;
-	CheckDlgButton(hDlg, IDC_SMTP_SSL,    ((nOptions & MAIL_OPTION_SSL)    != 0)) ;
+	// FIX [GUIEncryption]: IDC_SMTP_SSL checkbox removed; IDC_SMTP_ENCRYPTION combobox is
+	// populated in WM_INITDIALOG where Profile.iMailPort is available for mode derivation.
 
 	SendDlgItemMessage(hDlg, IDC_SMTP_SETTING, CB_SETCURSEL, nOptions & MAIL_OPTION_MODES, 0L) ;
 	tmp = ((nOptions & 0x3000) >> 12) - 1 ;
@@ -9336,7 +9337,7 @@ int GetMailOptions(HWND hDlg)
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_AUTH), ret) ;
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_SENDIN), ret) ;
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_CHARSET), ret) ;
-	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_SSL), ret) ;
+	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_ENCRYPTION), ret) ;
 
 	if(ret)
 	{
@@ -9355,7 +9356,11 @@ int GetMailOptions(HWND hDlg)
 	nOptions += IsDlgButtonChecked(hDlg, IDC_SMTP_MESSAGE) ? MAIL_OPTION_MESSAGE : 0 ;
 	nOptions += IsDlgButtonChecked(hDlg, IDC_SMTP_LABEL)   ? MAIL_OPTION_LABEL	 : 0 ;
 	nOptions += IsDlgButtonChecked(hDlg, IDC_SMTP_AUTH)    ? MAIL_OPTION_AUTH	 : 0 ;
-	nOptions += IsDlgButtonChecked(hDlg, IDC_SMTP_SSL)    ? MAIL_OPTION_SSL		 : 0 ;
+	// FIX [GUIEncryption]: items 1 (STARTTLS) and 2 (SSL/TLS) both mean TLS enabled
+	{
+		int encSel = (int)SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_GETCURSEL, 0, 0L);
+		if (encSel >= 1) nOptions |= MAIL_OPTION_SSL;
+	}
 
 	ret = SendDlgItemMessage(hDlg, IDC_SMTP_SENDIN, CB_GETCURSEL, 0, 0L);
 	if(ret == CB_ERR) ret = 0 ;
@@ -9440,6 +9445,17 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemInt(hDlg, IDC_SMTP_ERRORS,    nSMTPerrors,   false);
 		SetDlgItemInt(hDlg, IDC_SMTP_LASTERROR, iSMTPlastError,false);
 		
+		// FIX [GUIEncryption]: populate Encryption combobox before SetMailOptions so
+		// GetMailOptions() (called inside SetMailOptions path) reads a valid selection.
+		SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR)"None");
+		SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR)"STARTTLS");
+		SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR)"SSL/TLS");
+		{
+			// backward-compat: derive mode from existing ssl flag + port
+			int encSel = (Profile.ssl == 0) ? 0 : (Profile.iMailPort == 465 ? 2 : 1);
+			SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_SETCURSEL, encSel, 0L);
+		}
+
 		SetMailOptions(hDlg, Profile.nMailOptions) ;
 		nOldOptions = GetMailOptions(hDlg) ;
 		return (TRUE);
@@ -9506,7 +9522,6 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			case IDC_SMTP_TYPE    :
 			case IDC_SMTP_MESSAGE :
 			case IDC_SMTP_BITRATE :
-			case IDC_SMTP_SSL	  :
 				Profile.nMailOptions = GetMailOptions(hDlg) ;
 				if((Profile.nMailOptions & MAIL_OPTION_MODES) && (!(Profile.nMailOptions & ~MAIL_OPTION_MODES)))
 				{
@@ -9514,6 +9529,16 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 					SetMailOptions(hDlg, nOldOptions) ;
 				}
 				nOldOptions = GetMailOptions(hDlg) ;
+				break ;
+			case IDC_SMTP_ENCRYPTION :
+				if (HIWORD(wParam) == CBN_SELCHANGE)
+				{
+					// FIX [GUIEncryption]: auto-fill port when encryption mode changes
+					static const int encPorts[] = { 25, 587, 465 };
+					int sel = (int)SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_GETCURSEL, 0, 0L);
+					if (sel >= 0 && sel <= 2) SetDlgItemInt(hDlg, IDC_SMTP_PORT, encPorts[sel], FALSE);
+					nOldOptions = GetMailOptions(hDlg);
+				}
 				break ;
 		}
 		break;

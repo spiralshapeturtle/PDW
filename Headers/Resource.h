@@ -430,6 +430,7 @@
 #define IDC_SMTP_ERRORS           1245
 #define IDC_SMTP_LASTERROR        1246
 #define IDC_SMTP_SSL			  1247
+#define IDC_SMTP_ENCRYPTION       1248
 
 #define IDS_SIGIND                1250
 #define IDS_EXCLAM                1251
