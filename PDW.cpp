@@ -458,7 +458,7 @@ bool			bSortingFilters, bDeletingFilters;
 LVHITTESTINFO	lvhti;
 HWND			hListView, hDebugDlg, hSystemTrayDlg, hFilterDlg, hCurrentHWND;
 int				m_uScrollTimer, m_ScrollDirection, m_nScrollOffset, m_nDropIndex=-1;
-int				nCopyStart=-1, nCopyEnd=-1;
+std::vector<FILTER> g_copyBuffer;  // FIX [CopyPaste]: databuffer voor non-contiguous filter copy/paste
 
 void OnBeginDrag(NMHDR* pnmhdr);
 void InitListControl(HWND hDlg);
@@ -7240,7 +7240,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 						ListView_SetItemState(hListView, index, LVIS_SELECTED, LVIS_SELECTED);
 						SendMessage(hListView, LVM_SETSELECTIONMARK, 0, index);
 					}
-					nCopyStart = nCopyEnd = -1 ;
+					g_copyBuffer.clear();  // FIX [CopyPaste]
 				}
 			}
 			else MessageBox(hDlg, "You must select a filter to remove!", "PDW Filter", MB_ICONERROR);
@@ -11469,7 +11469,7 @@ void OnLButtonUp(UINT nFlags, int x, int y)
 		ListView_DeleteItem(hListView, iPos);
 		Profile.filters.erase(Profile.filters.begin() + iPos);
 		iPos = ListView_GetNextItem(hListView, -1, LVNI_SELECTED);
-		nCopyStart = nCopyEnd = -1 ;
+		g_copyBuffer.clear();  // FIX [CopyPaste]
 	}
 }
 
@@ -11635,29 +11635,20 @@ void SortFilter(HWND hDlg, bool bAddress)
 
 bool CheckSelection(bool bMore)
 {
-	int index = -1, old = -1;	
-				
+	int index = -1, old = -1;
+
 	if (bMore)
 	{
+		// FIX [CopyPaste]: contiguity-check alleen voor sort-operaties (bMore=true);
+		// copy/paste staat non-contiguous selecties toe via de nieuwe databuffer.
 		if(ListView_GetSelectedCount(hListView) <= 1) return(false);
+		while ((index = ListView_GetNextItem(hListView, index, LVNI_SELECTED)) != CB_ERR)
+		{
+			if(old != -1 && old != index-1) return(false);
+			old = index;
+		}
 	}
-
-	while ((index = ListView_GetNextItem(hListView, index, LVNI_SELECTED)) != CB_ERR)
-	{
-		if(old == -1)
-		{
-			old = index ;
-		}
-		else
-		{
-			if(old != index-1)
-			{
-				return(false) ;
-			}
-		}
-		old = index ;
-	} 
-	return(true) ;
+	return(true);
 }
 
 
@@ -11674,51 +11665,38 @@ int CompareCapcodes(char *szCapcode1, char *szCapcode2)
 
 void CopyFilter(void)
 {
-	int nIndex ;
-
-	if((nIndex = ListView_GetNextItem(hListView, -1, LVNI_SELECTED)) != CB_ERR)
+	// FIX [CopyPaste]: deep-copy filterdata naar g_copyBuffer; ondersteunt non-contiguous selectie.
+	int nIndex = -1;
+	g_copyBuffer.clear();
+	while ((nIndex = ListView_GetNextItem(hListView, nIndex, LVNI_SELECTED)) != CB_ERR)
 	{
-		nCopyStart = nCopyEnd = nIndex ;
-		while((nIndex = ListView_GetNextItem(hListView, nIndex, LVNI_SELECTED)) != CB_ERR)
-		{
-			nCopyEnd = nIndex ;
-		}
+		FILTER f;
+		Copy_Filter_Fields(&f, Profile.filters[nIndex]);
+		g_copyBuffer.push_back(f);
 	}
 }
 
-void PasteFilter(void) 
+void PasteFilter(void)
 {
-	int i, nIndex, item;
+	// FIX [CopyPaste]: plak uit databuffer — geen index-correcties nodig omdat bron en doel gescheiden zijn.
+	int nIndex;
 
-	if (nCopyEnd == -1)
-	{
-		return ; 
-	}
+	if (g_copyBuffer.empty()) return;
 
 	if ((nIndex = ListView_GetNextItem(hListView, -1, LVNI_SELECTED)) != CB_ERR)
 	{
-		ListView_SetItemState(hListView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED); // Deselect all
+		ListView_SetItemState(hListView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
 
-		for (i = item = nCopyStart; i <= nCopyEnd; i++)
+		for (size_t i = 0; i < g_copyBuffer.size(); i++)
 		{
- 			Copy_Filter_Fields(&filter, Profile.filters[item]);
-			BuildFilterString(szTEMP, filter);
-			Profile.filters.insert(Profile.filters.begin() + nIndex, filter);
-
-			if (nIndex <= nCopyStart)
-			{
-				item += 2 ;
-				nCopyStart++ ;
-				nCopyEnd++ ;
-				i++ ;
-			}
-			else item++;
-
+			FILTER f;
+			Copy_Filter_Fields(&f, g_copyBuffer[i]);
+			BuildFilterString(szTEMP, f);
+			Profile.filters.insert(Profile.filters.begin() + nIndex, f);
 			InsertListViewItem(szTEMP, nIndex);
 			ListView_SetItemState(hListView, nIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 			SendMessage(hListView, LVM_SETSELECTIONMARK, 0, nIndex);
-
-			nIndex++ ;
+			nIndex++;
 		}
 	}
 }
@@ -12017,7 +11995,7 @@ void ShowContextMenu(int menu, HWND hWindow)
 		AppendMenu(hMenu, MF_SEPARATOR, NULL, NULL);
 		AppendMenu(hMenu, MF_STRING,										IDT_MENU_SELECTALL, "Select All") ;
 		AppendMenu(hMenu, MF_STRING | CheckSelection(false) ? 0 : MF_GRAYED, IDT_MENU_COPY, "Copy") ;
-		AppendMenu(hMenu, MF_STRING | CheckSelection(false) && (nCopyEnd != -1) ? 0 : MF_GRAYED, IDT_MENU_PASTE, "Paste") ;
+		AppendMenu(hMenu, MF_STRING | CheckSelection(false) && !g_copyBuffer.empty() ? 0 : MF_GRAYED, IDT_MENU_PASTE, "Paste") ;  // FIX [CopyPaste]
 		AppendMenu(hMenu, MF_SEPARATOR, NULL, NULL);
 		AppendMenu(hMenu, MF_STRING | more ? MF_GRAYED : 0,					IDC_FILTERADD, "Add...") ;
 		AppendMenu(hMenu, MF_STRING,										IDC_FILTEREDIT,"Edit...");

@@ -28,3 +28,4 @@ obj/
 *.lib
 *.app
 *.aps
+SMTP_AUDIT_REPORT.md
