@@ -21,6 +21,8 @@
 #include "utils\smtp.h"
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
+#include "utils\telnet_server.h"
+#include "utils\rxq.h"
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
 #define FILTER_PARAM_LEN	500
@@ -686,6 +688,14 @@ void Check4_MissedGroupcalls()
 			{
 				DebugLog("[Check4] iCurrentFrame=%d  groupbit=%d  GroupFrame=%d (orig=%d, adj=%d)  diff=%d  past grace=%d -> MISSED -> Remove_MissedGroupcall, X++",
 					iCurrentFrame, groupbit, origAssigned, origCurrent, assignedframe, difference, GROUP_GRACE_FRAMES);
+
+				// p2kflex parity: missed group message past grace window — penalize
+				// 400 bits in the telnet RXQ track (mirrors p2kflexDecoder Flex.cpp:412).
+				// Only applied here in the past-grace path, not in the AddAssignment
+				// reassign or ConvertGroupcall else paths, to match p2kflex semantics
+				// (their RxqApplyPenaltyBits(400) lives in the equivalent Check4 loop).
+				Rxq_ApplyPenaltyBits(400);
+
 				Remove_MissedGroupcall(groupbit);
 			}
 		}
@@ -1609,6 +1619,16 @@ void ShowMessage()
 			           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
 		}
 	}
+
+	// Telnet-server fan-out — reads Current_MSG[] directly, emits one wire-line
+	// in p2kflexDecoder format to all connected clients.
+	// Skip per-subscriber duplicates that ConvertGroupcall generates: when
+	// iConvertingGroupcall>0 PDW calls ShowMessage() once per subscriber capcode
+	// AND once for the group capcode itself. CS FlexDecoder only emits the
+	// group line (capcode 20295xx). Mirrors the (!iConvertingGroupcall || bGroupcode)
+	// condition used elsewhere in this function (see ~regel 1526).
+	if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
+		TelnetServerNotifyMessage();
 
 	// FIX [TrayBalloon]: balloon-tip bij overeenkomend bericht
 	// bRejected: iMatch is gezet vóór bShowMessage-check, dus ook geldig als bShowMessage=false
@@ -2547,6 +2567,15 @@ void display_color(PaneStruct *pane, BYTE ct)
 void display_showmo(int mode)
 {
 	bMode_IDLE = mode ? false : true;
+
+	// Telnet-server TX-burst boundary: mirrors p2kflexDecoder's TxStart/TxStop
+	// pattern. IDLE = signal lost -> close burst with <TX_STOP><RXQ:...>.
+	// Non-idle = sync acquired -> open burst with <TX_START>. Idempotent.
+	if (Profile.telnetServerEnabled)
+	{
+		if (bMode_IDLE) TelnetServerNotifyTxStop();
+		else            TelnetServerNotifyTxStart();
+	}
 
 	if (bMode_IDLE)
 	{

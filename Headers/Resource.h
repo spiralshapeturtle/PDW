@@ -502,3 +502,15 @@
 #define IDC_DISPLAY_BETTER_CONTRAST  1370
 #define IDC_DISPLAY_LIGHTER_BG       1371
 #define IDC_DISPLAYOPTIONS_BTN       1372
+
+// Telnet server (utils/telnet_server.cpp) — Ctrl-N opens the config dialog.
+#define TELNETSERVER_DLGBOX       134
+#define IDM_TELNETSERVER          237
+#define IDC_TS_ENABLED            1380
+#define IDC_TS_BIND               1381
+#define IDC_TS_PORT               1382
+#define IDC_TS_MAXCLIENTS         1383
+#define IDC_TS_WDSEC              1384
+#define IDC_TS_BUFFERTIME         1385
+#define IDC_TS_LOGTOFILE          1386
+#define IDC_TS_STATUS             1387

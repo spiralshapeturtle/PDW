@@ -165,6 +165,7 @@ BEGIN
     "M",            IDM_MAIL,               VIRTKEY, CONTROL, NOINVERT
     "W",            IDM_WEBHOOK,            VIRTKEY, CONTROL, NOINVERT
     "Q",            IDM_MQTT,               VIRTKEY, CONTROL, NOINVERT
+    "N",            IDM_TELNETSERVER,       VIRTKEY, CONTROL, NOINVERT
     "O",            IDM_OPTIONS,            VIRTKEY, CONTROL, NOINVERT
     "P",            IDM_COPY_PRINT,         VIRTKEY, CONTROL, NOINVERT
     "P",            IDM_PLAYBACK,           VIRTKEY, SHIFT, ALT, NOINVERT
@@ -864,6 +865,34 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,208,224,44,14
 END
 
+TELNETSERVER_DLGBOX DIALOG 10, 10, 240, 168
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Telnet Server Settings"
+FONT 8, "Verdana"
+BEGIN
+    CONTROL         "Enable Telnet server",IDC_TS_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,100,10
+    LTEXT           "Bind address",IDC_STATIC,8,26,44,8
+    EDITTEXT        IDC_TS_BIND,56,24,96,13,ES_AUTOHSCROLL
+    LTEXT           "(0.0.0.0 = all)",IDC_STATIC,156,26,76,8
+    LTEXT           "Port",IDC_STATIC,8,44,16,8
+    EDITTEXT        IDC_TS_PORT,56,42,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "(default 8024)",IDC_STATIC,100,44,76,8
+    LTEXT           "Max clients",IDC_STATIC,8,62,40,8
+    EDITTEXT        IDC_TS_MAXCLIENTS,56,60,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "(1-25)",IDC_STATIC,100,62,40,8
+    LTEXT           "Watchdog",IDC_STATIC,8,80,40,8
+    EDITTEXT        IDC_TS_WDSEC,56,78,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "seconds (<WD> heartbeat)",IDC_STATIC,100,80,120,8
+    LTEXT           "Buffer time",IDC_STATIC,8,98,40,8
+    EDITTEXT        IDC_TS_BUFFERTIME,56,96,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "seconds (reconnect replay)",IDC_STATIC,100,98,120,8
+    CONTROL         "Log to file (pdw_telnet_server.log)",IDC_TS_LOGTOFILE,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,116,160,10
+    LTEXT           "Status: Disabled",IDC_TS_STATUS,8,138,224,8
+    DEFPUSHBUTTON   "OK",IDOK,128,150,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,188,150,44,14
+END
+
 MQTT_DLGBOX DIALOGEX 10, 10, 260, 292
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "MQTT Settings"
@@ -1005,8 +1034,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 3,4,3,0
- PRODUCTVERSION 3,4,3,0
+ FILEVERSION 3,4,4,0
+ PRODUCTVERSION 3,4,4,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -1024,11 +1053,11 @@ BEGIN
             VALUE "Comments", "Supports Windows XP - WIN11"
             VALUE "CompanyName", "WitWarez"
             VALUE "FileDescription", "PDW"
-            VALUE "FileVersion", "3.4.3"
+            VALUE "FileVersion", "3.4.4"
             VALUE "InternalName", "PDW"
             VALUE "OriginalFilename", "PDW3_4.exe"
             VALUE "ProductName", "PDW"
-            VALUE "ProductVersion", "3.4.3"
+            VALUE "ProductVersion", "3.4.4"
         END
     END
     BLOCK "VarFileInfo"
@@ -1196,7 +1225,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME             " PDW v3.4.3 - Windows POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
+    IDS_APPNAME             " PDW v3.4.4 - Windows POCSAG, FLEX, ACARS, MOBITEX & ERMES Decoder"
 END
 
 STRINGTABLE

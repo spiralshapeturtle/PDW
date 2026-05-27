@@ -90,6 +90,12 @@
     <ClCompile Include="utils\mqtt.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="utils\telnet_server.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="utils\rxq.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="utils\debuglog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -387,6 +393,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utils\webhook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\telnet_server.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\rxq.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utils\debuglog.h">

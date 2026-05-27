@@ -316,6 +316,7 @@
 #include "utils\smtp.h"
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
+#include "utils\telnet_server.h"
 #include "utils\debuglog.h"
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
@@ -434,7 +435,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.4.3";			// Current version info
+char *pdw_version = "PDW v3.4.4";			// Current version info
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;
@@ -539,6 +540,14 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 
 	Profile.betterContrast         = 0;
 	Profile.lighterBackground      = 0;
+
+	Profile.telnetServerEnabled      = 0;
+	strcpy(Profile.szTelnetServerBind, "0.0.0.0");
+	Profile.telnetServerPort         = 8024;
+	Profile.telnetServerMaxClients   = 25;
+	Profile.telnetServerWdSec        = 20;
+	Profile.telnetServerBufferTime   = 60;
+	Profile.telnetServerLogToFile    = 0;
 
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
@@ -1554,6 +1563,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 												 hWnd, (DLGPROC) MqttDlgProc, 0L);
 				break;
 
+				case IDM_TELNETSERVER:
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(TELNETSERVER_DLGBOX),
+												 hWnd, (DLGPROC) TelnetServerDlgProc, 0L);
+				break;
+
 				case IDM_DEBUGLOG:
 					Profile.bDebugLog = !Profile.bDebugLog;
 					CheckMenuItem(GetMenu(hWnd), IDM_DEBUGLOG,
@@ -1973,6 +1987,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
 		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
 		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
+		TelnetServerDestroy();
 		MissedGroupcallSessionSummary();  // FIX [GroupCallLog]: write X/Y counters to missed-groupcalls.log
 		DebugLogShutdown();
 		rs232_cleanup();   // FIX [L2]: DeleteCriticalSection g_handleCs
@@ -9655,6 +9670,90 @@ BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 } // end of WebhookDlgProc
 
 
+// Telnet-server config dialog (Ctrl-N). Live status updates via WM_TELNET_STATUS
+// posted by the worker thread; mirror-pattern of WebhookDlgProc.
+BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	char szBuf[64];
+
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_TS_ENABLED,   Profile.telnetServerEnabled);
+		SetDlgItemText (hDlg, IDC_TS_BIND,      Profile.szTelnetServerBind);
+		sprintf(szBuf, "%d", Profile.telnetServerPort);        SetDlgItemText(hDlg, IDC_TS_PORT,       szBuf);
+		sprintf(szBuf, "%d", Profile.telnetServerMaxClients);  SetDlgItemText(hDlg, IDC_TS_MAXCLIENTS, szBuf);
+		sprintf(szBuf, "%d", Profile.telnetServerWdSec);       SetDlgItemText(hDlg, IDC_TS_WDSEC,      szBuf);
+		sprintf(szBuf, "%d", Profile.telnetServerBufferTime);  SetDlgItemText(hDlg, IDC_TS_BUFFERTIME, szBuf);
+		CheckDlgButton(hDlg, IDC_TS_LOGTOFILE, Profile.telnetServerLogToFile);
+
+		if (!Profile.telnetServerEnabled)
+			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Disabled");
+		else
+		{
+			sprintf(szBuf, "Status: Listening on %s:%d (%d clients)",
+				Profile.szTelnetServerBind, Profile.telnetServerPort,
+				TelnetServerClientCount());
+			SetDlgItemText(hDlg, IDC_TS_STATUS, szBuf);
+		}
+
+		TelnetServerSetStatusWnd(hDlg);
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_DESTROY:
+		TelnetServerSetStatusWnd(NULL);
+		break;
+
+	case WM_TELNET_STATUS:
+		switch ((int)wParam)
+		{
+		case TSS_DISABLED:
+			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Disabled");
+			break;
+		case TSS_LISTENING:
+			sprintf(szBuf, "Status: Listening on %s:%d (%d clients)",
+				Profile.szTelnetServerBind, Profile.telnetServerPort, (int)lParam);
+			SetDlgItemText(hDlg, IDC_TS_STATUS, szBuf);
+			break;
+		case TSS_ERROR:
+			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Error — see pdw_telnet_server.log");
+			break;
+		}
+		break;
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDOK:
+			Profile.telnetServerEnabled   = IsDlgButtonChecked(hDlg, IDC_TS_ENABLED)   ? 1 : 0;
+			Profile.telnetServerLogToFile = IsDlgButtonChecked(hDlg, IDC_TS_LOGTOFILE) ? 1 : 0;
+
+			GetDlgItemText(hDlg, IDC_TS_BIND, Profile.szTelnetServerBind, sizeof(Profile.szTelnetServerBind));
+			if (Profile.szTelnetServerBind[0] == '\0')
+				strcpy(Profile.szTelnetServerBind, "0.0.0.0");
+
+			GetDlgItemText(hDlg, IDC_TS_PORT,       szBuf, sizeof(szBuf)); Profile.telnetServerPort       = atoi(szBuf); if (Profile.telnetServerPort       <= 0) Profile.telnetServerPort       = 8024;
+			GetDlgItemText(hDlg, IDC_TS_MAXCLIENTS, szBuf, sizeof(szBuf)); Profile.telnetServerMaxClients = atoi(szBuf); if (Profile.telnetServerMaxClients <= 0) Profile.telnetServerMaxClients = 25;
+			if (Profile.telnetServerMaxClients > 25) Profile.telnetServerMaxClients = 25;
+			GetDlgItemText(hDlg, IDC_TS_WDSEC,      szBuf, sizeof(szBuf)); Profile.telnetServerWdSec      = atoi(szBuf); if (Profile.telnetServerWdSec      <= 0) Profile.telnetServerWdSec      = 20;
+			GetDlgItemText(hDlg, IDC_TS_BUFFERTIME, szBuf, sizeof(szBuf)); Profile.telnetServerBufferTime = atoi(szBuf); if (Profile.telnetServerBufferTime <= 0) Profile.telnetServerBufferTime = 60;
+
+			TelnetServerInit();   // applies new config (restarts thread if running)
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+
+		case IDCANCEL:
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of TelnetServerDlgProc
+
+
 BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	char szBuf[32];
@@ -10363,6 +10462,15 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->mqttFields       = (INT) GetPrivateProfileInt("MQTT", TEXT("Fields"),       0x7F, lpszIniPathName);
 	MqttInit();
 
+	pProfile->telnetServerEnabled    = (INT) GetPrivateProfileInt("TelnetServer", TEXT("Enabled"),       0,      lpszIniPathName);
+	GetPrivateProfileString("TelnetServer", TEXT("BindAddress"), "0.0.0.0", pProfile->szTelnetServerBind, sizeof(pProfile->szTelnetServerBind), lpszIniPathName);
+	pProfile->telnetServerPort       = (INT) GetPrivateProfileInt("TelnetServer", TEXT("Port"),          8024,   lpszIniPathName);
+	pProfile->telnetServerMaxClients = (INT) GetPrivateProfileInt("TelnetServer", TEXT("MaxClients"),    25,     lpszIniPathName);
+	pProfile->telnetServerWdSec      = (INT) GetPrivateProfileInt("TelnetServer", TEXT("WatchdogSec"),   20,     lpszIniPathName);
+	pProfile->telnetServerBufferTime = (INT) GetPrivateProfileInt("TelnetServer", TEXT("BufferTimeSec"), 60,     lpszIniPathName);
+	pProfile->telnetServerLogToFile  = (INT) GetPrivateProfileInt("TelnetServer", TEXT("LogToFile"),     0,      lpszIniPathName);
+	TelnetServerInit();
+
 	pProfile->bDebugLog        = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),  0,    lpszIniPathName);
 
 	pProfile->betterContrast    = (INT) GetPrivateProfileInt("Display", TEXT("better_contrast"),   0, lpszIniPathName);
@@ -10860,6 +10968,15 @@ void WriteSettings()
 		fprintf(pFile, "TopicSuffix=%i\n",   Profile.mqttTopicSuffix);
 		fprintf(pFile, "SendIn=%i\n",        Profile.mqttSendIn);
 		fprintf(pFile, "Fields=%i\n",        Profile.mqttFields);
+
+		fprintf(pFile, "\n[TelnetServer]\n");
+		fprintf(pFile, "Enabled=%i\n",       Profile.telnetServerEnabled);
+		fprintf(pFile, "BindAddress=%s\n",   Profile.szTelnetServerBind);
+		fprintf(pFile, "Port=%i\n",          Profile.telnetServerPort);
+		fprintf(pFile, "MaxClients=%i\n",    Profile.telnetServerMaxClients);
+		fprintf(pFile, "WatchdogSec=%i\n",   Profile.telnetServerWdSec);
+		fprintf(pFile, "BufferTimeSec=%i\n", Profile.telnetServerBufferTime);
+		fprintf(pFile, "LogToFile=%i\n",     Profile.telnetServerLogToFile);
 
 		fprintf(pFile, "\n[Logging]\n");
 		fprintf(pFile, "DebugLog=%i\n",      Profile.bDebugLog);
