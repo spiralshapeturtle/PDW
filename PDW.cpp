@@ -975,6 +975,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		g_dpi = PdwGetDpi(hWnd);
 
+		SetBoxFONT();	// FIX [DpiScale]: hboxfont wordt aangemaakt voor g_dpi bekend is (in Get_Drawing_Objects); hier opnieuw aanmaken met de juiste DPI.
+
 		if (!(GetLogFONTS()))		// Get general purpose font objects.
 		{
 			Free_Common_Objects();	// Free any objects we got!
