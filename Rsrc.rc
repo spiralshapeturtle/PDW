@@ -865,7 +865,7 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,208,224,44,14
 END
 
-TELNETSERVER_DLGBOX DIALOG 10, 10, 240, 168
+TELNETSERVER_DLGBOX DIALOG 10, 10, 340, 296
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Telnet Server Settings"
 FONT 8, "Verdana"
@@ -886,11 +886,20 @@ BEGIN
     LTEXT           "Buffer time",IDC_STATIC,8,98,40,8
     EDITTEXT        IDC_TS_BUFFERTIME,56,96,40,13,ES_AUTOHSCROLL | ES_NUMBER
     LTEXT           "seconds (reconnect replay)",IDC_STATIC,100,98,120,8
-    CONTROL         "Log to file (pdw_telnet_server.log)",IDC_TS_LOGTOFILE,
-                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,116,160,10
-    LTEXT           "Status: Disabled",IDC_TS_STATUS,8,138,224,8
-    DEFPUSHBUTTON   "OK",IDOK,128,150,44,14
-    PUSHBUTTON      "Cancel",IDCANCEL,188,150,44,14
+    CONTROL         "Log lifecycle events (pdw_telnet_server.log)",IDC_TS_LOGTOFILE,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,116,200,10
+    CONTROL         "Log wire-format messages (pdw_flexdecoder.log)",IDC_TS_WIRELOG,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,128,220,10
+
+    GROUPBOX        "Connected clients",IDC_STATIC,8,146,324,68
+    LISTBOX         IDC_TS_CLIENTS,14,158,312,52,LBS_NOINTEGRALHEIGHT | LBS_USETABSTOPS | WS_VSCROLL | NOT WS_BORDER | WS_TABSTOP
+
+    GROUPBOX        "Recent activity",IDC_STATIC,8,218,324,52
+    LISTBOX         IDC_TS_ACTIVITY,14,230,312,36,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | NOT WS_BORDER | WS_TABSTOP
+
+    LTEXT           "Status: Disabled",IDC_TS_STATUS,8,274,224,8
+    DEFPUSHBUTTON   "OK",IDOK,232,278,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,288,278,44,14
 END
 
 MQTT_DLGBOX DIALOGEX 10, 10, 260, 292

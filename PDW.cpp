@@ -548,6 +548,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.telnetServerWdSec        = 20;
 	Profile.telnetServerBufferTime   = 60;
 	Profile.telnetServerLogToFile    = 0;
+	Profile.telnetServerWireLog      = 0;
 
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
@@ -9672,6 +9673,72 @@ BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 // Telnet-server config dialog (Ctrl-N). Live status updates via WM_TELNET_STATUS
 // posted by the worker thread; mirror-pattern of WebhookDlgProc.
+//
+// Clients list + Activity list refresh on a 1-second timer (TS_REFRESH_TIMER).
+// Newest activity rows pushed to the top via TelnetServerGetEvents(), oldest
+// auto-scroll out as new arrive. Clients list shows one row per slot with
+// name/role/IP — multiple environments (PRODUCTIE/DEVELOP) can coexist on
+// the same PDW instance.
+#define TS_REFRESH_TIMER  9001
+
+static void TelnetServerDlg_RefreshLists(HWND hDlg)
+{
+	HWND hClients  = GetDlgItem(hDlg, IDC_TS_CLIENTS);
+	HWND hActivity = GetDlgItem(hDlg, IDC_TS_ACTIVITY);
+
+	// --- Clients list ---
+	TsClientInfo clients[25];
+	int nClients = TelnetServerGetClients(clients, 25);
+
+	SendMessage(hClients, WM_SETREDRAW, FALSE, 0);
+	SendMessage(hClients, LB_RESETCONTENT, 0, 0);
+	for (int i = 0; i < nClients; i++)
+	{
+		const TsClientInfo *c = &clients[i];
+		const char *roleStr = (c->role == 1) ? "MASTER" :
+		                     (c->role == 0) ? "SLAVE"  : "—";
+		const char *stateStr = c->disconnected ? " (buffered)" : "";
+		char line[160];
+		_snprintf_s(line, sizeof(line), _TRUNCATE,
+			"%s:%d\t%s\t%s%s",
+			c->ip[0] ? c->ip : "?",
+			c->port,
+			c->name[0] ? c->name : "—",
+			roleStr,
+			stateStr);
+		SendMessage(hClients, LB_ADDSTRING, 0, (LPARAM)line);
+	}
+	if (nClients == 0)
+		SendMessage(hClients, LB_ADDSTRING, 0, (LPARAM)"(no clients connected)");
+	SendMessage(hClients, WM_SETREDRAW, TRUE, 0);
+	InvalidateRect(hClients, NULL, TRUE);
+
+	// --- Activity list (newest first) ---
+	TsEvent events[64];
+	int nEvents = TelnetServerGetEvents(events, 64);
+
+	SendMessage(hActivity, WM_SETREDRAW, FALSE, 0);
+	SendMessage(hActivity, LB_RESETCONTENT, 0, 0);
+	ULONGLONG nowMs = GetTickCount64();
+	for (int i = 0; i < nEvents; i++)
+	{
+		long long ageMs = (long long)nowMs - events[i].ts_ms;
+		if (ageMs < 0) ageMs = 0;
+		char prefix[24];
+		if      (ageMs < 60000)         _snprintf_s(prefix, sizeof(prefix), _TRUNCATE, "%llds ago",   (long long)(ageMs / 1000));
+		else if (ageMs < 3600000)       _snprintf_s(prefix, sizeof(prefix), _TRUNCATE, "%lldm ago",   (long long)(ageMs / 60000));
+		else                            _snprintf_s(prefix, sizeof(prefix), _TRUNCATE, "%lldh ago",   (long long)(ageMs / 3600000));
+
+		char line[160];
+		_snprintf_s(line, sizeof(line), _TRUNCATE, "[%s]  %s", prefix, events[i].text);
+		SendMessage(hActivity, LB_ADDSTRING, 0, (LPARAM)line);
+	}
+	if (nEvents == 0)
+		SendMessage(hActivity, LB_ADDSTRING, 0, (LPARAM)"(no activity yet)");
+	SendMessage(hActivity, WM_SETREDRAW, TRUE, 0);
+	InvalidateRect(hActivity, NULL, TRUE);
+}
+
 BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	char szBuf[64];
@@ -9686,6 +9753,13 @@ BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 		sprintf(szBuf, "%d", Profile.telnetServerWdSec);       SetDlgItemText(hDlg, IDC_TS_WDSEC,      szBuf);
 		sprintf(szBuf, "%d", Profile.telnetServerBufferTime);  SetDlgItemText(hDlg, IDC_TS_BUFFERTIME, szBuf);
 		CheckDlgButton(hDlg, IDC_TS_LOGTOFILE, Profile.telnetServerLogToFile);
+		CheckDlgButton(hDlg, IDC_TS_WIRELOG,   Profile.telnetServerWireLog);
+
+		// Tab stops for the clients list (column layout: IP:port | name | role)
+		{
+			int tabs[2] = { 90, 160 };  // pixel-ish dialog units
+			SendDlgItemMessage(hDlg, IDC_TS_CLIENTS, LB_SETTABSTOPS, 2, (LPARAM)tabs);
+		}
 
 		if (!Profile.telnetServerEnabled)
 			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Disabled");
@@ -9698,10 +9772,18 @@ BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 		}
 
 		TelnetServerSetStatusWnd(hDlg);
+		TelnetServerDlg_RefreshLists(hDlg);
+		SetTimer(hDlg, TS_REFRESH_TIMER, 1000, NULL);  // 1 Hz refresh
 		CenterWindow(hDlg);
 		return (TRUE);
 
+	case WM_TIMER:
+		if (wParam == TS_REFRESH_TIMER)
+			TelnetServerDlg_RefreshLists(hDlg);
+		break;
+
 	case WM_DESTROY:
+		KillTimer(hDlg, TS_REFRESH_TIMER);
 		TelnetServerSetStatusWnd(NULL);
 		break;
 
@@ -9715,6 +9797,7 @@ BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 			sprintf(szBuf, "Status: Listening on %s:%d (%d clients)",
 				Profile.szTelnetServerBind, Profile.telnetServerPort, (int)lParam);
 			SetDlgItemText(hDlg, IDC_TS_STATUS, szBuf);
+			TelnetServerDlg_RefreshLists(hDlg);  // refresh immediately on state change
 			break;
 		case TSS_ERROR:
 			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Error — see pdw_telnet_server.log");
@@ -9728,6 +9811,7 @@ BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 		case IDOK:
 			Profile.telnetServerEnabled   = IsDlgButtonChecked(hDlg, IDC_TS_ENABLED)   ? 1 : 0;
 			Profile.telnetServerLogToFile = IsDlgButtonChecked(hDlg, IDC_TS_LOGTOFILE) ? 1 : 0;
+			Profile.telnetServerWireLog   = IsDlgButtonChecked(hDlg, IDC_TS_WIRELOG)   ? 1 : 0;
 
 			GetDlgItemText(hDlg, IDC_TS_BIND, Profile.szTelnetServerBind, sizeof(Profile.szTelnetServerBind));
 			if (Profile.szTelnetServerBind[0] == '\0')
@@ -10469,6 +10553,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->telnetServerWdSec      = (INT) GetPrivateProfileInt("TelnetServer", TEXT("WatchdogSec"),   20,     lpszIniPathName);
 	pProfile->telnetServerBufferTime = (INT) GetPrivateProfileInt("TelnetServer", TEXT("BufferTimeSec"), 60,     lpszIniPathName);
 	pProfile->telnetServerLogToFile  = (INT) GetPrivateProfileInt("TelnetServer", TEXT("LogToFile"),     0,      lpszIniPathName);
+	pProfile->telnetServerWireLog    = (INT) GetPrivateProfileInt("TelnetServer", TEXT("WireLog"),       0,      lpszIniPathName);
 	TelnetServerInit();
 
 	pProfile->bDebugLog        = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),  0,    lpszIniPathName);
@@ -10977,6 +11062,7 @@ void WriteSettings()
 		fprintf(pFile, "WatchdogSec=%i\n",   Profile.telnetServerWdSec);
 		fprintf(pFile, "BufferTimeSec=%i\n", Profile.telnetServerBufferTime);
 		fprintf(pFile, "LogToFile=%i\n",     Profile.telnetServerLogToFile);
+		fprintf(pFile, "WireLog=%i\n",       Profile.telnetServerWireLog);
 
 		fprintf(pFile, "\n[Logging]\n");
 		fprintf(pFile, "DebugLog=%i\n",      Profile.bDebugLog);

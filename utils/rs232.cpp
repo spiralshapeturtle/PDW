@@ -6,6 +6,7 @@
 #include "..\utils\ostype.h"
 #include "..\headers\pdw.h"
 #include "rs232.h"
+#include "telnet_server.h"
 
 #define SLICER_BUFSIZE 10000
 
@@ -199,6 +200,10 @@ static int rs232_worker_reopen(void)
 	g_connectTickMs  = GetTickCount64();
 	g_lastDataTickMs = g_connectTickMs;
 	LeaveCriticalSection(&g_handleCs);
+	// FIX [RS232Flap]: keep the telnet watchdog clock in sync with our own
+	// connect/data timer reset above, so the pre-reconnect silence gap does not
+	// count toward <RS232:0>. Called outside g_handleCs (takes its own lock).
+	TelnetServerRS232Heartbeat();
 	DebugLog("[rs232_worker_reopen] reconnected on %s", pcComPort);
 	return RS232_SUCCESS;
 }
@@ -327,6 +332,8 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 	m_hRxThread = CreateThread(NULL, 0, RxThread, (LPVOID) NULL, CREATE_SUSPENDED, &m_dwThreadId) ;
 	ResumeThread(m_hRxThread);
 
+	/* FIX [TelnetRS232]: start RS232/AUDIO watchdog */
+	TelnetServerRS232Enable(1);
 	return(RS232_SUCCESS) ;
 }
 
@@ -401,6 +408,8 @@ int rs232_disconnect()
 	}
 	m_bConnectedToComport = FALSE;
 	if (gotLock) LeaveCriticalSection(&g_handleCs);
+	/* FIX [TelnetRS232]: stop RS232/AUDIO watchdog, emit <RS232:0> if was active */
+	TelnetServerRS232Enable(0);
 	return(RS232_SUCCESS) ;
 }
 
@@ -536,6 +545,9 @@ int rs232_read(void)
 			rs232_cpstn = next;
 		}
 	}
+	/* FIX [TelnetRS232]: notify RS232/AUDIO watchdog with raw bytes */
+	if (dwRead > 0)
+		TelnetServerRS232BytesReceived(byData, (int)dwRead);
 	return (int)dwRead;
 }
 
@@ -589,6 +601,13 @@ int slicer_read(void)
 		}
 		rs232_cpstn = next;
 	}
+	/* FIX [TelnetRS232]: notify RS232/AUDIO watchdog; use SlicerActivity
+	** (not BytesReceived) — decoded line-data bytes have too few XOR
+	** transitions to reach the p2kflexDecoder audio threshold.
+	** Use dwRead (raw bytes) not num (complete 3-byte samples): partial reads
+	** (dwRead=1 or 2) still prove the COM link is alive even if num rounds to 0. */
+	if (dwRead > 0)
+		TelnetServerSlicerActivity((int)dwRead);
 	return (int)dwRead;
 }
 

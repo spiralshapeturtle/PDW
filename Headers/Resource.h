@@ -514,3 +514,6 @@
 #define IDC_TS_BUFFERTIME         1385
 #define IDC_TS_LOGTOFILE          1386
 #define IDC_TS_STATUS             1387
+#define IDC_TS_WIRELOG            1388
+#define IDC_TS_CLIENTS            1389
+#define IDC_TS_ACTIVITY           1390

@@ -274,7 +274,8 @@ typedef struct
 	int  telnetServerMaxClients;      // default & ceiling: 25
 	int  telnetServerWdSec;           // <WD> heartbeat interval, default 20
 	int  telnetServerBufferTime;      // backlog replay window (sec), default 60
-	int  telnetServerLogToFile;       // 0=off, 1=write pdw_telnet_server.log
+	int  telnetServerLogToFile;       // 0=off, 1=write pdw_telnet_server.log (lifecycle events)
+	int  telnetServerWireLog;         // 0=off, 1=write pdw_flexdecoder.log (full wire-format messages)
 } PROFILE, *PPROFILE;
 
 extern PROFILE Profile;     // profile information

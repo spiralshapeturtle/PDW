@@ -915,6 +915,24 @@ void ShowMessage()
 					}
 				}
 				nCount_Rejected++;
+				// FIX [TelnetReject]: telnet output is unfiltered — send even rejected messages
+				if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
+					TelnetServerNotifyMessage();
+				// FIX [RejectNotify]: webhook/mqtt "all messages" must also receive rejected capcodes
+				if (Profile.webhookEnabled && Profile.webhookSendIn == 0)
+					WebhookNotify(Current_MSG[MSG_CAPCODE],
+					              iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					              szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					              Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					              iConvertingGroupcall > 0,
+					              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+				if (Profile.mqttEnabled && Profile.mqttSendIn == 0)
+					MqttNotify(Current_MSG[MSG_CAPCODE],
+					           iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					           szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					           Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					           iConvertingGroupcall > 0,
+					           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
 				return;
 			}
 		}
@@ -951,7 +969,24 @@ void ShowMessage()
 					}
 				}
 				nCount_Blocked++;
-
+				// FIX [TelnetReject]: telnet output is unfiltered — send even duplicate-blocked messages
+				if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
+					TelnetServerNotifyMessage();
+				// FIX [RejectNotify]: webhook/mqtt "all messages" must also receive duplicate-blocked capcodes
+				if (Profile.webhookEnabled && Profile.webhookSendIn == 0)
+					WebhookNotify(Current_MSG[MSG_CAPCODE],
+					              iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					              szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					              Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					              iConvertingGroupcall > 0,
+					              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+				if (Profile.mqttEnabled && Profile.mqttSendIn == 0)
+					MqttNotify(Current_MSG[MSG_CAPCODE],
+					           iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					           szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					           Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					           iConvertingGroupcall > 0,
+					           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
 				return;
 			}
 			else if (bFILTERED && !(Profile.BlockDuplicate >> 4))	// Block duplicate FILTERED messages
