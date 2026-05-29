@@ -53,6 +53,15 @@ extern TCHAR szVolPathName[MAX_PATH];   // full pathname to the PDW volume contr
 extern UINT g_dpi;          // current DPI (96 = 100 %, 144 = 150 %, 192 = 200 %)
 UINT PdwGetDpi(HWND hwnd);  // query DPI for a window; hwnd may be NULL for desktop
 
+// FIX [DpiScale]: werkelijke (teruggelezen) toolbar-hoogte en de daaruit afgeleide
+// bovenrand van pane1 (= toolbar + pane1-titelbalk). Gezet bij toolbar-creatie.
+extern int g_cyToolbar;     // echte toolbar-hoogte in px na TB_AUTOSIZE
+extern int g_cyTopBand;     // y-positie van de bovenrand van pane1
+
+// FIX [DpiScale]: schaal een op 96-DPI ontworpen pixelwaarde naar de actuele DPI.
+// Onder System-DPI-aware ligt g_dpi vast voor de proces-levensduur.
+inline int Scale(int value96) { return MulDiv(value96, (int)g_dpi, 96); }
+
 // functions
 UINT GetPathFromFullPathName(LPCTSTR lpFullPathName, LPTSTR lpPathBuffer, UINT nPathBufferLength);
 BOOL NEAR InitApplication(HINSTANCE hInstance);

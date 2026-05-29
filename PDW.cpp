@@ -673,9 +673,15 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.audioDevice			= 0;
 	Profile.audioSampleRate		= 44100;
 	Profile.audioConfig			= 5;		// Audio input configuration.
-	Profile.audioThreshold[4]	= 0;
-	Profile.audioResync[4]		= 0;
-	Profile.audioCentering[4]	= 0;
+	// FIX [AudioInit]: schreef index [4] in int[4]-arrays (geldig 0..3) → out-of-bounds
+	// write in aangrenzende PROFILE-velden (gevonden via /analyze C6200/C6386). Init nu
+	// alle 4 elementen op 0; SetAudioConfig() hieronder vult de werkelijke per-bitrate waarden.
+	for (int _ai = 0; _ai < 4; _ai++)
+	{
+		Profile.audioThreshold[_ai]	= 0;
+		Profile.audioResync[_ai]	= 0;
+		Profile.audioCentering[_ai]	= 0;
+	}
 	SetAudioConfig(Profile.audioConfig); // Set default audio config
 
 	Profile.minimize_flg	= 0;	// Keep track of minimized state (user could exit while minimized)
@@ -843,7 +849,9 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 					{
 						// FIX [X1]: sizeof(aMessages) kopieert 1 element (12 bytes) voorbij array-einde;
 						// correct: sizeof minus één element; laatste slot wordt daarna op nul gezet
-						memmove(aMessages[0], aMessages[1], sizeof(aMessages) - sizeof(aMessages[0]));
+						// FIX [X1c]: dest=aMessages (volledige 2D-array) i.p.v. aMessages[0] (één rij)
+						// — identieke shift, maar /analyze ziet nu de juiste buffergrootte (geen C6386).
+						memmove(aMessages, aMessages + 1, sizeof(aMessages) - sizeof(aMessages[0]));
 						memset(&aMessages[999], 0, sizeof(aMessages[0]));
 						nCount_BlockBuffer[0]--;
 					}
@@ -981,7 +989,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		{
 			LOGFONT lf = Profile.fontInfo;
-			lf.lfHeight = MulDiv(Profile.fontInfo.lfHeight, (int)g_dpi, 96);
+			lf.lfHeight = Scale(Profile.fontInfo.lfHeight);	// FIX [DpiScale]
 			lf.lfQuality = CLEARTYPE_QUALITY;
 			hfont = CreateFontIndirect(&lf);
 		}
@@ -1912,13 +1920,15 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			}
 			sizeSet = 1;
 
+				PdwUpdateToolbarMetrics();	// FIX [DpiScale]: hermeet echte toolbar-hoogte voor de pane-layout
+
 			GetClientRect(hWnd, &g_rect);
 			g_xNew = g_rect.right - g_rect.left;   // Width of client area
 			g_yNew = g_rect.bottom - g_rect.top;   // Height of client area
-			g_yNew -= TOOLBAR_SIZE+WIN_DIVIDER_SIZE; // Allow space for tool bar etc
+			g_yNew -= g_cyTopBand+Scale(WIN_DIVIDER_SIZE); // FIX [DpiScale]: toolbar+titelbalk + geschaalde divider
 
 			// The following code sets pane1 to n% percent of main win client area.
-			pane1Pos    = TOOLBAR_SIZE+1;
+			pane1Pos    = g_cyTopBand;	// FIX [DpiScale]: bovenrand pane1 = echte toolbar + titelbalk
 			pane1Height = (g_yNew * Profile.percent) / 100;
 			pane1Height /= cyChar;	// Divide by character height to get number of lines (without 'rest')
 			pane1Height *= cyChar;	// Multiply by character height again
@@ -1926,7 +1936,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			// The following code sets pane2 to n% percent of main win client area,
 			// it also allows for toolbar space and dividing space between both panes.
-			pane2Pos = TOOLBAR_SIZE+pane1Height+WIN_DIVIDER_SIZE+1;
+			pane2Pos = g_cyTopBand+pane1Height+Scale(WIN_DIVIDER_SIZE);	// FIX [DpiScale]
 			pane2Height = (g_yNew - pane1Height)-2;
 			MoveWindow(Pane2.hWnd, 0, pane2Pos, g_xNew, pane2Height, TRUE);
 
@@ -2167,7 +2177,7 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 			if (Pane1.cyClient < (cyChar + scrollSize))
 			{
 				pane1Height = 2 * GetSystemMetrics(SM_CYFRAME) + cyChar + scrollSize + 1;
-				pane1Pos = TOOLBAR_SIZE;
+				pane1Pos = g_cyTopBand;		// FIX [DpiScale]
 
 				MoveWindow(hWnd, 0, pane1Pos, parent_rect.right, pane1Height, TRUE);
 
@@ -4039,7 +4049,7 @@ BOOL NEAR SelectFont(HWND hDlg)
 	TEXTMETRIC	tm;
 	RECT		rect;
 
-	tmp_logfont.lfHeight		= Profile.fontInfo.lfHeight;
+	tmp_logfont.lfHeight		= Scale(Profile.fontInfo.lfHeight);	// FIX [DpiScale]: toon de huidige (geschaalde) grootte in de dialoog
 	tmp_logfont.lfWidth			= Profile.fontInfo.lfWidth;
 	tmp_logfont.lfEscapement	= Profile.fontInfo.lfEscapement;
 	tmp_logfont.lfOrientation	= Profile.fontInfo.lfOrientation;
@@ -4080,7 +4090,7 @@ BOOL NEAR SelectFont(HWND hDlg)
 		GetTextMetrics(hDC, &tm);
 		DeleteObject(tmp_hfont);
 
-		Profile.fontInfo.lfHeight			= tmp_logfont.lfHeight;
+		Profile.fontInfo.lfHeight			= MulDiv(tmp_logfont.lfHeight, 96, (int)g_dpi);	// FIX [DpiScale]: bewaar als 96-DPI baseline
 		Profile.fontInfo.lfWidth			= tmp_logfont.lfWidth;
 		Profile.fontInfo.lfEscapement		= tmp_logfont.lfEscapement;
 		Profile.fontInfo.lfOrientation		= tmp_logfont.lfOrientation;
@@ -4098,6 +4108,7 @@ BOOL NEAR SelectFont(HWND hDlg)
 		DeleteObject(hfont);
 		{
 			LOGFONT lf = Profile.fontInfo;
+			lf.lfHeight = Scale(Profile.fontInfo.lfHeight);	// FIX [DpiScale]: consistent met WM_CREATE
 			lf.lfQuality = CLEARTYPE_QUALITY;
 			hfont = CreateFontIndirect(&lf);
 		}
@@ -6372,7 +6383,10 @@ BOOL FAR PASCAL ScreenOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
 					if (cursel == nextsel)
 					{
-						sprintf(tbuf, "Item '%s' has been selected more than once!", columns[j]);
+						// FIX [ColumnFmt]: columns[j] is char[3][10] — aan %s doorgegeven leverde
+						// een type-mismatch/UB (gevonden via /analyze C6067). Gebruik de string
+						// columns[j][mode] (mode==0 hier) zoals bij het vullen van de combobox.
+						sprintf(tbuf, "Item '%s' has been selected more than once!", columns[j][mode]);
 						MessageBox(hDlg, tbuf, "PDW Screen Options", MB_ICONERROR);
 						SetFocus(GetDlgItem(hDlg, IDC_SCREEN_COLUMN+j));
 						return (FALSE);
@@ -6881,6 +6895,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		lstrcpy(font_listview.lfFaceName, "MS Sans Serif");
 
 		if (hf) DeleteObject(hf);
+		font_listview.lfHeight = -Scale(11);	// FIX [DpiScale]: schaal filterlijst-font met DPI
 		hf = CreateFontIndirect(&font_listview);
 		SendDlgItemMessage(hDlg, IDC_FILTERS, WM_SETFONT, (WPARAM) hf, 0);
 
@@ -8062,8 +8077,21 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			if (!CenterWindow(hDlg)) return (FALSE);
 
 			if (hfLabelColor) DeleteObject(hfLabelColor);
+			font_labelcolor.lfHeight = -Scale(11);	// FIX [DpiScale]: schaal kleur-combobox-font met DPI
 			hfLabelColor = CreateFontIndirect(&font_labelcolor);
 			SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, WM_SETFONT, (WPARAM) hfLabelColor, 0);
+
+			// FIX [DpiScale]: owner-draw combo schaalt z'n rijhoogte niet vanzelf met het font; expliciet zetten.
+			{
+				HDC hdcCb = GetDC(hDlg);
+				HFONT hOldCb = (HFONT)SelectObject(hdcCb, hfLabelColor);
+				TEXTMETRIC tmCb; GetTextMetrics(hdcCb, &tmCb);
+				SelectObject(hdcCb, hOldCb);
+				ReleaseDC(hDlg, hdcCb);
+				int cbItemH = tmCb.tmHeight + Scale(4);
+				SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_SETITEMHEIGHT, (WPARAM)-1, cbItemH);
+				SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_SETITEMHEIGHT, 0, cbItemH);
+			}
 
 			s_pfnOrigLabelColorProc = (WNDPROC)SetWindowLongPtr(
 				GetDlgItem(hDlg, IDC_FILTERLABELCOLOR), GWLP_WNDPROC, (LONG_PTR)FilterLabelColorSubclassProc);
@@ -10620,7 +10648,10 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 		while (fgets(szLine, sizeof(szLine), pFile) != NULL)
 		{
-			szLine[strlen(szLine)-1] = '\0';	// Remove linebreaks
+			// FIX [ReadFilters]: voorheen werd het laatste teken onvoorwaardelijk gestript
+			// → underflow (szLine[-1]) op een NUL-regel, en chop van het laatste echte
+			// teken op een regel zonder afsluitende newline. Strip nu alleen een echte '\n'.
+			{ size_t _ln = strlen(szLine); if (_ln && szLine[_ln-1] == '\n') szLine[_ln-1] = '\0'; }
 
 			if (nLines == 0)
 			{
@@ -10644,7 +10675,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 				}
 				else
 				{
-					memmove(szLine, &szLine[12], strlen(szLine));
+					// FIX [ReadFilters]: kopieerde strlen(szLine) bytes vanaf offset 12
+					// → 12 bytes over-read voorbij het bron-einde. +1 neemt de NUL mee.
+					memmove(szLine, &szLine[12], strlen(szLine) - 12 + 1);
 					iFilterCount=atoi(szLine);
 				}
 			}
@@ -10654,7 +10687,11 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 				if (strncmp(szLine, "Filter", 6) == 0)
 				{
-					pos = strchr(szLine, '=') - szLine+1;	// Find first item
+					// FIX [ReadFilters]: strchr kon NULL teruggeven (regel "Filter..." zonder '=')
+					// → (NULL - szLine) is undefined en pos werd een wilde index.
+					char *pEq = strchr(szLine, '=');
+					if (!pEq) { bError = true; pos = 0; }
+					else pos = (int)(pEq - szLine) + 1;	// Find first item
 				}
 				else pos=0;
 
@@ -10788,13 +10825,19 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 								szSepfiles[MAX_STR_LEN - 1] = '\0';
 								{ char* pQ = strchr(szSepfiles, '"'); if (pQ) *pQ = '\0'; }
 								pos += strlen(szSepfiles);
+								// FIX [ReadFilters]: sep_filterfile is [3][FILTER_FILE_LEN+1].
+								// De oude do/while had GEEN array-bound (>3 sepfiles → schrijven
+								// voorbij het array) en GEEN lengtebegrenzing (strcpy van een token
+								// tot MAX_STR_LEN in een 129-byte veld), plus crash op een NULL-token.
+								// Nu begrensd op 3 sepfiles met bounded copy.
 								token = strtok_s(szSepfiles, ";", &strtokCtx);
-
-								do
+								while (token && filter.sep_filterfiles < 3)
 								{
-									strcpy(filter.sep_filterfile[filter.sep_filterfiles++], token);
+									strncpy(filter.sep_filterfile[filter.sep_filterfiles], token, FILTER_FILE_LEN);
+									filter.sep_filterfile[filter.sep_filterfiles][FILTER_FILE_LEN] = '\0';
+									filter.sep_filterfiles++;
+									token = strtok_s(NULL, ";", &strtokCtx);
 								}
-								while (token = strtok_s(NULL, ";", &strtokCtx));
 							}
 							break;
 
@@ -10819,7 +10862,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 					iFilter++;
 				}
 			}
-			if (bError) return(false);
+			// FIX [ReadFilters]: sluit het bestand vóór de error-return — voorheen lekte
+			// pFile bij een corrupte regel (de while-lus verliet de functie met open handle).
+			if (bError) { fclose(pFile); pFile = NULL; return(false); }
 			else nLines++;
 		}
 		fclose(pFile);

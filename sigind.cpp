@@ -98,7 +98,7 @@ void DrawSigInd(HWND hwnd)
 {
 	HDC hdc;
 	RECT r;
-	int x=5,y=4;
+	int x=Scale(5),y=Scale(4),bw=Scale(bms.bmWidth),bh=Scale(bms.bmHeight);	// FIX [DpiScale]: geschaalde sigind
 	si_index=0;  // this is used by UpdateSigInd().
 	extern double dRX_Quality;
 
@@ -110,7 +110,7 @@ void DrawSigInd(HWND hwnd)
 		if (old_rect_flg)
 		{  // erase last display of bitmap
 			SelectObject(hdc,lgray_brush);
-			Rectangle(hdc,old_rect.right-(bms.bmWidth+x),y,old_rect.right-(x-1),bms.bmHeight+y+1);
+			Rectangle(hdc,old_rect.right-(bw+x),y,old_rect.right-(x-1),bh+y+1);	// FIX [DpiScale]
 		}
 
 		GetClientRect(hwnd, &r);
@@ -119,19 +119,20 @@ void DrawSigInd(HWND hwnd)
 
 		// need black background for bitmap
 		SelectObject(hdc,black_brush);
-		Rectangle(hdc,r.right-(bms.bmWidth+x),y,r.right-(x-1),bms.bmHeight+y+1);
+		Rectangle(hdc,r.right-(bw+x),y,r.right-(x-1),bh+y+1);	// FIX [DpiScale]
 
 		// Keep record of bitmaps current location
-		sig_rect.left	= r.right-(bms.bmWidth+x);
+		sig_rect.left	= r.right-(bw+x);	// FIX [DpiScale]
 		sig_rect.top	= y;
-		sig_rect.bottom	= bms.bmHeight + y;
+		sig_rect.bottom	= bh + y;	// FIX [DpiScale]
 		sig_rect.right	= r.right-(x-1);
 
 		// draw bitmap
 		if (hdcMemory = CreateCompatibleDC(hdc))
 		{
 			SelectObject(hdcMemory, hbm_sigind);
-			BitBlt(hdc,sig_rect.left,sig_rect.top, bms.bmWidth, bms.bmHeight, hdcMemory, 0, 0, SRCPAINT);
+			SetStretchBltMode(hdc, COLORONCOLOR);	// FIX [DpiScale]
+			StretchBlt(hdc,sig_rect.left,sig_rect.top, bw, bh, hdcMemory, 0, 0, bms.bmWidth, bms.bmHeight, SRCPAINT);
 			DeleteDC(hdcMemory);
 		}
 		ReleaseDC(hwnd,hdc);
@@ -201,22 +202,22 @@ void show_sigind(int new_pos,int old_pos)
 
 	// erase old line.
 	SelectObject(hdc,SysPEN[WHITE]);
-	x = sig_rect.left+sip[old_pos][0];
-	y = sig_rect.top+sip[old_pos][1];
+	x = sig_rect.left+Scale(sip[old_pos][0]);	// FIX [DpiScale]
+	y = sig_rect.top+Scale(sip[old_pos][1]);
 	MoveToEx(hdc,x,y,NULL);
 
-	x = sig_rect.left+sip[old_pos][2];
-	y = sig_rect.top+sip[old_pos][3];
+	x = sig_rect.left+Scale(sip[old_pos][2]);
+	y = sig_rect.top+Scale(sip[old_pos][3]);
 	LineTo(hdc,x,y);
 
 	// Draw new line.
 	SelectObject(hdc,SysPEN[RED]);
-	x = sig_rect.left+sip[new_pos][0];
-	y = sig_rect.top+sip[new_pos][1];
+	x = sig_rect.left+Scale(sip[new_pos][0]);	// FIX [DpiScale]
+	y = sig_rect.top+Scale(sip[new_pos][1]);
 	MoveToEx(hdc,x,y,NULL);
 
-	x = sig_rect.left+sip[new_pos][2];
-	y = sig_rect.top+sip[new_pos][3];
+	x = sig_rect.left+Scale(sip[new_pos][2]);
+	y = sig_rect.top+Scale(sip[new_pos][3]);
 	LineTo(hdc,x,y);
 
 	ReleaseDC(ghWnd,hdc);

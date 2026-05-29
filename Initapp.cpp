@@ -59,6 +59,11 @@ int pane1Height, pane2Height, pane1Pos, pane2Pos, pane1Top;
 // All font lfHeight values are stored at 96-DPI baseline; scale with MulDiv(px, g_dpi, 96).
 UINT g_dpi = 96;
 
+// FIX [DpiScale]: echte toolbar-hoogte + bovenrand pane1 (zie initapp.h).
+// Fallback-waarden ~ oude TOOLBAR_SIZE, mocht een paint voor WM_CREATE vallen.
+int g_cyToolbar = 30;
+int g_cyTopBand = 49;
+
 // Returns the DPI for hwnd (Win10 1607+) or falls back to the desktop DC.
 UINT PdwGetDpi(HWND hwnd)
 {
