@@ -9335,7 +9335,12 @@ int GetMailOptions(HWND hDlg)
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_USER), ret) ;
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_PASSWORD), ret) ;
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_AUTH), ret) ;
-	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_SENDIN), ret) ;
+	// FIX [MailSplit]: in split mode the Notification combo is irrelevant — keep it grayed
+	{
+		BOOL split = IsDlgButtonChecked(hDlg, IDC_MAIL_SPLIT_CONFIG) ? TRUE : FALSE ;
+		EnableWindow(GetDlgItem(hDlg, IDC_SMTP_SENDIN),     ret && !split) ;
+		EnableWindow(GetDlgItem(hDlg, IDC_SMTP_NOTIF_TXT),  ret && !split) ;
+	}
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_CHARSET), ret) ;
 	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_ENCRYPTION), ret) ;
 
@@ -9395,6 +9400,87 @@ char *GetTestMail(int nLine)
 	wsprintf(szBuf[7], "Message") ;
 	wsprintf(szBuf[8], "Label") ;
 	return(szBuf[nLine]) ;
+}
+
+
+// FIX [MailSplit]: read the Subject-row checkboxes into a field bitmask (ADDRESS..LABEL)
+int GetMailSubjectOptions(HWND hDlg)
+{
+	int n = 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_ADDRESS) ? MAIL_OPTION_ADDRESS : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_TIME)    ? MAIL_OPTION_TIME    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_DATE)    ? MAIL_OPTION_DATE    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_MODE)    ? MAIL_OPTION_MODE    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_TYPE)    ? MAIL_OPTION_TYPE    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_BITRATE) ? MAIL_OPTION_BITRATE : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_MESSAGE) ? MAIL_OPTION_MESSAGE : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_SUBJ_LABEL)   ? MAIL_OPTION_LABEL   : 0 ;
+	return n ;
+}
+
+// FIX [MailSplit]: read the Body-row (existing IDC_SMTP_*) checkboxes into a field bitmask
+int GetMailBodyOptions(HWND hDlg)
+{
+	int n = 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_ADDRESS) ? MAIL_OPTION_ADDRESS : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_TIME)    ? MAIL_OPTION_TIME    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_DATE)    ? MAIL_OPTION_DATE    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_MODE)    ? MAIL_OPTION_MODE    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_TYPE)    ? MAIL_OPTION_TYPE    : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_BITRATE) ? MAIL_OPTION_BITRATE : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_MESSAGE) ? MAIL_OPTION_MESSAGE : 0 ;
+	n += IsDlgButtonChecked(hDlg, IDC_SMTP_LABEL)   ? MAIL_OPTION_LABEL   : 0 ;
+	return n ;
+}
+
+// FIX [MailSplit]: tick the Subject-row checkboxes from a field bitmask
+void SetMailSubjectOptions(HWND hDlg, int n)
+{
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_ADDRESS, (n & MAIL_OPTION_ADDRESS) != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_TIME,    (n & MAIL_OPTION_TIME)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_DATE,    (n & MAIL_OPTION_DATE)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_MODE,    (n & MAIL_OPTION_MODE)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_TYPE,    (n & MAIL_OPTION_TYPE)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_BITRATE, (n & MAIL_OPTION_BITRATE) != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_MESSAGE, (n & MAIL_OPTION_MESSAGE) != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_SUBJ_LABEL,   (n & MAIL_OPTION_LABEL)   != 0) ;
+}
+
+// FIX [MailSplit]: tick the Body-row (existing) checkboxes from a field bitmask
+void SetMailBodyOptions(HWND hDlg, int n)
+{
+	CheckDlgButton(hDlg, IDC_SMTP_ADDRESS, (n & MAIL_OPTION_ADDRESS) != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_TIME,    (n & MAIL_OPTION_TIME)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_DATE,    (n & MAIL_OPTION_DATE)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_MODE,    (n & MAIL_OPTION_MODE)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_TYPE,    (n & MAIL_OPTION_TYPE)    != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_BITRATE, (n & MAIL_OPTION_BITRATE) != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_MESSAGE, (n & MAIL_OPTION_MESSAGE) != 0) ;
+	CheckDlgButton(hDlg, IDC_SMTP_LABEL,   (n & MAIL_OPTION_LABEL)   != 0) ;
+}
+
+// FIX [MailSplit]: show/hide the Subject row + labels vs. the legacy Notification combo
+void UpdateMailSplitVisibility(HWND hDlg)
+{
+	BOOL split = IsDlgButtonChecked(hDlg, IDC_MAIL_SPLIT_CONFIG) ? TRUE : FALSE ;
+	// Subject row only exists in split mode.
+	static const int subjCtrls[] = {
+		IDC_SMTP_SUBJ_TXT, IDC_SMTP_SUBJ_ADDRESS, IDC_SMTP_SUBJ_TIME, IDC_SMTP_SUBJ_DATE,
+		IDC_SMTP_SUBJ_MODE, IDC_SMTP_SUBJ_TYPE, IDC_SMTP_SUBJ_BITRATE, IDC_SMTP_SUBJ_MESSAGE,
+		IDC_SMTP_SUBJ_LABEL
+	} ;
+	for (int i = 0 ; i < (int)(sizeof(subjCtrls)/sizeof(subjCtrls[0])) ; i++)
+		ShowWindow(GetDlgItem(hDlg, subjCtrls[i]), split ? SW_SHOW : SW_HIDE) ;
+
+	// The existing checkbox row is always visible. Relabel it so its meaning is clear:
+	// "Body:" in split mode, "Fields:" in legacy mode (routed via the Notification combo).
+	ShowWindow(GetDlgItem(hDlg, IDC_SMTP_BODY_TXT), SW_SHOW) ;
+	SetDlgItemText(hDlg, IDC_SMTP_BODY_TXT, split ? "Body:" : "Fields:") ;
+
+	// The "Notification" combo (Subject/Message/Both) only applies to legacy mode.
+	// Keep it visible but grayed out in split mode so the layout stays stable.
+	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_NOTIF_TXT), split ? FALSE : TRUE) ;
+	EnableWindow(GetDlgItem(hDlg, IDC_SMTP_SENDIN),    split ? FALSE : TRUE) ;
 }
 
 
@@ -9458,6 +9544,13 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 		SetMailOptions(hDlg, Profile.nMailOptions) ;
 		nOldOptions = GetMailOptions(hDlg) ;
+
+		// FIX [MailSplit]: restore split-config state and field selections
+		CheckDlgButton(hDlg, IDC_MAIL_SPLIT_CONFIG, Profile.bMailSplitConfig) ;
+		SetMailSubjectOptions(hDlg, Profile.nMailSubjectOptions) ;
+		if (Profile.bMailSplitConfig)
+			SetMailBodyOptions(hDlg, Profile.nMailBodyOptions) ;	// body row reflects saved body fields
+		UpdateMailSplitVisibility(hDlg) ;
 		return (TRUE);
 
 		case WM_COMMAND:
@@ -9475,6 +9568,10 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				Profile.nMailOptions = GetMailOptions(hDlg) ;
 				Profile.SMTP = Profile.nMailOptions & MAIL_OPTION_ENABLE ? 1 : 0 ;
 				Profile.ssl =  Profile.nMailOptions & MAIL_OPTION_SSL ? 1 : 0 ;
+				// FIX [MailSplit]: persist split-config state and per-row field selections
+				Profile.bMailSplitConfig    = IsDlgButtonChecked(hDlg, IDC_MAIL_SPLIT_CONFIG) ? 1 : 0 ;
+				Profile.nMailSubjectOptions = GetMailSubjectOptions(hDlg) ;
+				Profile.nMailBodyOptions    = GetMailBodyOptions(hDlg) ;
 				MailInit(Profile.szMailHost, Profile.szMailHeloDomain, Profile.szMailFrom, Profile.szMailTo, Profile.szMailUser, Profile.szMailPassword, Profile.iMailPort, Profile.nMailOptions);
 				SendMail(0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL) ;
 
@@ -9496,6 +9593,10 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				Profile.iMailPort = GetDlgItemInt(hDlg, IDC_SMTP_PORT, NULL, FALSE);
 				Profile.nMailOptions = GetMailOptions(hDlg) ;
 				Profile.ssl =  Profile.nMailOptions & MAIL_OPTION_SSL ? 1 : 0 ;
+				// FIX [MailSplit]: apply split-config so the test mail matches saved behaviour
+				Profile.bMailSplitConfig    = IsDlgButtonChecked(hDlg, IDC_MAIL_SPLIT_CONFIG) ? 1 : 0 ;
+				Profile.nMailSubjectOptions = GetMailSubjectOptions(hDlg) ;
+				Profile.nMailBodyOptions    = GetMailBodyOptions(hDlg) ;
 				if((Profile.nMailOptions & MAIL_OPTION_MODES) && (!(Profile.nMailOptions & ~MAIL_OPTION_MODES)))
 				{
 					break ;
@@ -9514,6 +9615,9 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				break ;
 			case IDC_SMTP_SENDIN :
 				nOldOptions = GetMailOptions(hDlg) ;
+				break ;
+			case IDC_MAIL_SPLIT_CONFIG :	// FIX [MailSplit]: toggle subject row vs notification combo
+				UpdateMailSplitVisibility(hDlg) ;
 				break ;
 			case IDC_SMTP_ADDRESS :
 			case IDC_SMTP_TIME    :
@@ -10333,7 +10437,11 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->iMailPort = (INT) GetPrivateProfileInt("SMTP", TEXT("Port"), 587, lpszIniPathName);
 	pProfile->nMailOptions = (INT) GetPrivateProfileInt("SMTP", TEXT("Options"), (MAIL_OPTION_ADDRESS | MAIL_OPTION_SUBJECT), lpszIniPathName);
 	pProfile->ssl = (INT) GetPrivateProfileInt("SMTP", TEXT("SSL"), 0, lpszIniPathName);
-	
+	// FIX [MailSplit]: split Subject/Body config (default OFF = legacy behaviour)
+	pProfile->bMailSplitConfig    = (INT) GetPrivateProfileInt("SMTP", TEXT("SplitConfig"),    0, lpszIniPathName);
+	pProfile->nMailSubjectOptions = (INT) GetPrivateProfileInt("SMTP", TEXT("SubjectOptions"), MAIL_OPTION_MESSAGE, lpszIniPathName);
+	pProfile->nMailBodyOptions    = (INT) GetPrivateProfileInt("SMTP", TEXT("BodyOptions"),    (MAIL_OPTION_LABEL | MAIL_OPTION_TIME), lpszIniPathName);
+
 	MailInit(Profile.szMailHost, Profile.szMailHeloDomain, Profile.szMailFrom, Profile.szMailTo, Profile.szMailUser, Profile.szMailPassword, Profile.iMailPort, Profile.nMailOptions);
 
 	pProfile->webhookEnabled         = (INT) GetPrivateProfileInt("Webhook", TEXT("Enabled"),         0,  lpszIniPathName);
@@ -10833,6 +10941,9 @@ void WriteSettings()
 		fprintf(pFile, "Port=%i\n",						Profile.iMailPort);
 		fprintf(pFile, "Options=%i\n",					Profile.nMailOptions);
 		fprintf(pFile, "SSL=%i\n",                      Profile.ssl);
+		fprintf(pFile, "SplitConfig=%i\n",              Profile.bMailSplitConfig);		// FIX [MailSplit]
+		fprintf(pFile, "SubjectOptions=%i\n",           Profile.nMailSubjectOptions);	// FIX [MailSplit]
+		fprintf(pFile, "BodyOptions=%i\n",              Profile.nMailBodyOptions);		// FIX [MailSplit]
 
 		fprintf(pFile, "\n[Webhook]\n");
 		fprintf(pFile, "Enabled=%i\n",          Profile.webhookEnabled);

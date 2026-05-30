@@ -190,6 +190,9 @@ typedef struct
 	char szMailPassword[MAIL_TEXT_LEN] ;
 	int	 iMailPort ;
 	int	 nMailOptions ;
+	int  bMailSplitConfig;			// FIX [MailSplit]: enable split Subject/Body configuration
+	int  nMailSubjectOptions;		// FIX [MailSplit]: fields for Subject line (when split mode ON)
+	int  nMailBodyOptions;			// FIX [MailSplit]: fields for Body (when split mode ON)
 
 	COLORREF color_background;
 	COLORREF color_address;

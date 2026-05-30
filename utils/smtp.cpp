@@ -34,6 +34,10 @@ static BOOL bWsaStartup ;
 #define MAX_MAIL		100
 #define MAX_MAIL_LEN	1024
 
+// FIX [MailSplit]: separator byte carrying Subject vs Body through the mail queue.
+// 0x1F (US, unit separator) never occurs in pager text, so it is a safe delimiter.
+#define MAIL_SPLIT_SEP '\x1f'
+
 static char szMailBuffer[MAX_MAIL][MAX_MAIL_LEN] ;
 static int  nBufferdMailStart ;
 static int  nBufferdMailEnd ;
@@ -1110,21 +1114,41 @@ static int smtpMail(int sfd, char *data)
 	char szBody[MAX_MAIL_LEN + 32]="";
 	extern int nSMTPemails;
 
-	for (int i=0; data[i]!=0; i++)
+	if (Profile.bMailSplitConfig)
 	{
-		if (data[i] == '�')
+		// FIX [MailSplit]: data = "<subject>\x1f<body>" — split on the first separator.
+		const char *sep = strchr(data, MAIL_SPLIT_SEP) ;
+		if (sep)
 		{
-			strcat(szSubject, " - ");
-			strcat(szBody, "\n");
+			size_t sl = (size_t)(sep - data) ;
+			if (sl > sizeof(szSubject) - 1) sl = sizeof(szSubject) - 1 ;
+			memcpy(szSubject, data, sl) ;
+			szSubject[sl] = '\0' ;
+			_snprintf(szBody, sizeof(szBody) - 1, "%s", sep + 1) ;
 		}
 		else
 		{
-			szSubject[strlen(szSubject)] = data[i];
-			szBody[strlen(szBody)] = data[i];
+			_snprintf(szBody, sizeof(szBody) - 1, "%s", data) ;	// no separator: treat all as body
+		}
+	}
+	else
+	{
+		for (int i=0; data[i]!=0; i++)
+		{
+			if (data[i] == '�')
+			{
+				strcat(szSubject, " - ");
+				strcat(szBody, "\n");
+			}
+			else
+			{
+				szSubject[strlen(szSubject)] = data[i];
+				szBody[strlen(szBody)] = data[i];
+			}
 		}
 	}
 
-	if (mail.options & MAIL_OPTION_SUBJECT)
+	if (Profile.bMailSplitConfig || (mail.options & MAIL_OPTION_SUBJECT))
 	{
 		if (szSubject[0])
 		{
@@ -1181,7 +1205,7 @@ static int smtpMail(int sfd, char *data)
 	
 	sockPuts(sfd,"\r\n");
 	
-	if ((mail.options & MAIL_OPTION_MSG) && szBody[0])
+	if ((Profile.bMailSplitConfig || (mail.options & MAIL_OPTION_MSG)) && szBody[0])
 	{
 		// FIX [SmtpDotStuff]: escape body lines starting with '.' per RFC 5321
 		char szBodyDs[2 * MAX_MAIL_LEN + 64];
@@ -1345,6 +1369,29 @@ void StartMail(int nOptions)
 }
 
 
+// FIX [MailSplit]: append the fields enabled in 'mask' to dst (same format as legacy SendMail)
+static void AppendMailFields(char *dst, size_t dstLen, int mask,
+	char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel)
+{
+	size_t len = strlen(dst) ;
+	if(mask & MAIL_OPTION_ADDRESS) len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz1) ;
+	if(mask & MAIL_OPTION_TIME)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz2) ;
+	if(mask & MAIL_OPTION_DATE)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz3) ;
+	if(mask & MAIL_OPTION_MODE)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz4) ;
+	if(mask & MAIL_OPTION_TYPE)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz5) ;
+	if(mask & MAIL_OPTION_BITRATE) len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz6) ;
+	if(mask & MAIL_OPTION_MESSAGE) len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz7) ;
+	if(mask & MAIL_OPTION_LABEL)
+	{
+		// FIX [MailSplit]: only prefix the label with "- " when other fields precede it;
+		// a lone label would otherwise start with a stray hyphen.
+		if(len > 0)
+			len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "- %s ", szLabel) ;
+		else
+			len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", szLabel) ;
+	}
+}
+
 int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP, char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel)
 {
 	// FIX [Geheugenbeheer]: szBuffer vergroot van 1024 naar MAX_STR_LEN+256 (5376 bytes)
@@ -1402,37 +1449,56 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 		return(0) ;
 	}
 
-	if(mail.options & MAIL_OPTION_ADDRESS)
+	if(Profile.bMailSplitConfig)
 	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz1) ;
+		// FIX [MailSplit]: build Subject and Body independently, joined by MAIL_SPLIT_SEP.
+		char szSubj[MAX_STR_LEN + 128] = { 0 } ;
+		char szBody[MAX_STR_LEN + 128] = { 0 } ;
+		AppendMailFields(szSubj, sizeof(szSubj), Profile.nMailSubjectOptions,
+			sz1, sz2, sz3, sz4, sz5, sz6, sz7, szLabel) ;
+		AppendMailFields(szBody, sizeof(szBody), Profile.nMailBodyOptions,
+			sz1, sz2, sz3, sz4, sz5, sz6, sz7, szLabel) ;
+
+		if(szSubj[0] || szBody[0])
+			len = _snprintf_s(szBuffer, sizeof(szBuffer), _TRUNCATE, "%s%c%s", szSubj, MAIL_SPLIT_SEP, szBody) ;
+		else
+			szBuffer[0] = '\0' ;	// nothing selected — don't queue an empty mail
 	}
-	if(mail.options & MAIL_OPTION_TIME)
+	else
 	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz2) ;
-	}
-	if(mail.options & MAIL_OPTION_DATE)
-	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz3) ;
-	}
-	if(mail.options & MAIL_OPTION_MODE)
-	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz4) ;
-	}
-	if(mail.options & MAIL_OPTION_TYPE)
-	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz5) ;
-	}
-	if(mail.options & MAIL_OPTION_BITRATE)
-	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz6) ;
-	}
-	if(mail.options & MAIL_OPTION_MESSAGE)
-	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz7) ;
-	}
-	if(mail.options & MAIL_OPTION_LABEL)
-	{
-		len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "- %s ", szLabel) ;
+		// legacy behaviour: one concatenated blob, routed to Subject/Body via the SENDIN bits
+		if(mail.options & MAIL_OPTION_ADDRESS)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz1) ;
+		}
+		if(mail.options & MAIL_OPTION_TIME)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz2) ;
+		}
+		if(mail.options & MAIL_OPTION_DATE)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz3) ;
+		}
+		if(mail.options & MAIL_OPTION_MODE)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz4) ;
+		}
+		if(mail.options & MAIL_OPTION_TYPE)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz5) ;
+		}
+		if(mail.options & MAIL_OPTION_BITRATE)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz6) ;
+		}
+		if(mail.options & MAIL_OPTION_MESSAGE)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz7) ;
+		}
+		if(mail.options & MAIL_OPTION_LABEL)
+		{
+			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "- %s ", szLabel) ;
+		}
 	}
 
 	if(!mail.smtp_port)

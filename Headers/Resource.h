@@ -431,8 +431,22 @@
 #define IDC_SMTP_LASTERROR        1246
 #define IDC_SMTP_SSL			  1247
 #define IDC_SMTP_ENCRYPTION       1248
+#define IDC_MAIL_SPLIT_CONFIG     1249	// FIX [MailSplit]: enable split Subject/Body mode
 
 #define IDS_SIGIND                1250
+
+// FIX [MailSplit]: Subject-row checkboxes (parallel to the existing IDC_SMTP_* body row)
+#define IDC_SMTP_SUBJ_ADDRESS     1380
+#define IDC_SMTP_SUBJ_TIME        1381
+#define IDC_SMTP_SUBJ_DATE        1382
+#define IDC_SMTP_SUBJ_MODE        1383
+#define IDC_SMTP_SUBJ_TYPE        1384
+#define IDC_SMTP_SUBJ_BITRATE     1385
+#define IDC_SMTP_SUBJ_MESSAGE     1386
+#define IDC_SMTP_SUBJ_LABEL       1387
+#define IDC_SMTP_SUBJ_TXT         1388	// static "Subject:" label
+#define IDC_SMTP_BODY_TXT         1389	// static "Body:" label
+#define IDC_SMTP_NOTIF_TXT        1390	// static "Notification" label (legacy mode only)
 #define IDS_EXCLAM                1251
 #define IDS_ABOUTLOGO             1252
 
