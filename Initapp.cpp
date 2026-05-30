@@ -55,7 +55,7 @@ int iMaxWidth;
 int sizeSet = 0;
 int pane1Height, pane2Height, pane1Pos, pane2Pos, pane1Top;
 
-// Current system/window DPI — updated at startup and in WM_DPICHANGED.
+// Current system/window DPI — eenmalig bepaald in WM_CREATE. System DPI Aware ontvangt geen WM_DPICHANGED.
 // All font lfHeight values are stored at 96-DPI baseline; scale with MulDiv(px, g_dpi, 96).
 UINT g_dpi = 96;
 

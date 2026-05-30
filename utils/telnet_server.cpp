@@ -266,8 +266,16 @@ static void TsLog(const char *fmt, ...)
 
 static void PostStatus(int state)
 {
-    HWND h = g_tsStatusWnd;
-    if (h) PostMessage(h, WM_TELNET_STATUS, (WPARAM)state, (LPARAM)g_tsClientCount);
+    // FIX [TelnetStatusLock]: g_tsStatusWnd en g_tsClientCount worden elders onder g_tsCs
+    // geschreven; lees ze hier ook onder de lock voor een consistente snapshot. Windows
+    // CRITICAL_SECTION is re-entrant, dus dit is veilig ook als de caller de lock al houdt.
+    HWND h;
+    int  count;
+    if (g_tsCsInit) EnterCriticalSection(&g_tsCs);
+    h     = g_tsStatusWnd;
+    count = g_tsClientCount;
+    if (g_tsCsInit) LeaveCriticalSection(&g_tsCs);
+    if (h) PostMessage(h, WM_TELNET_STATUS, (WPARAM)state, (LPARAM)count);
 }
 
 /* ---------------------------------------------------------------------------
@@ -436,7 +444,9 @@ static int BuildLineFromCurrentMsg(char *out, int outsz)
     else if (strncmp(mode, "POCSAG", 6) == 0) {
         /* POCSAG: "-ALPHA- 1234567-N message" — function from "POCSAG-N". */
         int func = 0;
-        if (mode[7] >= '0' && mode[7] <= '9') func = mode[7] - '0';
+        // FIX [TelnetMode7]: lees mode[7] alleen als mode[6] niet de NUL is — bij een kale
+        // "POCSAG" (zonder "-N") wees mode[7] voorbij de string-terminator.
+        if (mode[6] && mode[7] >= '0' && mode[7] <= '9') func = mode[7] - '0';
 
         const char *tag = MapPocsagTag(type);
         if (strstr(type ? type : "", "TONE")) {

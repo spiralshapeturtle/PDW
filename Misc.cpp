@@ -419,7 +419,11 @@ void AddAssignment(int assignedframe, int groupbit, int capcode)
 		if (groupbit < 16) Remove_MissedGroupcall(groupbit);
 	}
 
-	if (aGroupCodes[groupbit][CAPCODES_INDEX] < MAXIMUM_GROUPSIZE)
+	// FIX [GroupOverflow]: index 0 is de teller, capcodes staan op 1..MAXIMUM_GROUPSIZE-1.
+	// De oude guard (< MAXIMUM_GROUPSIZE) liet de teller naar 1000 lopen, waarna op index
+	// [1000] werd geschreven — één voorbij int[1000] (gevonden via /analyze C6386). Cap nu
+	// op MAXIMUM_GROUPSIZE-1 zodat de write altijd binnen het array blijft.
+	if (aGroupCodes[groupbit][CAPCODES_INDEX] < MAXIMUM_GROUPSIZE - 1)
 	{
 		aGroupCodes[groupbit][CAPCODES_INDEX]++;
 		aGroupCodes[groupbit][aGroupCodes[groupbit][CAPCODES_INDEX]] = capcode;
@@ -1825,7 +1829,9 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 				if (aMessages[999][BLOCK_ADDRESS])	// Array full?
 				{
 					// FIX [X1b]: sizeof(aMessages) overleest array-einde; laatste slot handmatig wissen
-					memmove(aMessages[0], aMessages[1], sizeof(aMessages) - sizeof(aMessages[0]));
+					// FIX [X1c]: dest=aMessages (volledige 2D-array) i.p.v. aMessages[0] (één 24-byte rij)
+					// — semantisch identieke shift, maar /analyze ziet nu de juiste buffergrootte (geen C6386).
+					memmove(aMessages, aMessages + 1, sizeof(aMessages) - sizeof(aMessages[0]));
 					memset(&aMessages[999], 0, sizeof(aMessages[0]));
 				}
 				for (i=0; i<1000; i++)
@@ -1871,6 +1877,11 @@ char LogFileHandling(int file, char *szFileName, int action)
 	int  i=1, UseDate=0;
 	char filename[MAX_PATH];		// Temp buffer for setting filenames
 	char ext[5];					// Temp buffer for file extension
+
+	// FIX [LogFileInit]: filename/ext bleven ongeïnitialiseerd in de default-case van de
+	// switch hieronder; strstr(filename,...) las dan ongeïnitialiseerd geheugen (/analyze C6054).
+	filename[0] = '\0';
+	ext[0]      = '\0';
 	
 	CreateDateFilename("", NULL);	// TEST/TEMP
 

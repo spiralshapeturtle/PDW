@@ -435,7 +435,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.4.4";			// Current version info
+char *pdw_version = "PDW v" PDW_VERSION_STR;	// FIX [Version]: version from headers\resource.h
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;
@@ -975,7 +975,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		g_dpi = PdwGetDpi(hWnd);
 
-		SetBoxFONT();	// FIX [DpiScale]: hboxfont wordt aangemaakt voor g_dpi bekend is (in Get_Drawing_Objects); hier opnieuw aanmaken met de juiste DPI.
+		SetBoxFONT();		// FIX [DpiScale]: hboxfont wordt aangemaakt voor g_dpi bekend is (in Get_Drawing_Objects); hier opnieuw aanmaken met de juiste DPI.
+		InitSigIndPens();	// FIX [DpiScale]: naaldpennen met DPI-proportionele dikte
 
 		if (!(GetLogFONTS()))		// Get general purpose font objects.
 		{
@@ -1884,17 +1885,17 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			else						g_scrollSize = 0;
 
 			// Is main win Y size to small?
-			if ((g_rect.bottom - g_rect.top) < MIN_Y_WIN_SIZE)
+			if ((g_rect.bottom - g_rect.top) < Scale(MIN_Y_WIN_SIZE))	// FIX [DpiScale]: minimum venstergrootte meeschalen
 			{
 				MoveWindow(hWnd, Profile.xPos, Profile.yPos,
-                          (g_rect.right - g_rect.left), MIN_Y_WIN_SIZE, TRUE);
+                          (g_rect.right - g_rect.left), Scale(MIN_Y_WIN_SIZE), TRUE);
 			}
 
 			// Is main win X size to small?
-			if ((g_rect.right - g_rect.left) < MIN_X_WIN_SIZE)
+			if ((g_rect.right - g_rect.left) < Scale(MIN_X_WIN_SIZE))	// FIX [DpiScale]
 			{
 				MoveWindow(hWnd, Profile.xPos, Profile.yPos,
-                           MIN_X_WIN_SIZE, (g_rect.bottom - g_rect.top), TRUE);
+                           Scale(MIN_X_WIN_SIZE), (g_rect.bottom - g_rect.top), TRUE);
 			}
 
 			if (wParam != SIZE_MAXIMIZED)
@@ -9489,8 +9490,9 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemInt(hDlg, IDC_SMTP_SESSIONS,  nSMTPsessions, false);
 		SetDlgItemInt(hDlg, IDC_SMTP_EMAILS,    nSMTPemails,   false);
 		SetDlgItemInt(hDlg, IDC_SMTP_ERRORS,    nSMTPerrors,   false);
-		SetDlgItemInt(hDlg, IDC_SMTP_LASTERROR, iSMTPlastError,false);
-		
+		SetDlgItemInt(hDlg, IDC_SMTP_LASTERROR, iSMTPlastError, false);	// FIX [SmtpLog]: show error code (0 = no error)
+		CheckDlgButton(hDlg, IDC_SMTP_LOG_ERRORS, Profile.bMailLogErrors);
+
 		// FIX [GUIEncryption]: populate Encryption combobox before SetMailOptions so
 		// GetMailOptions() (called inside SetMailOptions path) reads a valid selection.
 		SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR)"None");
@@ -9521,6 +9523,7 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				Profile.nMailOptions = GetMailOptions(hDlg) ;
 				Profile.SMTP = Profile.nMailOptions & MAIL_OPTION_ENABLE ? 1 : 0 ;
 				Profile.ssl =  Profile.nMailOptions & MAIL_OPTION_SSL ? 1 : 0 ;
+				Profile.bMailLogErrors = IsDlgButtonChecked(hDlg, IDC_SMTP_LOG_ERRORS);	// FIX [SmtpLog]
 				MailInit(Profile.szMailHost, Profile.szMailHeloDomain, Profile.szMailFrom, Profile.szMailTo, Profile.szMailUser, Profile.szMailPassword, Profile.iMailPort, Profile.nMailOptions);
 				SendMail(0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL) ;
 
@@ -10546,7 +10549,8 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->iMailPort = (INT) GetPrivateProfileInt("SMTP", TEXT("Port"), 587, lpszIniPathName);
 	pProfile->nMailOptions = (INT) GetPrivateProfileInt("SMTP", TEXT("Options"), (MAIL_OPTION_ADDRESS | MAIL_OPTION_SUBJECT), lpszIniPathName);
 	pProfile->ssl = (INT) GetPrivateProfileInt("SMTP", TEXT("SSL"), 0, lpszIniPathName);
-	
+	pProfile->bMailLogErrors = (INT) GetPrivateProfileInt("SMTP", TEXT("LogErrors"), 0, lpszIniPathName);	// FIX [SmtpLog]: default off
+
 	MailInit(Profile.szMailHost, Profile.szMailHeloDomain, Profile.szMailFrom, Profile.szMailTo, Profile.szMailUser, Profile.szMailPassword, Profile.iMailPort, Profile.nMailOptions);
 
 	pProfile->webhookEnabled         = (INT) GetPrivateProfileInt("Webhook", TEXT("Enabled"),         0,  lpszIniPathName);
@@ -11073,6 +11077,7 @@ void WriteSettings()
 		fprintf(pFile, "Port=%i\n",						Profile.iMailPort);
 		fprintf(pFile, "Options=%i\n",					Profile.nMailOptions);
 		fprintf(pFile, "SSL=%i\n",                      Profile.ssl);
+		fprintf(pFile, "LogErrors=%i\n",                Profile.bMailLogErrors);	// FIX [SmtpLog]
 
 		fprintf(pFile, "\n[Webhook]\n");
 		fprintf(pFile, "Enabled=%i\n",          Profile.webhookEnabled);

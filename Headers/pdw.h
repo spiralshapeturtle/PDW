@@ -190,6 +190,7 @@ typedef struct
 	char szMailPassword[MAIL_TEXT_LEN] ;
 	int	 iMailPort ;
 	int	 nMailOptions ;
+	int  bMailLogErrors;	// FIX [SmtpLog]: log SMTP errors to disk (checkbox)
 
 	COLORREF color_background;
 	COLORREF color_address;

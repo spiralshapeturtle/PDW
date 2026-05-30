@@ -42,6 +42,11 @@ static byte dtable[256];
 
 extern int nSMTPerrors;
 extern int iSMTPlastError;
+extern PROFILE Profile;	// FIX [SmtpLog]: needed for LogfilePath
+extern char szPath[];		// FIX [SmtpLog]: needed for disk log path
+
+// FIX [SmtpLog]: global buffer for last SMTP error (user-readable) — displayed in Setup dialog
+static char g_szLastSmtpError[512] = "";
 
 //SSL
 SSL_CTX*      m_ctx;
@@ -610,7 +615,7 @@ char *DecodeBase64(char *szIn, char *szOut)
 	}	
 }
 
-void AddResponse(char *buf) 
+void AddResponse(char *buf)
 {
 // #ifdef _DEBUG
 	HDC		hDC ;
@@ -625,14 +630,25 @@ void AddResponse(char *buf)
 		}
 		SendMessage(mail.hResponse, LB_ADDSTRING, 0, (LPARAM) (LPSTR) buf) ;
 		OUTPUTDEBUGMSG((("AddResponse() : >>> %s"),buf));
+	}
 
-//		FILE *pResponse = NULL;
-//		if ((pResponse = fopen("SMTP-response.txt", "a")) != NULL)
-//		{
-//			fprintf(pResponse, "%s\n", buf);
-//			fclose(pResponse);
-//			pResponse = NULL;
-//		}
+	// FIX [SmtpLog]: log all SMTP responses to disk if checkbox enabled
+	if (Profile.bMailLogErrors) {
+		char szLog[MAX_PATH];
+		const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
+		if (root && root[0]) {
+			_snprintf(szLog, sizeof(szLog) - 1, "%s\\pdw_smtp_error.log", root);
+			szLog[sizeof(szLog) - 1] = '\0';
+
+			FILE *f = fopen(szLog, "a");
+			if (f) {
+				SYSTEMTIME st;
+				GetLocalTime(&st);
+				fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d | %s\n",
+					st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, buf);
+				fclose(f);
+			}
+		}
 	}
 // #endif
 }
@@ -882,6 +898,7 @@ static int smtpResponse(int sfd)
 	OUTPUTDEBUGMSG((("smtpResponse(): ERROR!\n")));
 	nSMTPerrors++;			// PH: Counts # Errors
 	iSMTPlastError = err;	// PH: Last Error
+	LogSmtpError(err);		// FIX [SmtpLog]: log to pdw_smtp_error.log
 
 	return (-1);
 }
@@ -1051,6 +1068,12 @@ static int smtpRcptTo(int sfd)
 		if(pTmp2) {
 			*pTmp2 = '\0' ;
 		}
+		// FIX [SmtpLog]: trim leading/trailing whitespace from email address
+		while(*pTmp1 && isspace((unsigned char)*pTmp1)) pTmp1++;
+		char *pEnd = pTmp1 + strlen(pTmp1) - 1;
+		while(pEnd > pTmp1 && isspace((unsigned char)*pEnd)) pEnd--;
+		*(pEnd + 1) = '\0';
+
 		_snprintf(buf, sizeof(buf)-1, "RCPT TO: <%s>\r\n", pTmp1);
 		sockPuts(sfd,buf);
 		if (smtpResponse(sfd) != 0) {
@@ -1064,9 +1087,9 @@ static int smtpRcptTo(int sfd)
 		else {
 			break ;
 		}
-	} 
+	}
 	return (0);
-	
+
 }
 
 // SMTP: DATA
@@ -1458,8 +1481,116 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 	}
 //	OUTPUTDEBUGMSG((("SendMail() nBufferdMailStart %d nBufferdMailEnd %d\n"), nBufferdMailStart, nBufferdMailEnd));
 	return(0) ;
-}	
+}
 
+// FIX [SmtpLog]: convert SMTP error code to human-readable message + optionally log to file
+extern char szPath[];
+const char *GetSmtpErrorMessage(int errCode)
+{
+	static char szBuf[256];
+	const char *msg = "Unknown error";
+
+	switch (errCode) {
+		case 0: return ""; // no error
+		case 100: msg = "Winsock initialization failed"; break;
+		case 101: msg = "Winsock version error"; break;
+		case 102: msg = "Socket send error"; break;
+		case 103: msg = "Socket receive error"; break;
+		case 104: msg = "Cannot connect to SMTP server"; break;
+		case 105: msg = "Cannot resolve server hostname"; break;
+		case 106: msg = "Invalid socket"; break;
+		case 107: msg = "Invalid hostname"; break;
+		case 108: msg = "Socket configuration error"; break;
+		case 109: msg = "Connection timeout (select)"; break;
+		case 110: msg = "Invalid IPv4 address"; break;
+		case 200: msg = "Message header not defined"; break;
+		case 201: msg = "From address not defined"; break;
+		case 202: msg = "Subject not defined"; break;
+		case 203: msg = "No recipients defined"; break;
+		case 204: msg = "Login not defined"; break;
+		case 205: msg = "Password not defined"; break;
+		case 206: msg = "Incorrect username/password"; break;
+		case 207: msg = "DIGEST authentication failed"; break;
+		case 208: msg = "Invalid server name"; break;
+		case 209: msg = "No recipient email"; break;
+		case 300: msg = "Server rejected MAIL FROM"; break;
+		case 301: msg = "Server rejected EHLO"; break;
+		case 302: msg = "PLAIN authentication not supported"; break;
+		case 303: msg = "LOGIN authentication not supported"; break;
+		case 304: msg = "CRAM-MD5 not supported"; break;
+		case 305: msg = "DIGEST-MD5 not supported"; break;
+		case 306: msg = "DIGEST-MD5 error"; break;
+		case 307: msg = "Server rejected DATA command"; break;
+		case 308: msg = "Error sending QUIT"; break;
+		case 309: msg = "Server rejected RCPT TO (invalid recipient)"; break;
+		case 310: msg = "Message body error"; break;
+		case 400: msg = "Server closed connection unexpectedly"; break;
+		case 401: msg = "Server not ready (check credentials/firewall)"; break;
+		case 402: msg = "SMTP server not responding"; break;
+		case 403: msg = "Connection timeout"; break;
+		case 404: msg = "Attachment file not found"; break;
+		case 405: msg = "Message too large"; break;
+		case 406: msg = "Invalid login credentials"; break;
+		case 407: msg = "Unexpected server response"; break;
+		case 408: msg = "Out of memory"; break;
+		case 409: msg = "Time error"; break;
+		case 410: msg = "Receive buffer empty"; break;
+		case 411: msg = "Send buffer empty"; break;
+		case 412: msg = "Message queue overflow"; break;
+		case 413: msg = "Server STARTTLS error"; break;
+		case 414: msg = "SSL/TLS initialization error"; break;
+		case 415: msg = "DATA block error"; break;
+		case 416: msg = "Server does not support STARTTLS"; break;
+		case 417: msg = "Server does not support LOGIN auth"; break;
+		case 553: msg = "Recipient address rejected (Gmail may reject forwarding addresses)"; break;
+	}
+
+	_snprintf(szBuf, sizeof(szBuf) - 1, "Error %d: %s", errCode, msg);
+	szBuf[sizeof(szBuf) - 1] = '\0';
+	return szBuf;
+}
+
+void LogSmtpError(int errCode)
+{
+	if (errCode == 0) return;
+
+	const char *msg = GetSmtpErrorMessage(errCode);
+
+	// Store in global for display in Setup dialog (user-readable, always)
+	_snprintf(g_szLastSmtpError, sizeof(g_szLastSmtpError) - 1, "%s", msg);
+	g_szLastSmtpError[sizeof(g_szLastSmtpError) - 1] = '\0';
+
+	// FIX [SmtpLog]: send to Monitor window (IDC_SMTP_RESPONSE)
+	char szBuf[512];
+	_snprintf(szBuf, sizeof(szBuf) - 1, "SMTP Error: %s\n", msg);
+	szBuf[sizeof(szBuf) - 1] = '\0';
+	AddResponse(szBuf);
+
+	// Optionally log to disk if checkbox enabled
+	if (!Profile.bMailLogErrors) return;
+
+	char szLog[MAX_PATH];
+	const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
+	if (!root || !root[0]) return;
+
+	_snprintf(szLog, sizeof(szLog) - 1, "%s\\pdw_smtp_error.log", root);
+	szLog[sizeof(szLog) - 1] = '\0';
+
+	FILE *f = fopen(szLog, "a");
+	if (f) {
+		SYSTEMTIME st;
+		GetLocalTime(&st);
+		fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d | %s\n",
+			st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, msg);
+		fclose(f);
+	}
+}
+
+// FIX [SmtpLog]: getter for last SMTP error (for Setup dialog)
+const char *GetLastSmtpError(void)
+{
+	return g_szLastSmtpError;
+}
 
 int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *szMailTo, char *szMailUser, char *szMailPassword, int iMailPort, int nOptions)
 {

@@ -1,3 +1,9 @@
+// FIX [Version]: single source of truth for PDW version number
+#define PDW_VERSION_MAJOR  3
+#define PDW_VERSION_MINOR  5
+#define PDW_VERSION_PATCH  0
+#define PDW_VERSION_STR    "3.5.0"
+
 #define IDC_STATIC             -1
 
 #define IDD_ICON                    97
@@ -431,6 +437,7 @@
 #define IDC_SMTP_LASTERROR        1246
 #define IDC_SMTP_SSL			  1247
 #define IDC_SMTP_ENCRYPTION       1248
+#define IDC_SMTP_LOG_ERRORS       1249	// FIX [SmtpLog]
 
 #define IDS_SIGIND                1250
 #define IDS_EXCLAM                1251

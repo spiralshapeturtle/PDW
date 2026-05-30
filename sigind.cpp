@@ -33,6 +33,10 @@ BOOL old_rect_flg=FALSE;
 BOOL got_sigind=FALSE;
 HDC hdcMemory=NULL;
 
+// FIX [DpiScale]: DPI-geschaalde naaldpennen — aangemaakt in InitSigIndPens() na g_dpi bekend is.
+HPEN hPenNeedleRed   = NULL;
+HPEN hPenNeedleWhite = NULL;
+
 HBITMAP hbm_sigind=NULL;
 BITMAP bms;
 RECT old_rect;     // used for redrawing signal indicator bitmap
@@ -91,6 +95,19 @@ BOOL LoadSigInd(HINSTANCE hThisInstance)
 void FreeSigInd(void)
 {
 	if (got_sigind) DeleteObject(hbm_sigind);
+	if (hPenNeedleWhite) { DeleteObject(hPenNeedleWhite); hPenNeedleWhite = NULL; }	// FIX [DpiScale]
+	if (hPenNeedleRed)   { DeleteObject(hPenNeedleRed);   hPenNeedleRed   = NULL; }	// FIX [DpiScale]
+}
+
+// FIX [DpiScale]: maak pennen aan met DPI-proportionele dikte (1px op 96dpi, 2px op 150%+).
+// Aanroepen na g_dpi bekend is (WM_CREATE), niet in LoadSigInd (die loopt vóór WM_CREATE).
+void InitSigIndPens(void)
+{
+	int pw = Scale(1);
+	if (hPenNeedleWhite) { DeleteObject(hPenNeedleWhite); hPenNeedleWhite = NULL; }
+	if (hPenNeedleRed)   { DeleteObject(hPenNeedleRed);   hPenNeedleRed   = NULL; }
+	hPenNeedleWhite = CreatePen(PS_SOLID, pw, RGB(255, 255, 255));
+	hPenNeedleRed   = CreatePen(PS_SOLID, pw, RGB(255,   0,   0));
 }
 
 // Draw signal indicator on toolbar
@@ -201,7 +218,7 @@ void show_sigind(int new_pos,int old_pos)
 	hdc = GetDC(ghWnd);
 
 	// erase old line.
-	SelectObject(hdc,SysPEN[WHITE]);
+	SelectObject(hdc, hPenNeedleWhite ? hPenNeedleWhite : SysPEN[WHITE]);	// FIX [DpiScale]: geschaalde pen
 	x = sig_rect.left+Scale(sip[old_pos][0]);	// FIX [DpiScale]
 	y = sig_rect.top+Scale(sip[old_pos][1]);
 	MoveToEx(hdc,x,y,NULL);
@@ -211,7 +228,7 @@ void show_sigind(int new_pos,int old_pos)
 	LineTo(hdc,x,y);
 
 	// Draw new line.
-	SelectObject(hdc,SysPEN[RED]);
+	SelectObject(hdc, hPenNeedleRed ? hPenNeedleRed : SysPEN[RED]);		// FIX [DpiScale]: geschaalde pen
 	x = sig_rect.left+Scale(sip[new_pos][0]);	// FIX [DpiScale]
 	y = sig_rect.top+Scale(sip[new_pos][1]);
 	MoveToEx(hdc,x,y,NULL);
