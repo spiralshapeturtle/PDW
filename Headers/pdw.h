@@ -246,7 +246,7 @@ typedef struct
 	int  webhookLogToFile;
 	int  webhookPadCapcodes;
 	int  webhookPagermonFormat;
-	int  webhookSendIn;         // 0=All, 1=Filtered only, 2=Filtered+Monitor
+	int  webhookSendIn;         // 0=All, 1=Filtered only, 2=Filtered+Monitor, 3=Raw feed (incl. rejected/blocked) // FIX [RawFeed]
 	int  webhookFields;         // bitmask: bit0=label,1=time,2=date,3=timestamp,4=mode,5=type,6=bitrate
 
 	int  mqttEnabled;
@@ -262,7 +262,7 @@ typedef struct
 	int  mqttPadCapcodes;
 	int  mqttFlatJson;          // 0=PDW-native, 1=flat (Node-RED)
 	int  mqttTopicSuffix;       // 0=none (base topic only), 1=/{capcode} per message
-	int  mqttSendIn;            // 0=All, 1=Filtered only, 2=Filtered+Monitor
+	int  mqttSendIn;            // 0=All, 1=Filtered only, 2=Filtered+Monitor, 3=Raw feed (incl. rejected/blocked) // FIX [RawFeed]
 	int  mqttFields;            // bitmask: same layout as webhookFields
 
 	int  bDebugLog;             // 0=off, 1=write per-frame trace to pdw_debug.log

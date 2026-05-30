@@ -734,6 +734,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 
 	sprintf(szWindowText[0], " %s", pdw_version);	// PH: Set version info in szWindowText buffer
 	UpdateModeLabel();
+	SetNewWindowText("");	// FIX [Version]: set correct title at startup (overrides IDS_APPNAME from CreateWindow)
 
 	Get_Date_Time();
 	sprintf(szDebugStarted, "%s %s", szCurrentDate, szCurrentTime);
@@ -9723,6 +9724,7 @@ BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"All messages");
 		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered messages only");
 		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered + monitor-only messages");
+		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Raw feed (incl. rejected/blocked)"); // FIX [RawFeed]: 4e item = SendIn 3
 		SendDlgItemMessage(hDlg, IDC_WEBHOOK_SEND_IN, CB_SETCURSEL, (WPARAM)Profile.webhookSendIn, 0);
 		SetDlgItemText(hDlg, IDC_WEBHOOK_STATUS,         "Status: Idle");
 		WebhookSetStatusWnd(hDlg);
@@ -10012,6 +10014,7 @@ BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"All messages");
 		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered messages only");
 		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered + monitor-only messages");
+		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Raw feed (incl. rejected/blocked)"); // FIX [RawFeed]: 4e item = SendIn 3
 		SendDlgItemMessage(hDlg, IDC_MQTT_SEND_IN, CB_SETCURSEL, (WPARAM)Profile.mqttSendIn, 0);
 		SetDlgItemText(hDlg, IDC_MQTT_STATUS, "Status: Idle");
 		MqttSetStatusWnd(hDlg);

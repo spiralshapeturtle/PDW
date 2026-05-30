@@ -922,15 +922,15 @@ void ShowMessage()
 				// FIX [TelnetReject]: telnet output is unfiltered — send even rejected messages
 				if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
 					TelnetServerNotifyMessage();
-				// FIX [RejectNotify]: webhook/mqtt "all messages" must also receive rejected capcodes
-				if (Profile.webhookEnabled && Profile.webhookSendIn == 0)
+				// FIX [RawFeed]: alleen bij Raw feed (SendIn==3) rejected/blocked meesturen
+				if (Profile.webhookEnabled && Profile.webhookSendIn == 3)
 					WebhookNotify(Current_MSG[MSG_CAPCODE],
 					              iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 					              szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
 					              Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
 					              iConvertingGroupcall > 0,
 					              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
-				if (Profile.mqttEnabled && Profile.mqttSendIn == 0)
+				if (Profile.mqttEnabled && Profile.mqttSendIn == 3)
 					MqttNotify(Current_MSG[MSG_CAPCODE],
 					           iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 					           szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
@@ -976,15 +976,15 @@ void ShowMessage()
 				// FIX [TelnetReject]: telnet output is unfiltered — send even duplicate-blocked messages
 				if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
 					TelnetServerNotifyMessage();
-				// FIX [RejectNotify]: webhook/mqtt "all messages" must also receive duplicate-blocked capcodes
-				if (Profile.webhookEnabled && Profile.webhookSendIn == 0)
+				// FIX [RawFeed]: alleen bij Raw feed (SendIn==3) rejected/blocked meesturen
+				if (Profile.webhookEnabled && Profile.webhookSendIn == 3)
 					WebhookNotify(Current_MSG[MSG_CAPCODE],
 					              iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 					              szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
 					              Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
 					              iConvertingGroupcall > 0,
 					              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
-				if (Profile.mqttEnabled && Profile.mqttSendIn == 0)
+				if (Profile.mqttEnabled && Profile.mqttSendIn == 3)
 					MqttNotify(Current_MSG[MSG_CAPCODE],
 					           iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 					           szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
@@ -1618,6 +1618,7 @@ void ShowMessage()
 		{
 		case 1:  bWebhookSend = bMATCH; break;
 		case 2:  bWebhookSend = bMATCH || bMONITOR_ONLY; break;
+		case 3:  bWebhookSend = true; break; // FIX [RawFeed]: Raw feed — alle normale berichten (rejected/blocked al afgehandeld vóór dit punt)
 		default: bWebhookSend = true; break;
 		}
 		if (bWebhookSend)
@@ -1642,6 +1643,7 @@ void ShowMessage()
 		{
 		case 1:  bMqttSend = bMATCH; break;
 		case 2:  bMqttSend = bMATCH || bMONITOR_ONLY; break;
+		case 3:  bMqttSend = true; break; // FIX [RawFeed]: Raw feed — alle normale berichten (rejected/blocked al afgehandeld vóór dit punt)
 		default: bMqttSend = true; break;
 		}
 		if (bMqttSend)
