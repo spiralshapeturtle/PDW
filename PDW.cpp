@@ -9596,8 +9596,7 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		// FIX [MailSplit]: restore split-config state and field selections
 		CheckDlgButton(hDlg, IDC_MAIL_SPLIT_CONFIG, Profile.bMailSplitConfig) ;
 		SetMailSubjectOptions(hDlg, Profile.nMailSubjectOptions) ;
-		if (Profile.bMailSplitConfig)
-			SetMailBodyOptions(hDlg, Profile.nMailBodyOptions) ;	// body row reflects saved body fields
+		SetMailBodyOptions(hDlg, Profile.nMailBodyOptions) ;	// always restore saved body fields
 		UpdateMailSplitVisibility(hDlg) ;
 		return (TRUE);
 
@@ -9646,6 +9645,7 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				Profile.bMailSplitConfig    = IsDlgButtonChecked(hDlg, IDC_MAIL_SPLIT_CONFIG) ? 1 : 0 ;
 				Profile.nMailSubjectOptions = GetMailSubjectOptions(hDlg) ;
 				Profile.nMailBodyOptions    = GetMailBodyOptions(hDlg) ;
+				Profile.bMailLogErrors      = IsDlgButtonChecked(hDlg, IDC_SMTP_LOG_ERRORS) ;	// FIX [SmtpLog]: sync for test
 				if((Profile.nMailOptions & MAIL_OPTION_MODES) && (!(Profile.nMailOptions & ~MAIL_OPTION_MODES)))
 				{
 					break ;

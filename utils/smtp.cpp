@@ -1148,10 +1148,12 @@ static int smtpMail(int sfd, char *data)
 			memcpy(szSubject, data, sl) ;
 			szSubject[sl] = '\0' ;
 			_snprintf(szBody, sizeof(szBody) - 1, "%s", sep + 1) ;
+			szBody[sizeof(szBody) - 1] = '\0' ;	// _snprintf does not guarantee NUL on exact fill
 		}
 		else
 		{
 			_snprintf(szBody, sizeof(szBody) - 1, "%s", data) ;	// no separator: treat all as body
+			szBody[sizeof(szBody) - 1] = '\0' ;
 		}
 	}
 	else
@@ -1396,23 +1398,27 @@ void StartMail(int nOptions)
 static void AppendMailFields(char *dst, size_t dstLen, int mask,
 	char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel)
 {
+	// Use a local helper so that _snprintf_s returning -1 (truncation) never wraps
+	// a size_t accumulator to SIZE_MAX. Cast to int before adding.
+#define APPEND(fmt, arg) do { int _n = _snprintf_s(dst + len, dstLen - len, _TRUNCATE, fmt, arg); if (_n > 0) len += (size_t)_n; } while(0)
 	size_t len = strlen(dst) ;
-	if(mask & MAIL_OPTION_ADDRESS) len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz1) ;
-	if(mask & MAIL_OPTION_TIME)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz2) ;
-	if(mask & MAIL_OPTION_DATE)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz3) ;
-	if(mask & MAIL_OPTION_MODE)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz4) ;
-	if(mask & MAIL_OPTION_TYPE)    len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz5) ;
-	if(mask & MAIL_OPTION_BITRATE) len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz6) ;
-	if(mask & MAIL_OPTION_MESSAGE) len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", sz7) ;
+	if(mask & MAIL_OPTION_ADDRESS) APPEND("%s ", sz1) ;
+	if(mask & MAIL_OPTION_TIME)    APPEND("%s ", sz2) ;
+	if(mask & MAIL_OPTION_DATE)    APPEND("%s ", sz3) ;
+	if(mask & MAIL_OPTION_MODE)    APPEND("%s ", sz4) ;
+	if(mask & MAIL_OPTION_TYPE)    APPEND("%s ", sz5) ;
+	if(mask & MAIL_OPTION_BITRATE) APPEND("%s ", sz6) ;
+	if(mask & MAIL_OPTION_MESSAGE) APPEND("%s ", sz7) ;
 	if(mask & MAIL_OPTION_LABEL)
 	{
 		// FIX [MailSplit]: only prefix the label with "- " when other fields precede it;
 		// a lone label would otherwise start with a stray hyphen.
 		if(len > 0)
-			len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "- %s ", szLabel) ;
+			APPEND("- %s ", szLabel) ;
 		else
-			len += _snprintf_s(dst + len, dstLen - len, _TRUNCATE, "%s ", szLabel) ;
+			APPEND("%s ", szLabel) ;
 	}
+#undef APPEND
 }
 
 int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP, char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel)
@@ -1536,7 +1542,8 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 	if(szBuffer[0])
 	{
 		OUTPUTDEBUGMSG((("SendMail() Send : >%s<\n"), szBuffer));
-		strncpy(szMailBuffer[nBufferdMailStart], szBuffer, MAX_MAIL_LEN) ;
+		strncpy(szMailBuffer[nBufferdMailStart], szBuffer, MAX_MAIL_LEN - 1) ;
+		szMailBuffer[nBufferdMailStart][MAX_MAIL_LEN - 1] = '\0' ;
 		nBufferdMailStart++ ;
 
 		if(nBufferdMailStart >= MAX_MAIL)
