@@ -674,9 +674,19 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
 // Queue helpers (call with g_cs held)
 // ---------------------------------------------------------------------------
 
+// FIX [QueueDrop]: tel weggegooide jobs bij volle queue.
+static unsigned g_droppedJobs = 0;
+
 static void EnqueueLocked(const WebhookJob *job)
 {
-    if (QueueFull()) return;
+    if (QueueFull())
+    {
+        // FIX [QueueDrop]: bij burst > WEBHOOK_QUEUE_SIZE werd de job voorheen stil
+        // verworpen, zonder log of teller — dataverlies bleef onzichtbaar.
+        g_droppedJobs++;
+        WriteLog("DROP queue full — message discarded (total dropped=%u)", g_droppedJobs);
+        return;
+    }
     g_queue[g_qTail] = *job;
     g_qTail = (g_qTail + 1) % WEBHOOK_QUEUE_SIZE;
 }

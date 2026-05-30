@@ -21,6 +21,8 @@
 #include "utils\smtp.h"
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
+#include "utils\telnet_server.h"
+#include "utils\rxq.h"
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
 #define FILTER_PARAM_LEN	500
@@ -417,7 +419,11 @@ void AddAssignment(int assignedframe, int groupbit, int capcode)
 		if (groupbit < 16) Remove_MissedGroupcall(groupbit);
 	}
 
-	if (aGroupCodes[groupbit][CAPCODES_INDEX] < MAXIMUM_GROUPSIZE)
+	// FIX [GroupOverflow]: index 0 is de teller, capcodes staan op 1..MAXIMUM_GROUPSIZE-1.
+	// De oude guard (< MAXIMUM_GROUPSIZE) liet de teller naar 1000 lopen, waarna op index
+	// [1000] werd geschreven — één voorbij int[1000] (gevonden via /analyze C6386). Cap nu
+	// op MAXIMUM_GROUPSIZE-1 zodat de write altijd binnen het array blijft.
+	if (aGroupCodes[groupbit][CAPCODES_INDEX] < MAXIMUM_GROUPSIZE - 1)
 	{
 		aGroupCodes[groupbit][CAPCODES_INDEX]++;
 		aGroupCodes[groupbit][aGroupCodes[groupbit][CAPCODES_INDEX]] = capcode;
@@ -686,6 +692,14 @@ void Check4_MissedGroupcalls()
 			{
 				DebugLog("[Check4] iCurrentFrame=%d  groupbit=%d  GroupFrame=%d (orig=%d, adj=%d)  diff=%d  past grace=%d -> MISSED -> Remove_MissedGroupcall, X++",
 					iCurrentFrame, groupbit, origAssigned, origCurrent, assignedframe, difference, GROUP_GRACE_FRAMES);
+
+				// p2kflex parity: missed group message past grace window — penalize
+				// 400 bits in the telnet RXQ track (mirrors p2kflexDecoder Flex.cpp:412).
+				// Only applied here in the past-grace path, not in the AddAssignment
+				// reassign or ConvertGroupcall else paths, to match p2kflex semantics
+				// (their RxqApplyPenaltyBits(400) lives in the equivalent Check4 loop).
+				Rxq_ApplyPenaltyBits(400);
+
 				Remove_MissedGroupcall(groupbit);
 			}
 		}
@@ -905,6 +919,24 @@ void ShowMessage()
 					}
 				}
 				nCount_Rejected++;
+				// FIX [TelnetReject]: telnet output is unfiltered — send even rejected messages
+				if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
+					TelnetServerNotifyMessage();
+				// FIX [RejectNotify]: webhook/mqtt "all messages" must also receive rejected capcodes
+				if (Profile.webhookEnabled && Profile.webhookSendIn == 0)
+					WebhookNotify(Current_MSG[MSG_CAPCODE],
+					              iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					              szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					              Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					              iConvertingGroupcall > 0,
+					              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+				if (Profile.mqttEnabled && Profile.mqttSendIn == 0)
+					MqttNotify(Current_MSG[MSG_CAPCODE],
+					           iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					           szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					           Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					           iConvertingGroupcall > 0,
+					           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
 				return;
 			}
 		}
@@ -941,7 +973,24 @@ void ShowMessage()
 					}
 				}
 				nCount_Blocked++;
-
+				// FIX [TelnetReject]: telnet output is unfiltered — send even duplicate-blocked messages
+				if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
+					TelnetServerNotifyMessage();
+				// FIX [RejectNotify]: webhook/mqtt "all messages" must also receive duplicate-blocked capcodes
+				if (Profile.webhookEnabled && Profile.webhookSendIn == 0)
+					WebhookNotify(Current_MSG[MSG_CAPCODE],
+					              iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					              szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					              Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					              iConvertingGroupcall > 0,
+					              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+				if (Profile.mqttEnabled && Profile.mqttSendIn == 0)
+					MqttNotify(Current_MSG[MSG_CAPCODE],
+					           iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+					           szCurrentLabel[0], Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+					           Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+					           iConvertingGroupcall > 0,
+					           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
 				return;
 			}
 			else if (bFILTERED && !(Profile.BlockDuplicate >> 4))	// Block duplicate FILTERED messages
@@ -1610,6 +1659,16 @@ void ShowMessage()
 		}
 	}
 
+	// Telnet-server fan-out — reads Current_MSG[] directly, emits one wire-line
+	// in p2kflexDecoder format to all connected clients.
+	// Skip per-subscriber duplicates that ConvertGroupcall generates: when
+	// iConvertingGroupcall>0 PDW calls ShowMessage() once per subscriber capcode
+	// AND once for the group capcode itself. CS FlexDecoder only emits the
+	// group line (capcode 20295xx). Mirrors the (!iConvertingGroupcall || bGroupcode)
+	// condition used elsewhere in this function (see ~regel 1526).
+	if (Profile.telnetServerEnabled && (!iConvertingGroupcall || bGroupcode))
+		TelnetServerNotifyMessage();
+
 	// FIX [TrayBalloon]: balloon-tip bij overeenkomend bericht
 	// bRejected: iMatch is gezet vóór bShowMessage-check, dus ook geldig als bShowMessage=false
 	// (FLEXGROUPMODE_HIDEGROUPCODES). Zonder deze check verschijnen rejected 20295xx-groepscodes
@@ -1770,7 +1829,9 @@ bool BlockChecker(char *address, int fnu, char *message, bool reject)
 				if (aMessages[999][BLOCK_ADDRESS])	// Array full?
 				{
 					// FIX [X1b]: sizeof(aMessages) overleest array-einde; laatste slot handmatig wissen
-					memmove(aMessages[0], aMessages[1], sizeof(aMessages) - sizeof(aMessages[0]));
+					// FIX [X1c]: dest=aMessages (volledige 2D-array) i.p.v. aMessages[0] (één 24-byte rij)
+					// — semantisch identieke shift, maar /analyze ziet nu de juiste buffergrootte (geen C6386).
+					memmove(aMessages, aMessages + 1, sizeof(aMessages) - sizeof(aMessages[0]));
 					memset(&aMessages[999], 0, sizeof(aMessages[0]));
 				}
 				for (i=0; i<1000; i++)
@@ -1816,6 +1877,11 @@ char LogFileHandling(int file, char *szFileName, int action)
 	int  i=1, UseDate=0;
 	char filename[MAX_PATH];		// Temp buffer for setting filenames
 	char ext[5];					// Temp buffer for file extension
+
+	// FIX [LogFileInit]: filename/ext bleven ongeïnitialiseerd in de default-case van de
+	// switch hieronder; strstr(filename,...) las dan ongeïnitialiseerd geheugen (/analyze C6054).
+	filename[0] = '\0';
+	ext[0]      = '\0';
 	
 	CreateDateFilename("", NULL);	// TEST/TEMP
 
@@ -2547,6 +2613,15 @@ void display_color(PaneStruct *pane, BYTE ct)
 void display_showmo(int mode)
 {
 	bMode_IDLE = mode ? false : true;
+
+	// Telnet-server TX-burst boundary: mirrors p2kflexDecoder's TxStart/TxStop
+	// pattern. IDLE = signal lost -> close burst with <TX_STOP><RXQ:...>.
+	// Non-idle = sync acquired -> open burst with <TX_START>. Idempotent.
+	if (Profile.telnetServerEnabled)
+	{
+		if (bMode_IDLE) TelnetServerNotifyTxStop();
+		else            TelnetServerNotifyTxStart();
+	}
 
 	if (bMode_IDLE)
 	{

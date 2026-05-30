@@ -13,4 +13,13 @@
     </security>
   </trustInfo>
 
+  <!-- FIX [DpiScale]: System DPI Aware. g_dpi wordt eenmalig in WM_CREATE bepaald;
+       alle layout/pixels lopen via Scale() in initapp.h. (true = system aware,
+       true/pm = per-monitor; bewust system gekozen als veilige eerste stap.) -->
+  <asmv3:application>
+    <asmv3:windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+    </asmv3:windowsSettings>
+  </asmv3:application>
+
 </assembly>

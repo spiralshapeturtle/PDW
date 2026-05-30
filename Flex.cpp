@@ -28,6 +28,8 @@
 #include "headers\initapp.h"
 #include "utils\debug.h"
 #include "utils\debuglog.h"
+#include "utils\telnet_server.h"
+#include "utils\rxq.h"
 
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 #define max(a,b) (((a) > (b)) ? (a) : (b))
@@ -346,6 +348,16 @@ void FLEX::show_address(long int l, long int l2, bool bLongAddress)
 		CountBiterrors(0);
 	}
 
+	// p2kflex parity: invalid capcode = 100 bits penalty. Mirrors Flex.cpp:513-518
+	// (alpha) and Flex.cpp:611-616 (INSTR). show_address() is called from both
+	// paths so one hook here covers both p2kflex penalty sites. The PDW
+	// uncorrectable-flag path above sets capcode=9999999 which (>2029583)
+	// trips the same condition naturally.
+	if (capcode == 0 || capcode > 2029583)
+	{
+		Rxq_ApplyPenaltyBits(100);
+	}
+
 	if (Profile.convert_si && (capcode >= 2029568) && (capcode <= 2029583))
 	{
 		 bFLEX_groupmessage=true;
@@ -469,7 +481,10 @@ void FLEX::FlexTIME()
 					break;
 				case 1:
 					frame[i] >>= 7;
-					recFlexTime.wYear = (frame[i] & 0x1F) + 1994;
+					// FIX [FlexTIME-year]: BIW YEAR field is 5 bits (0..31). PDW originally
+					// used base year 1994 — wraps at 2026. Bumped to 2026 to match
+					// CS FlexDecoder / current Dutch FLEX network base (2026..2057 range).
+					recFlexTime.wYear = (frame[i] & 0x1F) + 2026;
 					frame[i] >>= 5;
 					recFlexTime.wDay = frame[i] & 0x1F;
 					frame[i] >>= 5;
@@ -589,6 +604,11 @@ void FLEX::showframe(int asa, int vsa)
 
 			if (xsumchk(frame[vb]) != 0)
 			{
+				// p2kflex parity: vector word BCH-uncorrectable — penalize 100 bits
+				// (Flex.cpp:449). One penalty per bad vector word; if multiple
+				// subscribers in the frame have bad vector words, each adds 100.
+				Rxq_ApplyPenaltyBits(100);
+
 				// Long addresses occupy two address slots; if we skip here
 				// without advancing j, the next iteration mis-parses the
 				// second half as a new short capcode.
@@ -824,6 +844,13 @@ void FLEX::showframe(int asa, int vsa)
 
 				iAssignedFrame  = (frame[vb] >> 10) & 0x7f;	// Frame with groupmessage
 				FlexTempAddress = (frame[vb] >> 17) & 0x7f;	// Listen to this groupcode
+
+				// Telnet-server: emit -INSTR- line directly. With Profile.convert_si=1
+				// (default) the SI is routed through AddAssignment() and never reaches
+				// ShowMessage(), so the regular ShowMessage hook would miss it entirely.
+				// Format matches CS FlexDecoder: "CC/FFF -INSTR- subCap groupCap frame\r".
+				if (Profile.telnetServerEnabled)
+					TelnetServerNotifyInstr(capcode, FlexTempAddress + 2029568, iAssignedFrame);
 
 				if (!Profile.convert_si)
 				{
@@ -1063,6 +1090,15 @@ void FLEX::showframe(int asa, int vsa)
 		// would otherwise count phantom misses.
 		if (bCurrentFrameValid) Check4_MissedGroupcalls();
 	}
+	else
+	{
+		// p2kflex-compatible RXQ: BIW xsumchk failed (mirrors p2kflexDecoder
+		// Flex.cpp:839 "RXQ_ApplyPenaltyBits(400)" in the else branch).
+		Rxq_ApplyPenaltyBits(400);
+	}
+
+	// p2kflex parity: EMA + trend update once per frame (Flex.cpp:834).
+	Rxq_UpdateTimeBased();
 } // Reset for new message.
 
 
@@ -1084,6 +1120,13 @@ void FLEX::showblock(int blknum)
 
 		err = ecd();		// do error correction
 		CountBiterrors(err);
+
+		// p2kflex-compatible RXQ: mirror updateRxQualityFromEcd + RXQ_ApplyPenaltyBits
+		// pattern from p2kflexDecoder Flex.cpp:861-868. Note the (err*err)*dataBits*10
+		// scaling is taken VERBATIM from p2kflex — it forces non-zero err into the
+		// "uncorrectable" branch of Rxq_OnEcd, which is the intended behavior there.
+		if (err > 0) Rxq_ApplyPenaltyBits((uint64_t)(err * err) * 10);
+		Rxq_OnEcd((err * err) * RXQ_FLEX.dataBits * 10, &RXQ_FLEX, 0);
 
 		k = (blknum << 3) + i;
 
@@ -1130,6 +1173,72 @@ void FLEX::showblock(int blknum)
 			}
 		}
 		last_frame = iCurrentFrame;
+
+		// Telnet-server: emit -FRAME- lines per frame, mirroring p2kflexDecoder.
+		// Done INDEPENDENTLY of PDW's FlexTIME() state machine because PDW skips
+		// FlexTIME() after the first detection (sticky bFlexTIME_detected), so a
+		// hook inside FlexTIME() would stop firing — we'd never see further
+		// FlexTIME wire-lines or correctly-deduplicated Empty frames. p2kflex
+		// calls FlexTIME() every frame; we replicate that just for the wire feed.
+		if (Profile.telnetServerEnabled)
+		{
+			bool bTimeBIW = false, bDateBIW = false;
+			int  yy = 0, mm = 0, dd = 0, hh = 0, mi = 0;
+			int  ss = (int)((iCurrentFrame & 0x1F) * 1.875f);
+			int  biwCount = (int)((frame[0] >> 8) & 0x03);
+			bool bBiwBad = false;
+
+			// p2kflex parity: walk i=0..biwCount; on ANY xsumchk failure apply
+			// 100-bit penalty once and abort the walk (Flex.cpp:303-309).
+			for (int bi = 0; bi <= biwCount && !bBiwBad; bi++)
+			{
+				if (xsumchk(frame[bi]) != 0)
+				{
+					Rxq_ApplyPenaltyBits(100);
+					bBiwBad = true;
+					break;
+				}
+				if (bi == 0) continue;                     // skip BIW[0]: framing word, not DATE/TIME
+				long biw = frame[bi];                      // local copy, do not mutate frame[]
+				switch ((biw >> 4) & 0x07)
+				{
+				case 1:  // DATE
+					biw >>= 7;
+					yy = (biw & 0x1F) + 2026;
+					biw >>= 5;
+					dd = biw & 0x1F;
+					biw >>= 5;
+					mm = biw & 0x0F;
+					bDateBIW = true;
+					break;
+				case 2:  // TIME
+					biw >>= 7;
+					hh = biw & 0x1F;
+					biw >>= 5;
+					mi = biw & 0x3F;
+					bTimeBIW = true;
+					break;
+				}
+			}
+
+			bool bFlexTimeEmitted = false;
+			if (bTimeBIW && bDateBIW)
+			{
+				char szBody[64];
+				_snprintf_s(szBody, sizeof(szBody), _TRUNCATE,
+					"FlexTIME: %02d-%02d-%04d %02d:%02d:%02d",
+					dd, mm, yy, hh, mi, ss);
+				TelnetServerNotifyFrame(szBody);
+				bFlexTimeEmitted = true;
+			}
+
+			// Empty frame: emit only if no real payload AND no FlexTIME took the
+			// -FRAME- slot. Matches CS FlexDecoder (one -FRAME- line per frame max).
+			if (bEmpty_Frame && !bFlexTimeEmitted)
+			{
+				TelnetServerNotifyFrame("Empty frame");
+			}
+		}
 	}
 	// show messages in frame if last block was processed and we're not in reflex mode
 	else if (((blknum == 10) || bNoMoreData) && !bReflex)
@@ -1433,6 +1542,11 @@ void frame_flex(char gin)
 				// process cycle info word when its been collected
 
 				cer = ecd();		// do error correction
+
+				// p2kflex-compatible RXQ for the cycle-info word; mirrors
+				// p2kflexDecoder Flex.cpp:1035 + 1057.
+				if (cer >= 2) Rxq_ApplyPenaltyBits(200);
+				Rxq_OnEcd((cer * cer) * RXQ_FLEX.dataBits * 10, &RXQ_FLEX, 0);
 
 				if (cer < 2)
 				{

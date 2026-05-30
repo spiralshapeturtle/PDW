@@ -207,6 +207,8 @@
     <ClCompile Include="utils\smtp.cpp" />
     <ClCompile Include="utils\webhook.cpp" />
     <ClCompile Include="utils\mqtt.cpp" />
+    <ClCompile Include="utils\telnet_server.cpp" />
+    <ClCompile Include="utils\rxq.cpp" />
     <ClCompile Include="utils\debuglog.cpp" />
     <ClCompile Include="utils\winrt_toast.cpp" />
   </ItemGroup>
@@ -309,6 +311,8 @@
     <ClInclude Include="utils\smtp_int.h" />
     <ClInclude Include="utils\mqtt.h" />
     <ClInclude Include="utils\webhook.h" />
+    <ClInclude Include="utils\telnet_server.h" />
+    <ClInclude Include="utils\rxq.h" />
     <ClInclude Include="utils\debuglog.h" />
     <ClInclude Include="utils\winrt_toast.h" />
   </ItemGroup>

@@ -1,3 +1,9 @@
+// FIX [Version]: single source of truth for PDW version number
+#define PDW_VERSION_MAJOR  3
+#define PDW_VERSION_MINOR  5
+#define PDW_VERSION_PATCH  0
+#define PDW_VERSION_STR    "3.5.0"
+
 #define IDC_STATIC             -1
 
 #define IDD_ICON                    97
@@ -432,6 +438,7 @@
 #define IDC_SMTP_SSL			  1247
 #define IDC_SMTP_ENCRYPTION       1248
 #define IDC_MAIL_SPLIT_CONFIG     1249	// FIX [MailSplit]: enable split Subject/Body mode
+#define IDC_SMTP_LOG_ERRORS       1391	// FIX [SmtpLog]
 
 #define IDS_SIGIND                1250
 
@@ -516,3 +523,18 @@
 #define IDC_DISPLAY_BETTER_CONTRAST  1370
 #define IDC_DISPLAY_LIGHTER_BG       1371
 #define IDC_DISPLAYOPTIONS_BTN       1372
+
+// Telnet server (utils/telnet_server.cpp) — Ctrl-N opens the config dialog.
+#define TELNETSERVER_DLGBOX       134
+#define IDM_TELNETSERVER          237
+#define IDC_TS_ENABLED            1380
+#define IDC_TS_BIND               1381
+#define IDC_TS_PORT               1382
+#define IDC_TS_MAXCLIENTS         1383
+#define IDC_TS_WDSEC              1384
+#define IDC_TS_BUFFERTIME         1385
+#define IDC_TS_LOGTOFILE          1386
+#define IDC_TS_STATUS             1387
+#define IDC_TS_WIRELOG            1388
+#define IDC_TS_CLIENTS            1389
+#define IDC_TS_ACTIVITY           1390

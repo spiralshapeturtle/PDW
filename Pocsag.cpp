@@ -17,6 +17,7 @@
 #include "headers\gfx.h"
 #include "headers\misc.h"
 #include "headers\helper_funcs.h"
+#include "utils\rxq.h"
 
 #define TYPE_TONE_ONLY	0x01
 #define TYPE_NUMERIC	0x02
@@ -170,6 +171,11 @@ void POCSAG::process_word(int fn2)
 	int i, errl = ecd();		// run error correcting routine
 
 	if (errl < 2) pocbit = 170;
+
+	// p2kflex-compatible RXQ: mirrors p2kflexDecoder Pocsag.cpp:199-202.
+	// isAddressWord = (ob[MSB] == 0), matches p2kflex address-word semantics.
+	if (errl >= 2) Rxq_ApplyPenaltyBits((uint64_t)(100 * errl));
+	Rxq_OnEcd(errl, &RXQ_POCSAG, (ob[MSB] == 0));
 
 	if (ob[MSB] == 1)	// MSB=1 means message
 	{
@@ -555,6 +561,10 @@ void POCSAG::show_message()
 
 		ShowMessage();
 	}
+
+	// p2kflex parity: EMA + trend update once per POCSAG message (mirrors
+	// p2kflexDecoder Pocsag.cpp:328).
+	Rxq_UpdateTimeBased();
 
 	if (bDoubleDisplay) bDoubleDisplay=false;
 }

@@ -316,6 +316,7 @@
 #include "utils\smtp.h"
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
+#include "utils\telnet_server.h"
 #include "utils\debuglog.h"
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
@@ -434,7 +435,7 @@ time_t tStarted;	// Contains the time when PDW was started
 // If copy upper/lower pane or just copy is successful then this flag is set to TRUE.
 bool bOK_to_save=false;
 
-char *pdw_version = "PDW v3.4.3";			// Current version info
+char *pdw_version = "PDW v" PDW_VERSION_STR;	// FIX [Version]: version from headers\resource.h
 
 // RAH: record and playback stuff
 OPENFILENAME openplayback;
@@ -539,6 +540,15 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 
 	Profile.betterContrast         = 0;
 	Profile.lighterBackground      = 0;
+
+	Profile.telnetServerEnabled      = 0;
+	strcpy(Profile.szTelnetServerBind, "0.0.0.0");
+	Profile.telnetServerPort         = 8024;
+	Profile.telnetServerMaxClients   = 25;
+	Profile.telnetServerWdSec        = 20;
+	Profile.telnetServerBufferTime   = 60;
+	Profile.telnetServerLogToFile    = 0;
+	Profile.telnetServerWireLog      = 0;
 
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
@@ -663,9 +673,15 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.audioDevice			= 0;
 	Profile.audioSampleRate		= 44100;
 	Profile.audioConfig			= 5;		// Audio input configuration.
-	Profile.audioThreshold[4]	= 0;
-	Profile.audioResync[4]		= 0;
-	Profile.audioCentering[4]	= 0;
+	// FIX [AudioInit]: schreef index [4] in int[4]-arrays (geldig 0..3) → out-of-bounds
+	// write in aangrenzende PROFILE-velden (gevonden via /analyze C6200/C6386). Init nu
+	// alle 4 elementen op 0; SetAudioConfig() hieronder vult de werkelijke per-bitrate waarden.
+	for (int _ai = 0; _ai < 4; _ai++)
+	{
+		Profile.audioThreshold[_ai]	= 0;
+		Profile.audioResync[_ai]	= 0;
+		Profile.audioCentering[_ai]	= 0;
+	}
 	SetAudioConfig(Profile.audioConfig); // Set default audio config
 
 	Profile.minimize_flg	= 0;	// Keep track of minimized state (user could exit while minimized)
@@ -833,7 +849,9 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 					{
 						// FIX [X1]: sizeof(aMessages) kopieert 1 element (12 bytes) voorbij array-einde;
 						// correct: sizeof minus één element; laatste slot wordt daarna op nul gezet
-						memmove(aMessages[0], aMessages[1], sizeof(aMessages) - sizeof(aMessages[0]));
+						// FIX [X1c]: dest=aMessages (volledige 2D-array) i.p.v. aMessages[0] (één rij)
+						// — identieke shift, maar /analyze ziet nu de juiste buffergrootte (geen C6386).
+						memmove(aMessages, aMessages + 1, sizeof(aMessages) - sizeof(aMessages[0]));
 						memset(&aMessages[999], 0, sizeof(aMessages[0]));
 						nCount_BlockBuffer[0]--;
 					}
@@ -957,6 +975,9 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		g_dpi = PdwGetDpi(hWnd);
 
+		SetBoxFONT();		// FIX [DpiScale]: hboxfont wordt aangemaakt voor g_dpi bekend is (in Get_Drawing_Objects); hier opnieuw aanmaken met de juiste DPI.
+		InitSigIndPens();	// FIX [DpiScale]: naaldpennen met DPI-proportionele dikte
+
 		if (!(GetLogFONTS()))		// Get general purpose font objects.
 		{
 			Free_Common_Objects();	// Free any objects we got!
@@ -971,7 +992,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		{
 			LOGFONT lf = Profile.fontInfo;
-			lf.lfHeight = MulDiv(Profile.fontInfo.lfHeight, (int)g_dpi, 96);
+			lf.lfHeight = Scale(Profile.fontInfo.lfHeight);	// FIX [DpiScale]
 			lf.lfQuality = CLEARTYPE_QUALITY;
 			hfont = CreateFontIndirect(&lf);
 		}
@@ -1554,6 +1575,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 												 hWnd, (DLGPROC) MqttDlgProc, 0L);
 				break;
 
+				case IDM_TELNETSERVER:
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(TELNETSERVER_DLGBOX),
+												 hWnd, (DLGPROC) TelnetServerDlgProc, 0L);
+				break;
+
 				case IDM_DEBUGLOG:
 					Profile.bDebugLog = !Profile.bDebugLog;
 					CheckMenuItem(GetMenu(hWnd), IDM_DEBUGLOG,
@@ -1859,17 +1885,17 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			else						g_scrollSize = 0;
 
 			// Is main win Y size to small?
-			if ((g_rect.bottom - g_rect.top) < MIN_Y_WIN_SIZE)
+			if ((g_rect.bottom - g_rect.top) < Scale(MIN_Y_WIN_SIZE))	// FIX [DpiScale]: minimum venstergrootte meeschalen
 			{
 				MoveWindow(hWnd, Profile.xPos, Profile.yPos,
-                          (g_rect.right - g_rect.left), MIN_Y_WIN_SIZE, TRUE);
+                          (g_rect.right - g_rect.left), Scale(MIN_Y_WIN_SIZE), TRUE);
 			}
 
 			// Is main win X size to small?
-			if ((g_rect.right - g_rect.left) < MIN_X_WIN_SIZE)
+			if ((g_rect.right - g_rect.left) < Scale(MIN_X_WIN_SIZE))	// FIX [DpiScale]
 			{
 				MoveWindow(hWnd, Profile.xPos, Profile.yPos,
-                           MIN_X_WIN_SIZE, (g_rect.bottom - g_rect.top), TRUE);
+                           Scale(MIN_X_WIN_SIZE), (g_rect.bottom - g_rect.top), TRUE);
 			}
 
 			if (wParam != SIZE_MAXIMIZED)
@@ -1897,13 +1923,15 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			}
 			sizeSet = 1;
 
+				PdwUpdateToolbarMetrics();	// FIX [DpiScale]: hermeet echte toolbar-hoogte voor de pane-layout
+
 			GetClientRect(hWnd, &g_rect);
 			g_xNew = g_rect.right - g_rect.left;   // Width of client area
 			g_yNew = g_rect.bottom - g_rect.top;   // Height of client area
-			g_yNew -= TOOLBAR_SIZE+WIN_DIVIDER_SIZE; // Allow space for tool bar etc
+			g_yNew -= g_cyTopBand+Scale(WIN_DIVIDER_SIZE); // FIX [DpiScale]: toolbar+titelbalk + geschaalde divider
 
 			// The following code sets pane1 to n% percent of main win client area.
-			pane1Pos    = TOOLBAR_SIZE+1;
+			pane1Pos    = g_cyTopBand;	// FIX [DpiScale]: bovenrand pane1 = echte toolbar + titelbalk
 			pane1Height = (g_yNew * Profile.percent) / 100;
 			pane1Height /= cyChar;	// Divide by character height to get number of lines (without 'rest')
 			pane1Height *= cyChar;	// Multiply by character height again
@@ -1911,7 +1939,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			// The following code sets pane2 to n% percent of main win client area,
 			// it also allows for toolbar space and dividing space between both panes.
-			pane2Pos = TOOLBAR_SIZE+pane1Height+WIN_DIVIDER_SIZE+1;
+			pane2Pos = g_cyTopBand+pane1Height+Scale(WIN_DIVIDER_SIZE);	// FIX [DpiScale]
 			pane2Height = (g_yNew - pane1Height)-2;
 			MoveWindow(Pane2.hWnd, 0, pane2Pos, g_xNew, pane2Height, TRUE);
 
@@ -1973,6 +2001,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
 		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
 		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
+		TelnetServerDestroy();
 		MissedGroupcallSessionSummary();  // FIX [GroupCallLog]: write X/Y counters to missed-groupcalls.log
 		DebugLogShutdown();
 		rs232_cleanup();   // FIX [L2]: DeleteCriticalSection g_handleCs
@@ -2151,7 +2180,7 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 			if (Pane1.cyClient < (cyChar + scrollSize))
 			{
 				pane1Height = 2 * GetSystemMetrics(SM_CYFRAME) + cyChar + scrollSize + 1;
-				pane1Pos = TOOLBAR_SIZE;
+				pane1Pos = g_cyTopBand;		// FIX [DpiScale]
 
 				MoveWindow(hWnd, 0, pane1Pos, parent_rect.right, pane1Height, TRUE);
 
@@ -4023,7 +4052,7 @@ BOOL NEAR SelectFont(HWND hDlg)
 	TEXTMETRIC	tm;
 	RECT		rect;
 
-	tmp_logfont.lfHeight		= Profile.fontInfo.lfHeight;
+	tmp_logfont.lfHeight		= Scale(Profile.fontInfo.lfHeight);	// FIX [DpiScale]: toon de huidige (geschaalde) grootte in de dialoog
 	tmp_logfont.lfWidth			= Profile.fontInfo.lfWidth;
 	tmp_logfont.lfEscapement	= Profile.fontInfo.lfEscapement;
 	tmp_logfont.lfOrientation	= Profile.fontInfo.lfOrientation;
@@ -4064,7 +4093,7 @@ BOOL NEAR SelectFont(HWND hDlg)
 		GetTextMetrics(hDC, &tm);
 		DeleteObject(tmp_hfont);
 
-		Profile.fontInfo.lfHeight			= tmp_logfont.lfHeight;
+		Profile.fontInfo.lfHeight			= MulDiv(tmp_logfont.lfHeight, 96, (int)g_dpi);	// FIX [DpiScale]: bewaar als 96-DPI baseline
 		Profile.fontInfo.lfWidth			= tmp_logfont.lfWidth;
 		Profile.fontInfo.lfEscapement		= tmp_logfont.lfEscapement;
 		Profile.fontInfo.lfOrientation		= tmp_logfont.lfOrientation;
@@ -4082,6 +4111,7 @@ BOOL NEAR SelectFont(HWND hDlg)
 		DeleteObject(hfont);
 		{
 			LOGFONT lf = Profile.fontInfo;
+			lf.lfHeight = Scale(Profile.fontInfo.lfHeight);	// FIX [DpiScale]: consistent met WM_CREATE
 			lf.lfQuality = CLEARTYPE_QUALITY;
 			hfont = CreateFontIndirect(&lf);
 		}
@@ -6356,7 +6386,10 @@ BOOL FAR PASCAL ScreenOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
 					if (cursel == nextsel)
 					{
-						sprintf(tbuf, "Item '%s' has been selected more than once!", columns[j]);
+						// FIX [ColumnFmt]: columns[j] is char[3][10] — aan %s doorgegeven leverde
+						// een type-mismatch/UB (gevonden via /analyze C6067). Gebruik de string
+						// columns[j][mode] (mode==0 hier) zoals bij het vullen van de combobox.
+						sprintf(tbuf, "Item '%s' has been selected more than once!", columns[j][mode]);
 						MessageBox(hDlg, tbuf, "PDW Screen Options", MB_ICONERROR);
 						SetFocus(GetDlgItem(hDlg, IDC_SCREEN_COLUMN+j));
 						return (FALSE);
@@ -6865,6 +6898,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		lstrcpy(font_listview.lfFaceName, "MS Sans Serif");
 
 		if (hf) DeleteObject(hf);
+		font_listview.lfHeight = -Scale(11);	// FIX [DpiScale]: schaal filterlijst-font met DPI
 		hf = CreateFontIndirect(&font_listview);
 		SendDlgItemMessage(hDlg, IDC_FILTERS, WM_SETFONT, (WPARAM) hf, 0);
 
@@ -8046,8 +8080,21 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			if (!CenterWindow(hDlg)) return (FALSE);
 
 			if (hfLabelColor) DeleteObject(hfLabelColor);
+			font_labelcolor.lfHeight = -Scale(11);	// FIX [DpiScale]: schaal kleur-combobox-font met DPI
 			hfLabelColor = CreateFontIndirect(&font_labelcolor);
 			SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, WM_SETFONT, (WPARAM) hfLabelColor, 0);
+
+			// FIX [DpiScale]: owner-draw combo schaalt z'n rijhoogte niet vanzelf met het font; expliciet zetten.
+			{
+				HDC hdcCb = GetDC(hDlg);
+				HFONT hOldCb = (HFONT)SelectObject(hdcCb, hfLabelColor);
+				TEXTMETRIC tmCb; GetTextMetrics(hdcCb, &tmCb);
+				SelectObject(hdcCb, hOldCb);
+				ReleaseDC(hDlg, hdcCb);
+				int cbItemH = tmCb.tmHeight + Scale(4);
+				SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_SETITEMHEIGHT, (WPARAM)-1, cbItemH);
+				SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_SETITEMHEIGHT, 0, cbItemH);
+			}
 
 			s_pfnOrigLabelColorProc = (WNDPROC)SetWindowLongPtr(
 				GetDlgItem(hDlg, IDC_FILTERLABELCOLOR), GWLP_WNDPROC, (LONG_PTR)FilterLabelColorSubclassProc);
@@ -9529,8 +9576,9 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemInt(hDlg, IDC_SMTP_SESSIONS,  nSMTPsessions, false);
 		SetDlgItemInt(hDlg, IDC_SMTP_EMAILS,    nSMTPemails,   false);
 		SetDlgItemInt(hDlg, IDC_SMTP_ERRORS,    nSMTPerrors,   false);
-		SetDlgItemInt(hDlg, IDC_SMTP_LASTERROR, iSMTPlastError,false);
-		
+		SetDlgItemInt(hDlg, IDC_SMTP_LASTERROR, iSMTPlastError, false);	// FIX [SmtpLog]: show error code (0 = no error)
+		CheckDlgButton(hDlg, IDC_SMTP_LOG_ERRORS, Profile.bMailLogErrors);
+
 		// FIX [GUIEncryption]: populate Encryption combobox before SetMailOptions so
 		// GetMailOptions() (called inside SetMailOptions path) reads a valid selection.
 		SendDlgItemMessage(hDlg, IDC_SMTP_ENCRYPTION, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR)"None");
@@ -9572,6 +9620,7 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				Profile.bMailSplitConfig    = IsDlgButtonChecked(hDlg, IDC_MAIL_SPLIT_CONFIG) ? 1 : 0 ;
 				Profile.nMailSubjectOptions = GetMailSubjectOptions(hDlg) ;
 				Profile.nMailBodyOptions    = GetMailBodyOptions(hDlg) ;
+				Profile.bMailLogErrors = IsDlgButtonChecked(hDlg, IDC_SMTP_LOG_ERRORS);	// FIX [SmtpLog]
 				MailInit(Profile.szMailHost, Profile.szMailHeloDomain, Profile.szMailFrom, Profile.szMailTo, Profile.szMailUser, Profile.szMailPassword, Profile.iMailPort, Profile.nMailOptions);
 				SendMail(0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL) ;
 
@@ -9757,6 +9806,173 @@ BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 	}
 	return (FALSE);
 } // end of WebhookDlgProc
+
+
+// Telnet-server config dialog (Ctrl-N). Live status updates via WM_TELNET_STATUS
+// posted by the worker thread; mirror-pattern of WebhookDlgProc.
+//
+// Clients list + Activity list refresh on a 1-second timer (TS_REFRESH_TIMER).
+// Newest activity rows pushed to the top via TelnetServerGetEvents(), oldest
+// auto-scroll out as new arrive. Clients list shows one row per slot with
+// name/role/IP — multiple environments (PRODUCTIE/DEVELOP) can coexist on
+// the same PDW instance.
+#define TS_REFRESH_TIMER  9001
+
+static void TelnetServerDlg_RefreshLists(HWND hDlg)
+{
+	HWND hClients  = GetDlgItem(hDlg, IDC_TS_CLIENTS);
+	HWND hActivity = GetDlgItem(hDlg, IDC_TS_ACTIVITY);
+
+	// --- Clients list ---
+	TsClientInfo clients[25];
+	int nClients = TelnetServerGetClients(clients, 25);
+
+	SendMessage(hClients, WM_SETREDRAW, FALSE, 0);
+	SendMessage(hClients, LB_RESETCONTENT, 0, 0);
+	for (int i = 0; i < nClients; i++)
+	{
+		const TsClientInfo *c = &clients[i];
+		const char *roleStr = (c->role == 1) ? "MASTER" :
+		                     (c->role == 0) ? "SLAVE"  : "—";
+		const char *stateStr = c->disconnected ? " (buffered)" : "";
+		char line[160];
+		_snprintf_s(line, sizeof(line), _TRUNCATE,
+			"%s:%d\t%s\t%s%s",
+			c->ip[0] ? c->ip : "?",
+			c->port,
+			c->name[0] ? c->name : "—",
+			roleStr,
+			stateStr);
+		SendMessage(hClients, LB_ADDSTRING, 0, (LPARAM)line);
+	}
+	if (nClients == 0)
+		SendMessage(hClients, LB_ADDSTRING, 0, (LPARAM)"(no clients connected)");
+	SendMessage(hClients, WM_SETREDRAW, TRUE, 0);
+	InvalidateRect(hClients, NULL, TRUE);
+
+	// --- Activity list (newest first) ---
+	TsEvent events[64];
+	int nEvents = TelnetServerGetEvents(events, 64);
+
+	SendMessage(hActivity, WM_SETREDRAW, FALSE, 0);
+	SendMessage(hActivity, LB_RESETCONTENT, 0, 0);
+	ULONGLONG nowMs = GetTickCount64();
+	for (int i = 0; i < nEvents; i++)
+	{
+		long long ageMs = (long long)nowMs - events[i].ts_ms;
+		if (ageMs < 0) ageMs = 0;
+		char prefix[24];
+		if      (ageMs < 60000)         _snprintf_s(prefix, sizeof(prefix), _TRUNCATE, "%llds ago",   (long long)(ageMs / 1000));
+		else if (ageMs < 3600000)       _snprintf_s(prefix, sizeof(prefix), _TRUNCATE, "%lldm ago",   (long long)(ageMs / 60000));
+		else                            _snprintf_s(prefix, sizeof(prefix), _TRUNCATE, "%lldh ago",   (long long)(ageMs / 3600000));
+
+		char line[160];
+		_snprintf_s(line, sizeof(line), _TRUNCATE, "[%s]  %s", prefix, events[i].text);
+		SendMessage(hActivity, LB_ADDSTRING, 0, (LPARAM)line);
+	}
+	if (nEvents == 0)
+		SendMessage(hActivity, LB_ADDSTRING, 0, (LPARAM)"(no activity yet)");
+	SendMessage(hActivity, WM_SETREDRAW, TRUE, 0);
+	InvalidateRect(hActivity, NULL, TRUE);
+}
+
+BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	char szBuf[64];
+
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_TS_ENABLED,   Profile.telnetServerEnabled);
+		SetDlgItemText (hDlg, IDC_TS_BIND,      Profile.szTelnetServerBind);
+		sprintf(szBuf, "%d", Profile.telnetServerPort);        SetDlgItemText(hDlg, IDC_TS_PORT,       szBuf);
+		sprintf(szBuf, "%d", Profile.telnetServerMaxClients);  SetDlgItemText(hDlg, IDC_TS_MAXCLIENTS, szBuf);
+		sprintf(szBuf, "%d", Profile.telnetServerWdSec);       SetDlgItemText(hDlg, IDC_TS_WDSEC,      szBuf);
+		sprintf(szBuf, "%d", Profile.telnetServerBufferTime);  SetDlgItemText(hDlg, IDC_TS_BUFFERTIME, szBuf);
+		CheckDlgButton(hDlg, IDC_TS_LOGTOFILE, Profile.telnetServerLogToFile);
+		CheckDlgButton(hDlg, IDC_TS_WIRELOG,   Profile.telnetServerWireLog);
+
+		// Tab stops for the clients list (column layout: IP:port | name | role)
+		{
+			int tabs[2] = { 90, 160 };  // pixel-ish dialog units
+			SendDlgItemMessage(hDlg, IDC_TS_CLIENTS, LB_SETTABSTOPS, 2, (LPARAM)tabs);
+		}
+
+		if (!Profile.telnetServerEnabled)
+			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Disabled");
+		else
+		{
+			sprintf(szBuf, "Status: Listening on %s:%d (%d clients)",
+				Profile.szTelnetServerBind, Profile.telnetServerPort,
+				TelnetServerClientCount());
+			SetDlgItemText(hDlg, IDC_TS_STATUS, szBuf);
+		}
+
+		TelnetServerSetStatusWnd(hDlg);
+		TelnetServerDlg_RefreshLists(hDlg);
+		SetTimer(hDlg, TS_REFRESH_TIMER, 1000, NULL);  // 1 Hz refresh
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_TIMER:
+		if (wParam == TS_REFRESH_TIMER)
+			TelnetServerDlg_RefreshLists(hDlg);
+		break;
+
+	case WM_DESTROY:
+		KillTimer(hDlg, TS_REFRESH_TIMER);
+		TelnetServerSetStatusWnd(NULL);
+		break;
+
+	case WM_TELNET_STATUS:
+		switch ((int)wParam)
+		{
+		case TSS_DISABLED:
+			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Disabled");
+			break;
+		case TSS_LISTENING:
+			sprintf(szBuf, "Status: Listening on %s:%d (%d clients)",
+				Profile.szTelnetServerBind, Profile.telnetServerPort, (int)lParam);
+			SetDlgItemText(hDlg, IDC_TS_STATUS, szBuf);
+			TelnetServerDlg_RefreshLists(hDlg);  // refresh immediately on state change
+			break;
+		case TSS_ERROR:
+			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Error — see pdw_telnet_server.log");
+			break;
+		}
+		break;
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDOK:
+			Profile.telnetServerEnabled   = IsDlgButtonChecked(hDlg, IDC_TS_ENABLED)   ? 1 : 0;
+			Profile.telnetServerLogToFile = IsDlgButtonChecked(hDlg, IDC_TS_LOGTOFILE) ? 1 : 0;
+			Profile.telnetServerWireLog   = IsDlgButtonChecked(hDlg, IDC_TS_WIRELOG)   ? 1 : 0;
+
+			GetDlgItemText(hDlg, IDC_TS_BIND, Profile.szTelnetServerBind, sizeof(Profile.szTelnetServerBind));
+			if (Profile.szTelnetServerBind[0] == '\0')
+				strcpy(Profile.szTelnetServerBind, "0.0.0.0");
+
+			GetDlgItemText(hDlg, IDC_TS_PORT,       szBuf, sizeof(szBuf)); Profile.telnetServerPort       = atoi(szBuf); if (Profile.telnetServerPort       <= 0) Profile.telnetServerPort       = 8024;
+			GetDlgItemText(hDlg, IDC_TS_MAXCLIENTS, szBuf, sizeof(szBuf)); Profile.telnetServerMaxClients = atoi(szBuf); if (Profile.telnetServerMaxClients <= 0) Profile.telnetServerMaxClients = 25;
+			if (Profile.telnetServerMaxClients > 25) Profile.telnetServerMaxClients = 25;
+			GetDlgItemText(hDlg, IDC_TS_WDSEC,      szBuf, sizeof(szBuf)); Profile.telnetServerWdSec      = atoi(szBuf); if (Profile.telnetServerWdSec      <= 0) Profile.telnetServerWdSec      = 20;
+			GetDlgItemText(hDlg, IDC_TS_BUFFERTIME, szBuf, sizeof(szBuf)); Profile.telnetServerBufferTime = atoi(szBuf); if (Profile.telnetServerBufferTime <= 0) Profile.telnetServerBufferTime = 60;
+
+			TelnetServerInit();   // applies new config (restarts thread if running)
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+
+		case IDCANCEL:
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of TelnetServerDlgProc
 
 
 BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -10441,6 +10657,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->bMailSplitConfig    = (INT) GetPrivateProfileInt("SMTP", TEXT("SplitConfig"),    0, lpszIniPathName);
 	pProfile->nMailSubjectOptions = (INT) GetPrivateProfileInt("SMTP", TEXT("SubjectOptions"), MAIL_OPTION_MESSAGE, lpszIniPathName);
 	pProfile->nMailBodyOptions    = (INT) GetPrivateProfileInt("SMTP", TEXT("BodyOptions"),    (MAIL_OPTION_LABEL | MAIL_OPTION_TIME), lpszIniPathName);
+	pProfile->bMailLogErrors = (INT) GetPrivateProfileInt("SMTP", TEXT("LogErrors"), 0, lpszIniPathName);	// FIX [SmtpLog]: default off
 
 	MailInit(Profile.szMailHost, Profile.szMailHeloDomain, Profile.szMailFrom, Profile.szMailTo, Profile.szMailUser, Profile.szMailPassword, Profile.iMailPort, Profile.nMailOptions);
 
@@ -10470,6 +10687,16 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->mqttSendIn       = (INT) GetPrivateProfileInt("MQTT", TEXT("SendIn"),       0,    lpszIniPathName);
 	pProfile->mqttFields       = (INT) GetPrivateProfileInt("MQTT", TEXT("Fields"),       0x7F, lpszIniPathName);
 	MqttInit();
+
+	pProfile->telnetServerEnabled    = (INT) GetPrivateProfileInt("TelnetServer", TEXT("Enabled"),       0,      lpszIniPathName);
+	GetPrivateProfileString("TelnetServer", TEXT("BindAddress"), "0.0.0.0", pProfile->szTelnetServerBind, sizeof(pProfile->szTelnetServerBind), lpszIniPathName);
+	pProfile->telnetServerPort       = (INT) GetPrivateProfileInt("TelnetServer", TEXT("Port"),          8024,   lpszIniPathName);
+	pProfile->telnetServerMaxClients = (INT) GetPrivateProfileInt("TelnetServer", TEXT("MaxClients"),    25,     lpszIniPathName);
+	pProfile->telnetServerWdSec      = (INT) GetPrivateProfileInt("TelnetServer", TEXT("WatchdogSec"),   20,     lpszIniPathName);
+	pProfile->telnetServerBufferTime = (INT) GetPrivateProfileInt("TelnetServer", TEXT("BufferTimeSec"), 60,     lpszIniPathName);
+	pProfile->telnetServerLogToFile  = (INT) GetPrivateProfileInt("TelnetServer", TEXT("LogToFile"),     0,      lpszIniPathName);
+	pProfile->telnetServerWireLog    = (INT) GetPrivateProfileInt("TelnetServer", TEXT("WireLog"),       0,      lpszIniPathName);
+	TelnetServerInit();
 
 	pProfile->bDebugLog        = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),  0,    lpszIniPathName);
 
@@ -10535,7 +10762,10 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 		while (fgets(szLine, sizeof(szLine), pFile) != NULL)
 		{
-			szLine[strlen(szLine)-1] = '\0';	// Remove linebreaks
+			// FIX [ReadFilters]: voorheen werd het laatste teken onvoorwaardelijk gestript
+			// → underflow (szLine[-1]) op een NUL-regel, en chop van het laatste echte
+			// teken op een regel zonder afsluitende newline. Strip nu alleen een echte '\n'.
+			{ size_t _ln = strlen(szLine); if (_ln && szLine[_ln-1] == '\n') szLine[_ln-1] = '\0'; }
 
 			if (nLines == 0)
 			{
@@ -10559,7 +10789,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 				}
 				else
 				{
-					memmove(szLine, &szLine[12], strlen(szLine));
+					// FIX [ReadFilters]: kopieerde strlen(szLine) bytes vanaf offset 12
+					// → 12 bytes over-read voorbij het bron-einde. +1 neemt de NUL mee.
+					memmove(szLine, &szLine[12], strlen(szLine) - 12 + 1);
 					iFilterCount=atoi(szLine);
 				}
 			}
@@ -10569,7 +10801,11 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 				if (strncmp(szLine, "Filter", 6) == 0)
 				{
-					pos = strchr(szLine, '=') - szLine+1;	// Find first item
+					// FIX [ReadFilters]: strchr kon NULL teruggeven (regel "Filter..." zonder '=')
+					// → (NULL - szLine) is undefined en pos werd een wilde index.
+					char *pEq = strchr(szLine, '=');
+					if (!pEq) { bError = true; pos = 0; }
+					else pos = (int)(pEq - szLine) + 1;	// Find first item
 				}
 				else pos=0;
 
@@ -10703,13 +10939,19 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 								szSepfiles[MAX_STR_LEN - 1] = '\0';
 								{ char* pQ = strchr(szSepfiles, '"'); if (pQ) *pQ = '\0'; }
 								pos += strlen(szSepfiles);
+								// FIX [ReadFilters]: sep_filterfile is [3][FILTER_FILE_LEN+1].
+								// De oude do/while had GEEN array-bound (>3 sepfiles → schrijven
+								// voorbij het array) en GEEN lengtebegrenzing (strcpy van een token
+								// tot MAX_STR_LEN in een 129-byte veld), plus crash op een NULL-token.
+								// Nu begrensd op 3 sepfiles met bounded copy.
 								token = strtok_s(szSepfiles, ";", &strtokCtx);
-
-								do
+								while (token && filter.sep_filterfiles < 3)
 								{
-									strcpy(filter.sep_filterfile[filter.sep_filterfiles++], token);
+									strncpy(filter.sep_filterfile[filter.sep_filterfiles], token, FILTER_FILE_LEN);
+									filter.sep_filterfile[filter.sep_filterfiles][FILTER_FILE_LEN] = '\0';
+									filter.sep_filterfiles++;
+									token = strtok_s(NULL, ";", &strtokCtx);
 								}
-								while (token = strtok_s(NULL, ";", &strtokCtx));
 							}
 							break;
 
@@ -10734,7 +10976,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 					iFilter++;
 				}
 			}
-			if (bError) return(false);
+			// FIX [ReadFilters]: sluit het bestand vóór de error-return — voorheen lekte
+			// pFile bij een corrupte regel (de while-lus verliet de functie met open handle).
+			if (bError) { fclose(pFile); pFile = NULL; return(false); }
 			else nLines++;
 		}
 		fclose(pFile);
@@ -10944,6 +11188,7 @@ void WriteSettings()
 		fprintf(pFile, "SplitConfig=%i\n",              Profile.bMailSplitConfig);		// FIX [MailSplit]
 		fprintf(pFile, "SubjectOptions=%i\n",           Profile.nMailSubjectOptions);	// FIX [MailSplit]
 		fprintf(pFile, "BodyOptions=%i\n",              Profile.nMailBodyOptions);		// FIX [MailSplit]
+		fprintf(pFile, "LogErrors=%i\n",                Profile.bMailLogErrors);		// FIX [SmtpLog]
 
 		fprintf(pFile, "\n[Webhook]\n");
 		fprintf(pFile, "Enabled=%i\n",          Profile.webhookEnabled);
@@ -10971,6 +11216,16 @@ void WriteSettings()
 		fprintf(pFile, "TopicSuffix=%i\n",   Profile.mqttTopicSuffix);
 		fprintf(pFile, "SendIn=%i\n",        Profile.mqttSendIn);
 		fprintf(pFile, "Fields=%i\n",        Profile.mqttFields);
+
+		fprintf(pFile, "\n[TelnetServer]\n");
+		fprintf(pFile, "Enabled=%i\n",       Profile.telnetServerEnabled);
+		fprintf(pFile, "BindAddress=%s\n",   Profile.szTelnetServerBind);
+		fprintf(pFile, "Port=%i\n",          Profile.telnetServerPort);
+		fprintf(pFile, "MaxClients=%i\n",    Profile.telnetServerMaxClients);
+		fprintf(pFile, "WatchdogSec=%i\n",   Profile.telnetServerWdSec);
+		fprintf(pFile, "BufferTimeSec=%i\n", Profile.telnetServerBufferTime);
+		fprintf(pFile, "LogToFile=%i\n",     Profile.telnetServerLogToFile);
+		fprintf(pFile, "WireLog=%i\n",       Profile.telnetServerWireLog);
 
 		fprintf(pFile, "\n[Logging]\n");
 		fprintf(pFile, "DebugLog=%i\n",      Profile.bDebugLog);

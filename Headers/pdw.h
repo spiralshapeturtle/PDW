@@ -193,6 +193,7 @@ typedef struct
 	int  bMailSplitConfig;			// FIX [MailSplit]: enable split Subject/Body configuration
 	int  nMailSubjectOptions;		// FIX [MailSplit]: fields for Subject line (when split mode ON)
 	int  nMailBodyOptions;			// FIX [MailSplit]: fields for Body (when split mode ON)
+	int  bMailLogErrors;			// FIX [SmtpLog]: log SMTP errors to disk (checkbox)
 
 	COLORREF color_background;
 	COLORREF color_address;
@@ -268,6 +269,17 @@ typedef struct
 
 	int  betterContrast;        // 0=off, 1=remap low-contrast filter label colors
 	int  lighterBackground;     // 0=off, 1=use dark-navy background instead of pure black
+
+	// Telnet server — exposes decoded messages in p2kflexDecoder wire-format.
+	// See utils/telnet_server.{h,cpp}.
+	int  telnetServerEnabled;
+	char szTelnetServerBind[64];      // "0.0.0.0" or specific local IP
+	int  telnetServerPort;            // default 8024
+	int  telnetServerMaxClients;      // default & ceiling: 25
+	int  telnetServerWdSec;           // <WD> heartbeat interval, default 20
+	int  telnetServerBufferTime;      // backlog replay window (sec), default 60
+	int  telnetServerLogToFile;       // 0=off, 1=write pdw_telnet_server.log (lifecycle events)
+	int  telnetServerWireLog;         // 0=off, 1=write pdw_flexdecoder.log (full wire-format messages)
 } PROFILE, *PPROFILE;
 
 extern PROFILE Profile;     // profile information
@@ -458,6 +470,7 @@ BOOL FAR PASCAL MonStatDlgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL DisplayOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL NEAR SetTitle(HWND hWnd, TCHAR *cTitle);
 

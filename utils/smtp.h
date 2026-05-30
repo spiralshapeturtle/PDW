@@ -59,5 +59,7 @@ extern char *szSmtpCharSets[] ;
 
 int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *szMailTo, char *szMailUser, char *szMailPassword, int iMailPort, int nOptions) ;
 int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP, char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel) ;
+void LogSmtpError(int errCode) ;	// FIX [SmtpLog]: convert error code to text, store in global, optionally log to disk
+const char *GetLastSmtpError(void) ;	// FIX [SmtpLog]: get last SMTP error for display in Setup dialog
 
 #endif /* ! SMTP_H */

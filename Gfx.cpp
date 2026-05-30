@@ -131,7 +131,7 @@ void DrawPaneLabels(HWND hwnd, int pane)
 	if (pane & PANE1)	// DRAW TITLE BAR AND GFX FOR PANE1
 	{
 		left_edge = r.left + PL1_SCount;	// Work out left edge
-		top_edge  = r.top+30;				// Work out top edge for all labels
+		top_edge  = g_cyToolbar;	// FIX [DpiScale]: titelbalk start exact op de onderkant van de toolbar (geen zwart gat)
 
 		// First, draw a grey line above all labels
 		SelectObject(hdc,SysPEN[DARKGRAY]);
@@ -149,21 +149,21 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 1 :	// Address-box
 
 				w += iItemWidths[1];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+(i ? 1 : 5),top_edge+2,"Aircraft Reg",12);
+					TextOut(hdc,left_edge+Scale(i ? 1 : 5),top_edge+Scale(2),"Aircraft Reg",12);	// FIX [DpiScale]
 				}
 				else if (Profile.monitor_ermes || Profile.FlexGroupMode)
 				{
-					TextOut(hdc,left_edge+(i ? 9 : 12),top_edge+2,"Address",7);
+					TextOut(hdc,left_edge+Scale(i ? 9 : 12),top_edge+Scale(2),"Address",7);	// FIX [DpiScale]
 				}
 				else if (Profile.monitor_mobitex)
 				{
-					TextOut(hdc,left_edge+20,top_edge+2,"MAN",3);
+					TextOut(hdc,left_edge+Scale(20),top_edge+Scale(2),"MAN",3);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+(i ? 12 : 14),top_edge+2,"Address",7);
+				else TextOut(hdc,left_edge+Scale(i ? 12 : 14),top_edge+Scale(2),"Address",7);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[1];
 
@@ -172,8 +172,8 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 2 :	// Time box
 
 				w += iItemWidths[2];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
-				TextOut(hdc,left_edge+(i ? 18 : 20),top_edge+2,"Time", 4);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
+				TextOut(hdc,left_edge+Scale(i ? 18 : 20),top_edge+Scale(2),"Time", 4);	// FIX [DpiScale]
 				left_edge += iItemWidths[2];
 
 				break;
@@ -181,8 +181,8 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 3 :	// Date box
 				
 				w += iItemWidths[3];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
-				TextOut(hdc,left_edge+18,top_edge+2,"Date", 4);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
+				TextOut(hdc,left_edge+Scale(18),top_edge+Scale(2),"Date", 4);	// FIX [DpiScale]
 				left_edge += iItemWidths[3];
 
 				break;
@@ -190,17 +190,17 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 4 :	// Mode box
 
 				w += iItemWidths[4];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+9,top_edge+2,"Msg.No.", 7);
+					TextOut(hdc,left_edge+Scale(9),top_edge+Scale(2),"Msg.No.", 7);	// FIX [DpiScale]
 				}
 				else if (Profile.monitor_mobitex)
 				{   
-					TextOut(hdc,left_edge+13,top_edge+2,"Sender", 6);
+					TextOut(hdc,left_edge+Scale(13),top_edge+Scale(2),"Sender", 6);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+14,top_edge+2,"Mode", 4);
+				else TextOut(hdc,left_edge+Scale(14),top_edge+Scale(2),"Mode", 4);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[4];
 
@@ -209,13 +209,13 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 5 :	// Type box
 
 				w += iItemWidths[5];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+7,top_edge+2,"DBI", 3);
+					TextOut(hdc,left_edge+Scale(7),top_edge+Scale(2),"DBI", 3);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+14,top_edge+2,"Type", 4);
+				else TextOut(hdc,left_edge+Scale(14),top_edge+Scale(2),"Type", 4);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[5];
 
@@ -224,13 +224,13 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 6 :	// Bitrate box
 
 				w += iItemWidths[6];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+9,top_edge+2,"Mode", 4);
+					TextOut(hdc,left_edge+Scale(9),top_edge+Scale(2),"Mode", 4);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+6,top_edge+2,"Bitrate", 7);
+				else TextOut(hdc,left_edge+Scale(6),top_edge+Scale(2),"Bitrate", 7);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[6];
 
@@ -238,9 +238,9 @@ void DrawPaneLabels(HWND hwnd, int pane)
 
 				case 7 :	// Message box
 
-				w = r.right-left_edge - 46;	// 46px smaller smaller for RX-Quality
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
-				TextOut(hdc,left_edge+10,top_edge+2,"Monitored Messages",18);
+				w = r.right-left_edge - Scale(46);	// FIX [DpiScale]: 46px smaller for RX-Quality
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
+				TextOut(hdc,left_edge+Scale(10),top_edge+Scale(2),"Monitored Messages",18);	// FIX [DpiScale]
 
 				break;
 			}
@@ -249,8 +249,8 @@ void DrawPaneLabels(HWND hwnd, int pane)
 
 		// Add gray line to bottom edges
 		SelectObject(hdc,SysPEN[DARKGRAY]);
-		MoveToEx(hdc,r.left,top_edge+TITLE_BAR_SIZE,NULL);
-		LineTo(hdc,r.right, top_edge+TITLE_BAR_SIZE);
+		MoveToEx(hdc,r.left,top_edge+Scale(TITLE_BAR_SIZE),NULL);
+		LineTo(hdc,r.right, top_edge+Scale(TITLE_BAR_SIZE));
 	}
 
 	if (pane & PANE2)	// DRAW TITLE BAR AND GFX FOR PANE2
@@ -267,21 +267,21 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 1 :	// Address-box
 
 				w += iItemWidths[1];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+(i ? 1 : 5),top_edge+2,"Aircraft Reg",12);
+					TextOut(hdc,left_edge+Scale(i ? 1 : 5),top_edge+Scale(2),"Aircraft Reg",12);	// FIX [DpiScale]
 				}
 				else if (Profile.monitor_ermes || Profile.FlexGroupMode)
 				{
-					TextOut(hdc,left_edge+(i ? 9 : 12),top_edge+2,"Address",7);
+					TextOut(hdc,left_edge+Scale(i ? 9 : 12),top_edge+Scale(2),"Address",7);	// FIX [DpiScale]
 				}
 				else if (Profile.monitor_mobitex)
 				{
-					TextOut(hdc,left_edge+20,top_edge+2,"MAN",3);
+					TextOut(hdc,left_edge+Scale(20),top_edge+Scale(2),"MAN",3);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+(i ? 12 : 14),top_edge+2,"Address",7);
+				else TextOut(hdc,left_edge+Scale(i ? 12 : 14),top_edge+Scale(2),"Address",7);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[1];
 
@@ -290,8 +290,8 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 2 :	// Time box
 
 				w += iItemWidths[2];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
-				TextOut(hdc,left_edge+(i ? 18 : 20),top_edge+2,"Time", 4);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
+				TextOut(hdc,left_edge+Scale(i ? 18 : 20),top_edge+Scale(2),"Time", 4);	// FIX [DpiScale]
 				left_edge += iItemWidths[2];
 
 				break;
@@ -299,8 +299,8 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 3 :	// Date box
 				
 				w += iItemWidths[3];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
-				TextOut(hdc,left_edge+18,top_edge+2,"Date", 4);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
+				TextOut(hdc,left_edge+Scale(18),top_edge+Scale(2),"Date", 4);	// FIX [DpiScale]
 				left_edge += iItemWidths[3];
 
 				break;
@@ -308,17 +308,17 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 4 :	// Mode box
 
 				w += iItemWidths[4];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+9,top_edge+2,"Msg.No.", 7);
+					TextOut(hdc,left_edge+Scale(9),top_edge+Scale(2),"Msg.No.", 7);	// FIX [DpiScale]
 				}
 				else if (Profile.monitor_mobitex)
 				{   
-					TextOut(hdc,left_edge+13,top_edge+2,"Sender", 6);
+					TextOut(hdc,left_edge+Scale(13),top_edge+Scale(2),"Sender", 6);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+14,top_edge+2,"Mode", 4);
+				else TextOut(hdc,left_edge+Scale(14),top_edge+Scale(2),"Mode", 4);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[4];
 
@@ -327,13 +327,13 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 5 :	// Type box
 
 				w += iItemWidths[5];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+7,top_edge+2,"DBI", 3);
+					TextOut(hdc,left_edge+Scale(7),top_edge+Scale(2),"DBI", 3);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+14,top_edge+2,"Type", 4);
+				else TextOut(hdc,left_edge+Scale(14),top_edge+Scale(2),"Type", 4);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[5];
 
@@ -342,13 +342,13 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				case 6 :	// Bitrate box
 
 				w += iItemWidths[6];
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, i);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
 
 				if (Profile.monitor_acars)
 				{
-					TextOut(hdc,left_edge+9,top_edge+2,"Mode", 4);
+					TextOut(hdc,left_edge+Scale(9),top_edge+Scale(2),"Mode", 4);	// FIX [DpiScale]
 				}
-				else TextOut(hdc,left_edge+6,top_edge+2,"Bitrate", 7);
+				else TextOut(hdc,left_edge+Scale(6),top_edge+Scale(2),"Bitrate", 7);	// FIX [DpiScale]
 
 				left_edge += iItemWidths[6];
 
@@ -358,8 +358,8 @@ void DrawPaneLabels(HWND hwnd, int pane)
 
 				w += r.right-left_edge;
 
-				Draw3D_Box(hdc,left_edge,top_edge,w,TITLE_BAR_SIZE, -1);	// -1 so no grey line at the right
-				TextOut(hdc,left_edge+10,top_edge+2,"Filtered Messages",17);
+				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), -1);	// -1 so no grey line at the right
+				TextOut(hdc,left_edge+Scale(10),top_edge+Scale(2),"Filtered Messages",17);	// FIX [DpiScale]
 
 				break;
 			}
@@ -367,8 +367,8 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		}
 		// Add gray line to bottom edges
 		SelectObject(hdc,SysPEN[DARKGRAY]);
-		MoveToEx(hdc,r.left,top_edge+TITLE_BAR_SIZE,NULL);
-		LineTo(hdc,r.right, top_edge+TITLE_BAR_SIZE);
+		MoveToEx(hdc,r.left,top_edge+Scale(TITLE_BAR_SIZE),NULL);
+		LineTo(hdc,r.right, top_edge+Scale(TITLE_BAR_SIZE));
 	}
 
 	if (pane & PANERXQUAL)	// DRAW RX-Quality
@@ -376,12 +376,13 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		if (dRX_Quality && dRX_Quality < 90)
 		{
 			SelectObject(hdc, black_brush);
-			Rectangle(hdc, r.right-75, r.top+5, r.right-50, r.top+27);
+			Rectangle(hdc, r.right-Scale(75), r.top+Scale(5), r.right-Scale(50), r.top+Scale(27));	// FIX [DpiScale]
 
 			if (hdc_mem = CreateCompatibleDC(hdc))
 			{
 				SelectObject(hdc_mem, hbm_exclam);
-				BitBlt(hdc, r.right-75, r.top+5, bme.bmWidth, bme.bmHeight, hdc_mem, 0, 0, SRCPAINT);
+				SetStretchBltMode(hdc, COLORONCOLOR);	// FIX [DpiScale]
+				StretchBlt(hdc, r.right-Scale(75), r.top+Scale(5), Scale(bme.bmWidth), Scale(bme.bmHeight), hdc_mem, 0, 0, bme.bmWidth, bme.bmHeight, SRCPAINT);
 				DeleteDC(hdc_mem);
 			}
 		}
@@ -389,7 +390,7 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		{
 			SelectObject(hdc, null_pen);
 			SelectObject(hdc, lgray_brush);
-			Rectangle(hdc, r.right-75, r.top+5, r.right-49, r.top+28);
+			Rectangle(hdc, r.right-Scale(75), r.top+Scale(5), r.right-Scale(49), r.top+Scale(28));	// FIX [DpiScale]
 		}
 
 		/* Set new font/pen */
@@ -399,7 +400,7 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		{
 			strcpy(qual, "RX-Q");
 			SetAPEN_SYS(hdc, BLACK);
-			left_edge = r.right-39;
+			left_edge = r.right-Scale(39);	// FIX [DpiScale]
 		}
 		else
 		{
@@ -409,16 +410,16 @@ void DrawPaneLabels(HWND hwnd, int pane)
 			if (dRX_Quality > 99.9)
 			{
 				strcpy(qual, "100%");
-				left_edge = r.right-42;
+				left_edge = r.right-Scale(42);	// FIX [DpiScale]
 			}
 			else
 			{
 				sprintf(qual, "%.1f%%", dRX_Quality);
-				left_edge = r.right-44;
+				left_edge = r.right-Scale(44);	// FIX [DpiScale]
 			}
 		}
-		Draw3D_Box(hdc, r.right-46, r.top+31, 46, TITLE_BAR_SIZE, -1);
-		TextOut(hdc, left_edge, r.top+33, qual, strlen(qual));
+		Draw3D_Box(hdc, r.right-Scale(46), g_cyToolbar+Scale(1), Scale(46), Scale(TITLE_BAR_SIZE), -1);	// FIX [DpiScale]: lijn uit met titelbalk
+		TextOut(hdc, left_edge, g_cyToolbar+Scale(3), qual, strlen(qual));	// FIX [DpiScale]
 	}
 	ReleaseDC(hwnd, hdc);
 }
@@ -455,7 +456,7 @@ bool GetLogFONTS(void)
 			case FONT_LABELS:
 
 			lstrcpy(logfont.lfFaceName, "Verdana");
-			logfont.lfHeight = -MulDiv(11, (int)g_dpi, 96);
+			logfont.lfHeight = -Scale(11);
 			logfont.lfWeight = FW_NORMAL;
 
 			break;
@@ -463,7 +464,7 @@ bool GetLogFONTS(void)
 			case FONT_RXQUAL:
 
 			lstrcpy(logfont.lfFaceName, "Verdana");
-			logfont.lfHeight = -MulDiv(11, (int)g_dpi, 96);
+			logfont.lfHeight = -Scale(11);
 			logfont.lfWeight = FW_BOLD;
 
 			break;
@@ -499,7 +500,7 @@ void FreeLogFONTS(void)
 // Setup a box font
 bool SetBoxFONT(void)
 {
-	boxfontInfo.lfHeight		= -MulDiv(11, (int)g_dpi, 96);
+	boxfontInfo.lfHeight		= -Scale(11);
 	boxfontInfo.lfWidth			= 0;
 	boxfontInfo.lfEscapement	= 0;
 	boxfontInfo.lfOrientation	= 0;
@@ -514,6 +515,7 @@ bool SetBoxFONT(void)
 	boxfontInfo.lfPitchAndFamily= FIXED_PITCH | FF_MODERN;
 	lstrcpy(boxfontInfo.lfFaceName, "Courier New");
 
+	if (hboxfont) { DeleteObject(hboxfont); hboxfont = NULL; }	// FIX [DpiScale]: voorkom lek bij herbouw (werd al aangemaakt met g_dpi=96 in Get_Drawing_Objects)
 	if (!(hboxfont = CreateFontIndirect(&boxfontInfo))) return(false);
 
 	return(true);
