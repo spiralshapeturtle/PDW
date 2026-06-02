@@ -59,7 +59,9 @@ extern char *szSmtpCharSets[] ;
 
 int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *szMailTo, char *szMailUser, char *szMailPassword, int iMailPort, int nOptions) ;
 int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP, char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel) ;
+int QueueAlertMail(const char *szTo, const char *szSubject, const char *szBody) ;	// FIX [RxQualAlert]
 void LogSmtpError(int errCode) ;	// FIX [SmtpLog]: convert error code to text, store in global, optionally log to disk
 const char *GetLastSmtpError(void) ;	// FIX [SmtpLog]: get last SMTP error for display in Setup dialog
+unsigned GetSmtpDroppedCount(void) ;	// FIX [SmtpQueueFull]: # mails dropped due to a full send queue
 
 #endif /* ! SMTP_H */
