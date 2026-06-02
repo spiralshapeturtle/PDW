@@ -32,15 +32,45 @@ static BOOL keepbusy = TRUE ;
 static BOOL bWsaStartup ;
 
 #define MAX_MAIL		100
-#define MAX_MAIL_LEN	1024
+// FIX [SmtpQueueLen]: match the producer buffer (SendMail's szBuffer = MAX_STR_LEN+256) so a
+// queued message — and crucially the \x1f subject/body separator — is never truncated in the ring
+// slot. Was 1024, which clipped long FLEX messages and could drop the separator (→ split message
+// mis-parsed as legacy).
+#define MAX_MAIL_LEN	(MAX_STR_LEN + 256)
+// FIX [SmtpRcptLen]: recipient buffer sized to the largest recipient source (szRxQualMailTo[512]),
+// so a long alert recipient list isn't truncated along the override → snapshot → RCPT TO path.
+#define MAIL_TO_LEN		512
 
 // FIX [MailSplit]: separator byte carrying Subject vs Body through the mail queue.
 // 0x1F (US, unit separator) never occurs in pager text, so it is a safe delimiter.
 #define MAIL_SPLIT_SEP '\x1f'
 
+// Lock-free single-producer/single-consumer ring. PRODUCER = main thread only (SendMail and
+// QueueAlertMail, both via WM_TIMER). CONSUMER = the one mail worker thread. The design relies
+// on this; adding a producer on another thread would require real synchronisation.
 static char szMailBuffer[MAX_MAIL][MAX_MAIL_LEN] ;
-static int  nBufferdMailStart ;
-static int  nBufferdMailEnd ;
+static int  nBufferdMailStart ;   // producer index (main thread)
+static int  nBufferdMailEnd ;     // consumer index (worker thread)
+
+// FIX [SmtpQueueFull]: the producers (SendMail/QueueAlertMail) previously advanced
+// nBufferdMailStart with NO full-check. When the worker stalls (server hung — connect/IO
+// timeouts run into minutes) under sustained traffic, the producer laps the consumer; the moment
+// nBufferdMailStart wraps to equal nBufferdMailEnd the ring reads "empty" and the entire backlog
+// is silently discarded. Mirror the bounded-ring + drop-counter design used by the webhook/MQTT
+// feeds: refuse to enqueue when full (sacrificing one slot) and count the loss.
+static unsigned nSMTPdropped = 0 ;
+static BOOL inline MailQueueFull(void)
+{
+	int nNext = nBufferdMailStart + 1 ;
+	if (nNext >= MAX_MAIL) nNext = 0 ;
+	return nNext == nBufferdMailEnd ;
+}
+unsigned GetSmtpDroppedCount(void) { return nSMTPdropped ; }   // FIX [SmtpQueueFull]: diagnostics
+
+// FIX [RxQualAlert]: per-slot To override — travels with the queued message so the
+// worker thread uses the correct recipient even after MailInit restores mail.to.
+// Empty string = no override (use mail.to as normal).
+static char szMailToOverride[MAX_MAIL][MAIL_TO_LEN];
 
 static byte dtable[256];
 
@@ -484,13 +514,16 @@ int sendData_SSL(SSL* ssl, char *buf)
 		}
 	}
 
-	OutputDebugStringA(buf);
+	// FIX [SmtpCredLeak]: do NOT echo the raw TLS write to the debug channel. AUTH credentials are
+	// sent via sockPutsSilent() specifically to keep them out of the UI/log, but they still reached
+	// sendData_SSL() — OutputDebugStringA(buf) leaked the base64 user/pass to any attached debugger.
+	// Non-credential lines are already echoed via AddResponse() in sockPuts(), so nothing is lost.
 	FD_ZERO(&fdwrite);
 	FD_ZERO(&fdread);
 
 	return CSMTP_NO_ERROR;
 }
-	
+
 char *EncodeBase64(char *szIn, char *szOut)
 {
 	char *pIn = szIn, *pOut = szOut ;
@@ -554,7 +587,7 @@ char *DecodeBase64(char *szIn, char *szOut)
 	int i, j;
 	char *pIn = szIn, *pOut = szOut ;
 
-	for(i= 0;i<255;i++){
+	for(i= 0;i<256;i++){		// FIX [Base64Idx]: was <255, leaving dtable[255] uninitialised
 		dtable[i]= 0x80;
 	}
 	for(i= 'A';i<='I';i++){
@@ -586,7 +619,7 @@ char *DecodeBase64(char *szIn, char *szOut)
 		byte a[4],b[4],o[3];
 		
 		for(i = 0; i < 4; i++){
-			int c = *pIn++;		
+			int c = (unsigned char)*pIn++;		// FIX [Base64Idx]: unsigned — a high byte (>=0x80) as signed char indexed dtable[] out of bounds
 			if(!c){
 				if(i> 0){
 					OUTPUTDEBUGMSG((("DecodeBase64(): Input line incomplete.\n")));
@@ -619,6 +652,23 @@ char *DecodeBase64(char *szIn, char *szOut)
 	}	
 }
 
+// FIX [LogRotate]: cap pdw_smtp_error.log by keeping one previous generation (.1). With error
+// logging enabled, every failed send appends here; without a cap a server outage could grow the
+// file without bound and fill the disk. Rotating at ~5 MB bounds total disk use to ~10 MB. SMTP
+// logging is single-threaded (worker thread only), so no extra lock is needed.
+#define SMTP_LOG_MAX_BYTES  (5 * 1024 * 1024)
+static void RotateLogIfLarge(const char *path)
+{
+	WIN32_FILE_ATTRIBUTE_DATA fad;
+	if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return;
+	ULONGLONG sz = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+	if (sz < SMTP_LOG_MAX_BYTES) return;
+	char bak[MAX_PATH];
+	_snprintf(bak, sizeof(bak) - 1, "%s.1", path);
+	bak[sizeof(bak) - 1] = '\0';
+	MoveFileExA(path, bak, MOVEFILE_REPLACE_EXISTING);
+}
+
 void AddResponse(char *buf)
 {
 // #ifdef _DEBUG
@@ -626,11 +676,17 @@ void AddResponse(char *buf)
 	SIZE	Size ;
 
 	if(mail.hResponse) {
+		// FIX [SmtpDcLeak]: the device context was fetched with GetDC() but never released — every
+		// response line (every send) leaked a GDI DC while the SMTP monitor/test window was open,
+		// marching toward GDI handle exhaustion. Guard for NULL and ReleaseDC() right after use.
 		hDC = GetDC(mail.hResponse) ;
-		GetTextExtentPoint32(hDC, buf, strlen(buf), &Size);
-		if(Size.cx > nMaxLen) {
-			nMaxLen = Size.cx ;
-			SendMessage(mail.hResponse, LB_SETHORIZONTALEXTENT, Size.cx, 0L) ;
+		if (hDC) {
+			GetTextExtentPoint32(hDC, buf, strlen(buf), &Size);
+			if(Size.cx > nMaxLen) {
+				nMaxLen = Size.cx ;
+				SendMessage(mail.hResponse, LB_SETHORIZONTALEXTENT, Size.cx, 0L) ;
+			}
+			ReleaseDC(mail.hResponse, hDC) ;
 		}
 		SendMessage(mail.hResponse, LB_ADDSTRING, 0, (LPARAM) (LPSTR) buf) ;
 		OUTPUTDEBUGMSG((("AddResponse() : >>> %s"),buf));
@@ -641,9 +697,12 @@ void AddResponse(char *buf)
 		char szLog[MAX_PATH];
 		const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
 		if (root && root[0]) {
-			_snprintf(szLog, sizeof(szLog) - 1, "%s\\pdw_smtp_error.log", root);
+			SYSTEMTIME st; GetLocalTime(&st);
+			_snprintf(szLog, sizeof(szLog) - 1, "%s\\%02d%02d%02d_mail.log",
+					  root, st.wYear % 100, st.wMonth, st.wDay);
 			szLog[sizeof(szLog) - 1] = '\0';
 
+			RotateLogIfLarge(szLog);   // FIX [LogRotate]
 			FILE *f = fopen(szLog, "a");
 			if (f) {
 				SYSTEMTIME st;
@@ -725,12 +784,45 @@ SOCKET clientSocket(char *address,int port)
 		AddResponse("clientSocket() : Could not create socket\n");
 		return(INVALID_SOCKET);
 	}
-	// FIX [SmtpConnect]: check connect() return; previous code silently returned a bad socket
-	if (connect(s, (struct sockaddr *) &sa, sizeof(sa)) == SOCKET_ERROR) {
-		OUTPUTDEBUGMSG((("clientSocket() : connect() failed WSAError=%d\n"), WSAGetLastError()));
-		AddResponse("clientSocket() : connect() failed\n");
-		closesocket(s);
-		return(INVALID_SOCKET);
+	// FIX [SmtpConnTimeout]: bounded, non-blocking connect with a 10 s ceiling. A blocking
+	// connect() to an unreachable SMTP host parked the mail worker for the OS default (~20 s);
+	// this keeps it responsive. (FIX [SmtpConnect]: also checks the result — previous code
+	// silently returned a bad socket.)
+	{
+		u_long nb = 1;
+		ioctlsocket(s, FIONBIO, &nb);
+		int crc = connect(s, (struct sockaddr *) &sa, sizeof(sa));
+		if (crc == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) {
+			fd_set wr, ex;
+			FD_ZERO(&wr); FD_SET(s, &wr);
+			FD_ZERO(&ex); FD_SET(s, &ex);
+			timeval tv; tv.tv_sec = 10; tv.tv_usec = 0;
+			int sel = select((int)s + 1, NULL, &wr, &ex, &tv);
+			if (sel <= 0 || FD_ISSET(s, &ex)) {
+				OUTPUTDEBUGMSG((("clientSocket() : connect() timeout/refused\n")));
+				AddResponse("clientSocket() : connect() failed (timeout)\n");
+				closesocket(s);
+				return(INVALID_SOCKET);
+			}
+		} else if (crc == SOCKET_ERROR) {
+			OUTPUTDEBUGMSG((("clientSocket() : connect() failed WSAError=%d\n"), WSAGetLastError()));
+			AddResponse("clientSocket() : connect() failed\n");
+			closesocket(s);
+			return(INVALID_SOCKET);
+		}
+		nb = 0;
+		ioctlsocket(s, FIONBIO, &nb);   // back to blocking for the SMTP dialog
+	}
+
+	// FIX [SmtpRecvTimeout]: bound blocking recv()/send() so a silent or half-open server can
+	// never hang the worker forever. sockGets() loops on recv() until a newline arrives; without
+	// a timeout a server that connects but never replies stalls ALL mail (incl. RX-Q alerts).
+	// 30 s is generous for SMTP latency; on timeout recv() returns an error and the send is
+	// retried/dropped through the normal path. Also bounds the SSL path as a safety net.
+	{
+		DWORD tmo = 30000;   // milliseconds
+		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tmo, sizeof(tmo));
+		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&tmo, sizeof(tmo));
 	}
 	return(s);
 }
@@ -1013,8 +1105,12 @@ static void strip_crlf(char *s)
 // SMTP: MAIL FROM
 static int smtpMailFrom(int sfd)
 {
-	strip_crlf(mail.from);
-	_snprintf(buf,sizeof(buf)-1,"MAIL FROM: <%s>\r\n",mail.from);
+	// FIX [SmtpHdrLocal]: format from a local copy so the worker never mutates Profile.szMailFrom
+	// (and never dereferences a NULL from). strip_crlf() rewrites its argument in place.
+	char szFrom[MAIL_TEXT_LEN] = "" ;
+	if(mail.from) _snprintf_s(szFrom, sizeof(szFrom), _TRUNCATE, "%s", mail.from) ;
+	strip_crlf(szFrom);
+	_snprintf(buf,sizeof(buf)-1,"MAIL FROM: <%s>\r\n",szFrom);
 //	OUTPUTDEBUGMSG((("smtpMailFrom() : >>> %s"),buf));
 	sockPuts(sfd,buf);
 	return (smtpResponse(sfd));
@@ -1055,12 +1151,16 @@ char *StripSpecial(char *szStr)
 }
 
 // SMTP: RCPT TO
-static int smtpRcptTo(int sfd)
+// FIX [RxQualAlert]: recipient is passed in (per-message override of mail.to) so an alert
+// reaches the alert address regardless of what the global mail.to points to when we send.
+static int smtpRcptTo(int sfd, const char *szTo)
 {
-	static char szTemp[MAX_MAIL * 5] ;
+	static char szTemp[MAIL_TO_LEN] ;
 	char *pTmp1 = szTemp, *pTmp2 ;
 
-	strncpy(szTemp, mail.to, (MAX_MAIL * 5) - 1) ;
+	if(!szTo) szTo = "" ;
+	strncpy(szTemp, szTo, MAIL_TO_LEN - 1) ;
+	szTemp[MAIL_TO_LEN - 1] = '\0' ;   // strncpy does not NUL-terminate on exact fill
 	strip_crlf(szTemp) ;
 	StripSpecial(szTemp) ;
 
@@ -1110,70 +1210,95 @@ static int smtpEom(int sfd)
 	return (smtpResponse(sfd));
 }
 
-// FIX [SmtpDotStuff]: RFC 5321 §4.5.2 — escape DATA lines starting with '.'.
-// FIX [M2b]: RFC 5321 §2.3.8 — normalize bare \n to \r\n in the same pass.
+// FIX [SmtpDotStuff]:  RFC 5321 §4.5.2     — escape DATA lines starting with '.'.
+// FIX [M2b]:           RFC 5321 §2.3.8     — normalize bare \n / \r to CRLF.
+// FIX [SmtpLineWrap]:  RFC 5321 §4.5.3.1.6 — fold lines so no line exceeds 1000 octets incl CRLF.
+// All three are applied in a single forward pass; the output is always NUL-terminated and the
+// qEnd guards make overflow of szOut impossible (worst case the body is truncated at the buffer).
 static void smtpDotStuff(char *szOut, size_t outLen, const char *szIn)
 {
+	const size_t SOFT_WRAP = 900;   // beyond this column, fold at the next space (word boundary)
+	const size_t HARD_WRAP = 990;   // force a fold here for an over-long token (< 998 content limit)
 	const char *p = szIn;
 	char *q = szOut, *qEnd = szOut + outLen - 1;
-	if (*p == '.' && q < qEnd) *q++ = '.';
+	size_t lineLen = 0;             // octets already on the current output line (excl CRLF)
+	int    atLineStart = 1;         // next content char begins a line → dot-stuff a leading '.'
+
+	#define DS_EMIT_CRLF() do { if (q + 1 < qEnd) { *q++ = '\r'; *q++ = '\n'; lineLen = 0; atLineStart = 1; } } while(0)
+
 	while (*p && q < qEnd) {
-		// insert \r before bare \n (not already preceded by \r)
-		if (*p == '\n' && (p == szIn || *(p - 1) != '\r') && q + 1 < qEnd)
-			*q++ = '\r';
-		*q++ = *p;
-		// dot-stuff: escape leading dot on the line that follows a newline
-		if (*p == '\n' && *(p + 1) == '.' && q < qEnd) *q++ = '.';
+		char c = *p;
+
+		if (c == '\r') { p++; continue; }              // drop CR; CRLF is re-emitted per \n below
+		if (c == '\n') { DS_EMIT_CRLF(); p++; continue; }
+
+		// Prefer to fold at a space once the line is long enough (the space becomes the break).
+		if (c == ' ' && lineLen >= SOFT_WRAP) { DS_EMIT_CRLF(); p++; continue; }
+		// Otherwise force a fold before a single over-long token crosses the limit.
+		if (lineLen >= HARD_WRAP) DS_EMIT_CRLF();
+
+		// Dot-stuff a leading '.' at the start of any line (incl. a line created by folding).
+		if (atLineStart && c == '.' && q < qEnd) { *q++ = '.'; lineLen++; }
+		atLineStart = 0;
+
+		if (q < qEnd) { *q++ = c; lineLen++; }
 		p++;
 	}
 	*q = '\0';
+	#undef DS_EMIT_CRLF
 }
 
 // SMTP: mail
-static int smtpMail(int sfd, char *data)
-{	
+static int smtpMail(int sfd, char *data, const char *szTo)
+{
 	char szBuffer[128], *pTmp ;
 	char szSubject[MAX_MAIL_LEN + 32]="";
 	char szBody[MAX_MAIL_LEN + 32]="";
 	extern int nSMTPemails;
 
-	if (Profile.bMailSplitConfig)
+	// FIX [SmtpSplitDetect]: split-format is self-describing via the separator byte. Detect it
+	// from the message itself instead of reading the main-thread global Profile.bMailSplitConfig,
+	// so the worker thread neither races that global nor needs it toggled per send. Every split/
+	// alert message contains MAIL_SPLIT_SEP; legacy messages never do.
+	const char *sep = strchr(data, MAIL_SPLIT_SEP) ;
+	if (sep)
 	{
-		// FIX [MailSplit]: data = "<subject>\x1f<body>" — split on the first separator.
-		const char *sep = strchr(data, MAIL_SPLIT_SEP) ;
-		if (sep)
-		{
-			size_t sl = (size_t)(sep - data) ;
-			if (sl > sizeof(szSubject) - 1) sl = sizeof(szSubject) - 1 ;
-			memcpy(szSubject, data, sl) ;
-			szSubject[sl] = '\0' ;
-			_snprintf(szBody, sizeof(szBody) - 1, "%s", sep + 1) ;
-			szBody[sizeof(szBody) - 1] = '\0' ;	// _snprintf does not guarantee NUL on exact fill
-		}
-		else
-		{
-			_snprintf(szBody, sizeof(szBody) - 1, "%s", data) ;	// no separator: treat all as body
-			szBody[sizeof(szBody) - 1] = '\0' ;
-		}
+		// data = "<subject>\x1f<body>"
+		size_t sl = (size_t)(sep - data) ;
+		if (sl > sizeof(szSubject) - 1) sl = sizeof(szSubject) - 1 ;
+		memcpy(szSubject, data, sl) ;
+		szSubject[sl] = '\0' ;
+		_snprintf(szBody, sizeof(szBody) - 1, "%s", sep + 1) ;
+		szBody[sizeof(szBody) - 1] = '\0' ;	// _snprintf does not guarantee NUL on exact fill
 	}
 	else
 	{
+		// FIX [SmtpLegacyOverflow]: bounded append. The old code used strcat()/unchecked
+		// szX[strlen(szX)] writes with NO bounds check, relying on 'data' being shorter than the
+		// buffer. A near-max legacy message whose bytes hit the separator branch (each " - "
+		// expands 3:1 into the Subject) could overrun szSubject/szBody on the stack. Track the
+		// write positions and clamp to the buffer; observable output is otherwise unchanged.
+		size_t subjPos = 0, bodyPos = 0;
+		const size_t subjCap = sizeof(szSubject) - 1;
+		const size_t bodyCap = sizeof(szBody)    - 1;
 		for (int i=0; data[i]!=0; i++)
 		{
 			if (data[i] == '�')
 			{
-				strcat(szSubject, " - ");
-				strcat(szBody, "\n");
+				if (subjPos + 3 <= subjCap) { szSubject[subjPos++]=' '; szSubject[subjPos++]='-'; szSubject[subjPos++]=' '; }
+				if (bodyPos + 1 <= bodyCap) { szBody[bodyPos++]='\n'; }
 			}
 			else
 			{
-				szSubject[strlen(szSubject)] = data[i];
-				szBody[strlen(szBody)] = data[i];
+				if (subjPos < subjCap) szSubject[subjPos++] = data[i];
+				if (bodyPos < bodyCap) szBody[bodyPos++]    = data[i];
 			}
 		}
+		szSubject[subjPos] = '\0';
+		szBody[bodyPos]    = '\0';
 	}
 
-	if (Profile.bMailSplitConfig || (mail.options & MAIL_OPTION_SUBJECT))
+	if (sep || (mail.options & MAIL_OPTION_SUBJECT))
 	{
 		if (szSubject[0])
 		{
@@ -1183,7 +1308,13 @@ static int smtpMail(int sfd, char *data)
 			sockPuts(sfd,buf);
 
 			memset(buf,0,sizeof(buf));
-			strcpy(szBuffer, szSmtpCharSets[((Profile.nMailOptions & 0x1F0000) >> 16) -1]) ;
+			// FIX [SmtpCharsetIdx]: clamp the charset index. The INI "Options" default carries no
+			// charset bits (>>16 == 0 → index -1), which read szSmtpCharSets[-1] and strcpy'd a wild
+			// pointer. Reachable whenever a Subject is emitted (every alert) before SMTP settings are
+			// saved via the dialog (which would force a valid charset). Default to us-ascii.
+			int csIdx = ((Profile.nMailOptions & 0x1F0000) >> 16) - 1 ;
+			if (csIdx < 0 || csIdx >= MAX_SMTP_CHARSETS) csIdx = 0 ;
+			strcpy(szBuffer, szSmtpCharSets[csIdx]) ;
 			pTmp = strchr(szBuffer, ' ') ;
 			if(pTmp != NULL) {
 				*pTmp = '\0' ;
@@ -1194,18 +1325,25 @@ static int smtpMail(int sfd, char *data)
 	}
 	
 	// headers
-	if(mail.from)
+	// FIX [SmtpHdrLocal]: From: header from a local copy — worker must not mutate Profile.szMailFrom.
+	if(mail.from && mail.from[0])
 	{
-		strip_crlf(mail.from);
+		char szFromHdr[MAIL_TEXT_LEN] ;
+		_snprintf_s(szFromHdr, sizeof(szFromHdr), _TRUNCATE, "%s", mail.from) ;
+		strip_crlf(szFromHdr);
 		memset(buf,0,sizeof(buf));
-		(void) _snprintf(buf,sizeof(buf)-1,"From: %s\r\n",mail.from);
+		(void) _snprintf(buf,sizeof(buf)-1,"From: %s\r\n",szFromHdr);
 		sockPuts(sfd,buf);
 	}
-	if(mail.to)
+	// FIX [RxQualAlert]: To: header uses the per-message recipient (matches the envelope RCPT TO).
+	// A local copy is stripped so the global Profile.szMailTo is never mutated by the worker.
+	if(szTo && szTo[0])
 	{
-		strip_crlf(mail.to);
+		char szToHdr[MAIL_TO_LEN] ;
+		_snprintf_s(szToHdr, sizeof(szToHdr), _TRUNCATE, "%s", szTo) ;
+		strip_crlf(szToHdr);
 		memset(buf,0,sizeof(buf));
-		(void) _snprintf(buf,sizeof(buf)-1,"To: %s\r\n",mail.to);
+		(void) _snprintf(buf,sizeof(buf)-1,"To: %s\r\n",szToHdr);
 		sockPuts(sfd,buf);
 	}
 
@@ -1230,7 +1368,7 @@ static int smtpMail(int sfd, char *data)
 	
 	sockPuts(sfd,"\r\n");
 	
-	if ((Profile.bMailSplitConfig || (mail.options & MAIL_OPTION_MSG)) && szBody[0])
+	if ((sep || (mail.options & MAIL_OPTION_MSG)) && szBody[0])
 	{
 		// FIX [SmtpDotStuff]: escape body lines starting with '.' per RFC 5321
 		char szBodyDs[2 * MAX_MAIL_LEN + 64];
@@ -1244,6 +1382,23 @@ static int smtpMail(int sfd, char *data)
 
 
 // returns 0 on failure or empty queue, 1 on success
+// FIX [SmtpRequeue]: keep a failed message queued and retry it on later worker passes instead of
+// dropping it on the first transient failure. Capped so a permanently-rejected message (e.g. 5xx
+// bad recipient / wrong credentials) can't wedge the queue forever. (Greylisting servers issuing
+// a sustained 4xx may still hit the cap; 4xx/5xx-aware backoff is a possible future refinement.)
+#define SMTP_MAX_SEND_RETRIES  5
+static int nMailRetryCount = 0 ;
+
+// FIX [SmtpRequeue]: advance the consumer index past the head slot (message consumed — either sent
+// or permanently dropped) and clear its recipient override so it cannot leak into a later message
+// that reuses the slot. Only the worker thread calls this, preserving the lock-free SPSC ring.
+static void MailCommitSlot(int nSlot)
+{
+	szMailToOverride[nSlot][0] = '\0' ;
+	nBufferdMailEnd++ ;
+	if(nBufferdMailEnd >= MAX_MAIL) nBufferdMailEnd = 0 ;
+}
+
 int xSendMail(THEMAIL *pMail)
 {
 	int 	rc ;
@@ -1255,15 +1410,28 @@ int xSendMail(THEMAIL *pMail)
 		return(0) ;
 	}
 
-	pTmp = szMailBuffer[nBufferdMailEnd] ;
-	nBufferdMailEnd++ ;
-	if(nBufferdMailEnd >= MAX_MAIL) {
-		nBufferdMailEnd = 0 ;
+	// FIX [SmtpRequeue]: peek the head slot but do NOT advance nBufferdMailEnd (nor consume the
+	// recipient override) until the message is actually sent or finally dropped — a transient
+	// failure then keeps it queued for a later retry instead of losing it on the first hiccup.
+	// The worker is the only mutator of nBufferdMailEnd, so the lock-free SPSC ring stays valid.
+	int nSlot = nBufferdMailEnd ;
+	pTmp = szMailBuffer[nSlot] ;
+
+	// FIX [RxQualAlert]/[SmtpThreadRace]: snapshot the effective recipient into a local. The
+	// recipient travels with the message; the worker no longer mutates the shared globals
+	// mail.to / Profile.bMailSplitConfig. Split-format is detected from the body in smtpMail().
+	char szRcpt[MAIL_TO_LEN] ;
+	{
+		const char *pSrcTo = (szMailToOverride[nSlot][0] != '\0')
+		                   ? szMailToOverride[nSlot]
+		                   : (mail.to ? mail.to : "") ;
+		_snprintf_s(szRcpt, sizeof(szRcpt), _TRUNCATE, "%s", pSrcTo) ;
 	}
 
 	if (pMail->from == (char *) NULL) {
 		OUTPUTDEBUGMSG((("No From address specified")));
 		AddResponse("xSendMail(): No From address specified\n");
+		MailCommitSlot(nSlot) ;   // FIX [SmtpRequeue]: permanent config error — drop, don't hold/loop
 		return (0);
 	}
 	if (pMail->smtp_server == (char *) NULL) {
@@ -1285,29 +1453,39 @@ int xSendMail(THEMAIL *pMail)
 	// first transaction attempt; the second attempt reconnects fresh and succeeds.
 	for(int attempt = 0; attempt < 2; attempt++)
 	{
+		// FIX [SmtpThreadRace]: stop direct als de worker wordt afgesloten — voorkomt dat een
+		// door shutdown() afgebroken verzending alsnog een verse reconnect probeert.
+		if(!keepbusy) return(0);
 		if(g_persistSocket == INVALID_SOCKET)
 		{
 			g_persistSocket = smtpConnect(pMail->smtp_server, pMail->smtp_port);
 			if(g_persistSocket == INVALID_SOCKET)
-				return(0);
+				return(0);   // FIX [SmtpRequeue]: server unreachable — hold the message (uncounted), retry next pass
 			nSMTPsessions++;
 			if(smtpHelo(g_persistSocket) || smtpLogin(g_persistSocket))
 			{
+				// HELO/AUTH failure: drop the connection and let the attempt loop / retry
+				// counter below decide (could be transient greylisting or a bad credential).
 				smtpDisconnect(g_persistSocket);
 				g_persistSocket = INVALID_SOCKET;
-				return(0);
+				continue;
 			}
 		}
 
 		rc = 0;
-		if(smtpMailFrom(g_persistSocket))        rc = -1;
-		else if(smtpRcptTo(g_persistSocket))     rc = -1;
-		else if(smtpData(g_persistSocket))       rc = -1;
-		else if(smtpMail(g_persistSocket, pTmp)) rc = -1;
-		else if(smtpEom(g_persistSocket))        rc = -1;
+		if(smtpMailFrom(g_persistSocket))               rc = -1;
+		else if(smtpRcptTo(g_persistSocket, szRcpt))    rc = -1;
+		else if(smtpData(g_persistSocket))              rc = -1;
+		else if(smtpMail(g_persistSocket, pTmp, szRcpt)) rc = -1;
+		else if(smtpEom(g_persistSocket))               rc = -1;
 
 		if(rc == 0)
+		{
+			// FIX [SmtpRequeue]: confirmed sent — commit the slot and reset the retry counter.
+			MailCommitSlot(nSlot) ;
+			nMailRetryCount = 0 ;
 			return(1);
+		}
 
 		smtpDisconnect(g_persistSocket);
 		g_persistSocket = INVALID_SOCKET;
@@ -1315,10 +1493,64 @@ int xSendMail(THEMAIL *pMail)
 			AddResponse("SMTP: send failed on existing connection — retrying with fresh connection") ;
 	}
 
-	AddResponse("SMTP: send failed after retry — message dropped") ;
+	// FIX [SmtpRequeue]: both attempts on this pass failed after reaching a live server. Keep the
+	// message queued and retry it on later worker passes, up to SMTP_MAX_SEND_RETRIES, before
+	// finally dropping it — so a transient outage no longer loses mail, while a permanently bad
+	// message still can't wedge the queue forever. (Pure connect failures above are held, not
+	// counted, so a server that is merely down does not burn the retry budget.)
+	if(++nMailRetryCount < SMTP_MAX_SEND_RETRIES)
+	{
+		AddResponse("SMTP: send failed — will retry message on next pass") ;
+		return(0) ;   // slot NOT advanced — same message retried
+	}
+	AddResponse("SMTP: send failed after retries — message dropped") ;
+	MailCommitSlot(nSlot) ;
+	nMailRetryCount = 0 ;
 	return(0);
 }
 
+
+// FIX [RxQualAlert]: queue a pre-formatted alert mail with an explicit recipient.
+// Bypasses SendMail()'s option/field logic — content arrives ready-to-send.
+// Content must be in split-config format: "Subject text\x1fBody text" (smtpMail() detects the
+// separator and sends Subject + Body accordingly; no global config is consulted).
+// PRODUCER INVARIANT: like SendMail(), this writes the lock-free SPSC queue from the MAIN
+// thread only (both reached via WM_TIMER). The worker thread is the sole consumer. If a
+// producer ever moves off the main thread, the queue needs real synchronisation.
+int QueueAlertMail(const char *szTo, const char *szSubject, const char *szBody)
+{
+	if (!MailThread || !hMailEvent) {
+		// FIX [RxQualAlert]: SMTP not enabled/started → no worker to send the alert. Don't
+		// silently vanish; leave a trace so a missing alert is diagnosable.
+		OUTPUTDEBUGMSG((("QueueAlertMail() dropped — mail worker not running (SMTP disabled?)")));
+		return 0 ;
+	}
+	if (!szTo)      szTo = "" ;
+	if (!szSubject) szSubject = "" ;
+	if (!szBody)    szBody = "" ;
+
+	// FIX [SmtpQueueFull]: drop (and count) instead of overrunning the ring and wiping the backlog.
+	if (MailQueueFull()) {
+		nSMTPdropped++ ;
+		OUTPUTDEBUGMSG((("QueueAlertMail() dropped — mail queue full (total dropped=%u)"), nSMTPdropped)) ;
+		AddResponse("SMTP: queue full — alert mail dropped") ;
+		return 0 ;
+	}
+
+	char szBuf[MAX_MAIL_LEN] ;
+	_snprintf_s(szBuf, sizeof(szBuf), _TRUNCATE, "%s%c%s", szSubject, MAIL_SPLIT_SEP, szBody) ;
+
+	strncpy(szMailBuffer[nBufferdMailStart],    szBuf, MAX_MAIL_LEN - 1) ;
+	szMailBuffer[nBufferdMailStart][MAX_MAIL_LEN - 1] = '\0' ;
+	strncpy(szMailToOverride[nBufferdMailStart], szTo, MAIL_TO_LEN - 1) ;
+	szMailToOverride[nBufferdMailStart][MAIL_TO_LEN - 1] = '\0' ;
+
+	nBufferdMailStart++ ;
+	if (nBufferdMailStart >= MAX_MAIL) nBufferdMailStart = 0 ;
+
+	SetEvent(hMailEvent) ;
+	return 1 ;
+}
 
 DWORD WINAPI MailThreadFunc(LPVOID lpData)
 {
@@ -1342,7 +1574,8 @@ DWORD WINAPI MailThreadFunc(LPVOID lpData)
 		} else {
 			dwLastActivityMs = GetTickCount64() ;
 			if(!xSendMail((THEMAIL *) lpData)) {
-				Sleep(1000) ;   // send failed — brief pause before retry
+				// FIX [SmtpThreadRace]: niet pauzeren als we juist aan het stoppen zijn
+				if(keepbusy) Sleep(1000) ;   // send failed — brief pause before retry
 			}
 		}
 	}
@@ -1368,6 +1601,8 @@ void StartMail(int nOptions)
 	{
 		if(MailThread != 0)
 		{
+			// FIX [SmtpThreadRace]: één langlevende worker — bij herconfiguratie niet
+			// stoppen/herstarten maar laten draaien; MailInit werkte de config al bij.
 			OUTPUTDEBUGMSG((("StartMail() MailThread != 0  Mail is already Started!")));
 			return;
 		}
@@ -1383,9 +1618,21 @@ void StartMail(int nOptions)
 			OUTPUTDEBUGMSG((("StartMail() MailThread == 0  Mail is already Stopped!")));
 			return;
 		}
+		// FIX [SmtpThreadRace]: stop de worker BETROUWBAAR — nooit verlaten.
+		// De oude code joinde 3 s en deed daarna onvoorwaardelijk CloseHandle + MailThread=0;
+		// zat de worker langer in een blokkerende TLS-read/connect, dan werd hij verlaten en
+		// startte de volgende MailInit een TWEEDE worker. Beide deelden m_ssl/m_ctx/
+		// g_persistSocket/mail → heap corruption (0xc0000374) bij snel achter elkaar
+		// herconfigureren (snel op Test klikken, of de RX-Quality-alert die 2x MailInit doet).
+		// Dit pad draait nu alleen nog bij uitschakelen/afsluiten (niet in de hot path).
 		keepbusy = FALSE ;
 		if(hMailEvent) SetEvent(hMailEvent) ;   // wake thread so it sees keepbusy==FALSE
-		WaitForSingleObject(MailThread, 3000) ; // wait for clean exit (smtpQuit + TLS can be slow)
+		// Deblokkeer een lopende SSL-select/read direct: shutdown() laat de select op de
+		// socket terugkeren zodat de worker promptt unwindt (zonder de fd al te sluiten;
+		// de worker doet zelf de closesocket in zijn cleanup). connect() in opbouw heeft nog
+		// geen geldige g_persistSocket en valt terug op de OS-connect-timeout.
+		if(g_persistSocket != INVALID_SOCKET) shutdown(g_persistSocket, 2) ;  // 2 = SD_BOTH (winsock 1.1 kent de macro niet in deze TU)
+		WaitForSingleObject(MailThread, INFINITE) ; // join volledig — gegarandeerd één worker
 		CloseHandle(MailThread);
 		MailThread = 0;
 		if(hMailEvent) { CloseHandle(hMailEvent) ; hMailEvent = NULL ; }
@@ -1429,6 +1676,12 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 	int	 len = 0 ;
 	char szBuffer[MAX_STR_LEN + 256] = { 0 } ;
 //	char szSubject[1024]="";
+
+	// FIX [SmtpNullArg]: coalesce NULL field pointers to "" — the field formatters below feed
+	// these straight into _snprintf_s("%s", ...), and a NULL there trips the CRT invalid-parameter
+	// handler. The settings-OK handler calls SendMail() with all-NULL fields as a no-op flush.
+	if(!sz1) sz1 = "" ; if(!sz2) sz2 = "" ; if(!sz3) sz3 = "" ; if(!sz4) sz4 = "" ;
+	if(!sz5) sz5 = "" ; if(!sz6) sz6 = "" ; if(!sz7) sz7 = "" ; if(!szLabel) szLabel = "" ;
 
 //	OUTPUTDEBUGMSG((("SendMail()")));
 	mail.hResponse = hResponse ;
@@ -1496,38 +1749,19 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 	else
 	{
 		// legacy behaviour: one concatenated blob, routed to Subject/Body via the SENDIN bits
-		if(mail.options & MAIL_OPTION_ADDRESS)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz1) ;
-		}
-		if(mail.options & MAIL_OPTION_TIME)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz2) ;
-		}
-		if(mail.options & MAIL_OPTION_DATE)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz3) ;
-		}
-		if(mail.options & MAIL_OPTION_MODE)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz4) ;
-		}
-		if(mail.options & MAIL_OPTION_TYPE)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz5) ;
-		}
-		if(mail.options & MAIL_OPTION_BITRATE)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz6) ;
-		}
-		if(mail.options & MAIL_OPTION_MESSAGE)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "%s ", sz7) ;
-		}
-		if(mail.options & MAIL_OPTION_LABEL)
-		{
-			len += _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, "- %s ", szLabel) ;
-		}
+		// FIX [L4]: _snprintf_s returns -1 on truncation; adding that straight into len would move
+		// the write cursor backward and overrun on the next field. Guard with a local accumulator
+		// (same pattern as AppendMailFields). Output is otherwise unchanged.
+		#define LEGACY_APPEND(fmt, arg) do { int _n = _snprintf_s(szBuffer + len, sizeof(szBuffer) - len, _TRUNCATE, fmt, arg); if (_n > 0) len += _n; } while(0)
+		if(mail.options & MAIL_OPTION_ADDRESS) LEGACY_APPEND("%s ", sz1) ;
+		if(mail.options & MAIL_OPTION_TIME)    LEGACY_APPEND("%s ", sz2) ;
+		if(mail.options & MAIL_OPTION_DATE)    LEGACY_APPEND("%s ", sz3) ;
+		if(mail.options & MAIL_OPTION_MODE)    LEGACY_APPEND("%s ", sz4) ;
+		if(mail.options & MAIL_OPTION_TYPE)    LEGACY_APPEND("%s ", sz5) ;
+		if(mail.options & MAIL_OPTION_BITRATE) LEGACY_APPEND("%s ", sz6) ;
+		if(mail.options & MAIL_OPTION_MESSAGE) LEGACY_APPEND("%s ", sz7) ;
+		if(mail.options & MAIL_OPTION_LABEL)   LEGACY_APPEND("- %s ", szLabel) ;
+		#undef LEGACY_APPEND
 	}
 
 	if(!mail.smtp_port)
@@ -1541,9 +1775,19 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 	nMaxLen = 0 ;
 	if(szBuffer[0])
 	{
+		// FIX [SmtpQueueFull]: drop (and count) instead of overrunning the ring and wiping the backlog.
+		if(MailQueueFull())
+		{
+			nSMTPdropped++ ;
+			nSMTPerrors++ ;
+			OUTPUTDEBUGMSG((("SendMail() dropped — mail queue full (total dropped=%u)"), nSMTPdropped)) ;
+			AddResponse("SMTP: queue full — message dropped") ;
+			return(0) ;
+		}
 		OUTPUTDEBUGMSG((("SendMail() Send : >%s<\n"), szBuffer));
 		strncpy(szMailBuffer[nBufferdMailStart], szBuffer, MAX_MAIL_LEN - 1) ;
 		szMailBuffer[nBufferdMailStart][MAX_MAIL_LEN - 1] = '\0' ;
+		szMailToOverride[nBufferdMailStart][0] = '\0' ;   // FIX [RxQualAlert]: normal mail uses mail.to, no override
 		nBufferdMailStart++ ;
 
 		if(nBufferdMailStart >= MAX_MAIL)
@@ -1646,9 +1890,12 @@ void LogSmtpError(int errCode)
 	const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
 	if (!root || !root[0]) return;
 
-	_snprintf(szLog, sizeof(szLog) - 1, "%s\\pdw_smtp_error.log", root);
+	SYSTEMTIME st; GetLocalTime(&st);
+	_snprintf(szLog, sizeof(szLog) - 1, "%s\\%02d%02d%02d_mail.log",
+			  root, st.wYear % 100, st.wMonth, st.wDay);
 	szLog[sizeof(szLog) - 1] = '\0';
 
+	RotateLogIfLarge(szLog);   // FIX [LogRotate]
 	FILE *f = fopen(szLog, "a");
 	if (f) {
 		SYSTEMTIME st;
@@ -1667,8 +1914,15 @@ const char *GetLastSmtpError(void)
 
 int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *szMailTo, char *szMailUser, char *szMailPassword, int iMailPort, int nOptions)
 {
-	StartMail(0) ;              // stop existing thread cleanly before reconfiguring (idempotent if not running)
-	memset(&mail, 0, sizeof(mail)) ;
+	// FIX [SmtpThreadRace]: GEEN teardown+restart van de worker meer per herconfiguratie.
+	// Bij snel herconfigureren (snel klikken op Test, of de RX-Quality-alert die per melding
+	// 2x MailInit aanroept) verliet de oude StartMail(0) een nog-bezige worker en startte er
+	// een tweede; beide deelden m_ssl/m_ctx/g_persistSocket/mail → heap corruption (0xc0000374).
+	// Nu leeft er precies één worker: MailInit werkt alleen de config bij, StartMail() start de
+	// worker eenmalig als mail aanstaat en stopt hem (betrouwbaar) alleen als mail uitgaat.
+	// De velden wijzen naar stabiele Profile-buffers; losse pointer/int-toewijzingen zijn
+	// atomair op de doelplatformen, dus geen memset (die zou de struct wissen terwijl de
+	// worker hem leest).
 	mail.from = szMailFrom ;
 	mail.to = szMailTo ;
 	mail.cc = NULL ;
@@ -1679,6 +1933,6 @@ int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *s
 	mail.password = szMailPassword ;
 	mail.smtp_port = iMailPort ;
 	mail.options = nOptions ;
-	StartMail(nOptions) ;
+	StartMail(nOptions) ;       // start eenmalig (mail aan) of stop betrouwbaar (mail uit)
 	return(0) ;
 }
