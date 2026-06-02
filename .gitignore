@@ -29,3 +29,10 @@ obj/
 *.app
 *.aps
 SMTP_AUDIT_REPORT.md
+
+# PDW Live web companion (separate project, not part of the build)
+pdw_web/
+
+# RC editor backup files
+*.backup-ascii
+*.rc.bak

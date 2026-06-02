@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
 #define PDW_VERSION_MINOR  5
-#define PDW_VERSION_PATCH  1
-#define PDW_VERSION_STR    "3.5.1"
+#define PDW_VERSION_PATCH  6
+#define PDW_VERSION_STR    "3.5.6"
 
 #define IDC_STATIC             -1
 
@@ -518,6 +518,7 @@
 #define IDC_MQTT_FIELD_BITRATE    1361
 #define IDC_MQTT_LABEL_PERCAP     1362   // label - per-capcode mode (bit 7)
 #define IDC_MQTT_LABEL_ARRAY      1363   // label - subscribers array mode (bit 8)
+#define IDC_MQTT_TEST             1364   // FIX [ConnTest]: "Test connection" button
 
 #define DISPLAYOPTIONSDLGBOX      133
 #define IDM_DISPLAYOPTIONS        236
@@ -539,3 +540,34 @@
 #define IDC_TS_WIRELOG            1388
 #define IDC_TS_CLIENTS            1389
 #define IDC_TS_ACTIVITY           1390
+
+// RX Quality Alert dialog (FIX [RxQualAlert])
+#define RXQUAL_ALERT_DLGBOX       135
+#define IDM_RXQUAL_ALERT          238
+#define IDC_RXQA_EN               1400
+#define IDC_RXQA_MAILTO           1401
+#define IDC_RXQA_THR              1402
+#define IDC_RXQA_REC              1403
+#define IDC_RXQA_MIN              1404
+#define IDC_RXQA_COOL             1405
+#define IDC_RXQA_WARN             1406
+
+// FIX [MySQLFeed]: MySQL output feed dialog (utils/mysql.cpp)
+#define MYSQL_DLGBOX              136
+#define IDM_MYSQL                 239
+#define IDC_MYSQL_ENABLED         1410
+#define IDC_MYSQL_HOST            1411
+#define IDC_MYSQL_PORT            1412
+#define IDC_MYSQL_USER            1413
+#define IDC_MYSQL_PASSWORD        1414
+#define IDC_MYSQL_DATABASE        1415
+#define IDC_MYSQL_TABLE           1416
+#define IDC_MYSQL_FIELD_MODE      1417
+#define IDC_MYSQL_FIELD_TYPE      1418
+#define IDC_MYSQL_FIELD_BITRATE   1419
+#define IDC_MYSQL_FIELD_MESSAGE   1420
+#define IDC_MYSQL_FIELD_LABEL     1421
+#define IDC_MYSQL_STATUS          1422
+#define IDC_MYSQL_LOG             1423
+#define IDC_MYSQL_SCHEMA          1424
+#define IDC_MYSQL_TEST            1425   // FIX [ConnTest]: "Test connection" button
