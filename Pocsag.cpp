@@ -115,6 +115,12 @@ void POCSAG::frame(int bit)
 
 			iWordNumber = 0;
 			cc = 0;
+
+			// FIX [RxqPocsagSync]: credit clean sync bits to the telnet RXQ track,
+			// mirrors p2kflexDecoder Pocsag.cpp:105 (updateRxQualityFromEcd). Without
+			// this the denominator (totalBits) only grows on message words, so each
+			// penalty weighs far heavier than in p2kflexDecoder. err = nh*dataBits.
+			Rxq_OnEcd(nh * RXQ_POCSAG.dataBits, &RXQ_POCSAG, 0);
 		}
 		else if (nh == 32)	// 32 errors, so must be inverted
 		{
@@ -124,6 +130,9 @@ void POCSAG::frame(int bit)
 
 			iWordNumber = 0;
 			cc = 0;
+
+			// FIX [RxqPocsagSync]: post-inversion the sync is clean -> credit as 0 err.
+			Rxq_OnEcd(0, &RXQ_POCSAG, 0);
 		}
 	}
 	else	// format, process 16 by 32 bit paging block
@@ -149,6 +158,12 @@ void POCSAG::frame(int bit)
 					show_message();
 				}
 				reset();	// IDLE means message is terminated
+
+				// FIX [RxqPocsagIdle]: credit clean idle bits to the telnet RXQ track,
+				// mirrors p2kflexDecoder Pocsag.cpp:129. Idle words are frequent on a
+				// POCSAG channel; crediting them keeps quality() stable/high between
+				// messages exactly like p2kflexDecoder. err = nh*dataBits.
+				Rxq_OnEcd(nh * RXQ_POCSAG.dataBits, &RXQ_POCSAG, 0);
 			}
 			else	// dump one block through with word position relative to sync word
 			{		// (determines frame number which is the 3 lsb bits of POCSAG capcode).
@@ -252,7 +267,14 @@ void POCSAG::process_word(int fn2)
 		pocaddr += (long) ((fn2 >> 1) & 0x07);
 
 		// tag capcode as bad if uncorrectable error in address word
-		if (errl > 2) pocaddr ^= 0x400000l;
+		if (errl > 2)
+		{
+			pocaddr ^= 0x400000l;
+
+			// FIX [RxqPocsagAddr]: uncorrectable address word -> telnet RXQ penalty,
+			// mirrors p2kflexDecoder Pocsag.cpp:263 (RXQ_ApplyPenaltyBits(errl*100)).
+			Rxq_ApplyPenaltyBits((uint64_t)(errl * 100));
+		}
 
 		// get function number --- unfortunately doesn't seem to tell you
 		// whether message is alpha or numeric
@@ -289,6 +311,12 @@ void POCSAG::show_addr(bool bAlpha)
 		mode  = MODE_P512;
 		break;
 	}
+
+	// FIX [RxqPocsagCapcode]: the uncorrectable-RIC flag (bit 0x400000, set in
+	// process_word) is wiped by the mask below, so detect it FIRST and apply the
+	// telnet RXQ penalty here. Mirrors p2kflexDecoder Pocsag.cpp:283
+	// (RXQ_ApplyPenaltyBits(100)). Telnet RXQ only — display logic unchanged.
+	if (pocaddr > 0x3fffffl) Rxq_ApplyPenaltyBits(100);
 
 	pocaddr = pocaddr & 0x1fffffl;
 
@@ -534,8 +562,12 @@ void POCSAG::show_message()
 
 	if ((iType == TYPE_TONE_ONLY) || (iType & TYPE_NUMERIC))
 	{
-		if ((iType == TYPE_TONE_ONLY) && !Profile.showtone) return;
-		if ((iType & TYPE_NUMERIC) && !Profile.shownumeric) return;
+		// FIX [RxqPocsagTimeBased]: refresh the telnet RXQ EMA once per message on
+		// EVERY path, including PDW-specific filter rejections. p2kflexDecoder has no
+		// filtering and always reaches UpdateRxQualityTimeBased (Pocsag.cpp:328); if
+		// we return here without updating, the EMA freezes until the next shown msg.
+		if ((iType == TYPE_TONE_ONLY) && !Profile.showtone)    { Rxq_UpdateTimeBased(); return; }
+		if ((iType & TYPE_NUMERIC)    && !Profile.shownumeric) { Rxq_UpdateTimeBased(); return; }
 
 		show_addr(false);
 
@@ -548,6 +580,7 @@ void POCSAG::show_message()
 		{
 			display_show_str(&Pane1, "TONE ONLY");
 			ShowMessage();
+			Rxq_UpdateTimeBased();	// FIX [RxqPocsagTimeBased]: see note above
 			return;
 		}
 

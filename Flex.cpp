@@ -480,30 +480,43 @@ void FLEX::FlexTIME()
 //					OUTPUTDEBUGMSG((("frame[i]: Type == SSID/Local ID\xbbs (i8-i0)(512) & Coverage Zones (c4-c0)(32)\n")));		
 					break;
 				case 1:
-					frame[i] >>= 7;
+				{
+					// FIX [FlexTimeMutate]: werk op een LOKALE kopie i.p.v. frame[i] in-place te
+					// shiften. De in-place mutatie corrumpeerde de gedeelde frame[]-buffer (BIW-
+					// woorden werden 17-18 bits weggeschoven naar bv. 0x000005), waardoor de
+					// telnet-BIW-walk in showblock() daarna xsumchk-fouten zag en onterecht
+					// Rxq_ApplyPenaltyBits(100) vuurde -> RXQ-krater vlak na herstart. p2kflex
+					// gebruikt hier ook een lokale kopie. Datum/tijd-output is identiek.
+					long biw = frame[i];
+					biw >>= 7;
 					// FIX [FlexTIME-year]: BIW YEAR field is 5 bits (0..31). PDW originally
 					// used base year 1994 — wraps at 2026. Bumped to 2026 to match
 					// CS FlexDecoder / current Dutch FLEX network base (2026..2057 range).
-					recFlexTime.wYear = (frame[i] & 0x1F) + 2026;
-					frame[i] >>= 5;
-					recFlexTime.wDay = frame[i] & 0x1F;
-					frame[i] >>= 5;
-					recFlexTime.wMonth = (frame[i] & 0xF);
+					recFlexTime.wYear = (biw & 0x1F) + 2026;
+					biw >>= 5;
+					recFlexTime.wDay = biw & 0x1F;
+					biw >>= 5;
+					recFlexTime.wMonth = (biw & 0xF);
 					bDate = true;
 					FLEX_date=1;
-//					OUTPUTDEBUGMSG((("BIW DATE: %d-%d-%d\n"), recFlexTime.wDay, recFlexTime.wMonth, recFlexTime.wYear));		
+//					OUTPUTDEBUGMSG((("BIW DATE: %d-%d-%d\n"), recFlexTime.wDay, recFlexTime.wMonth, recFlexTime.wYear));
 					break;
+				}
 				case 2:
-					frame[i] >>= 7;
-					recFlexTime.wHour = frame[i] & 0x1F;
-					frame[i] >>= 5;
-					recFlexTime.wMinute = frame[i] & 0x3F;
-					frame[i] >>= 6;
+				{
+					// FIX [FlexTimeMutate]: lokale kopie, muteer frame[] niet (zie case 1).
+					long biw = frame[i];
+					biw >>= 7;
+					recFlexTime.wHour = biw & 0x1F;
+					biw >>= 5;
+					recFlexTime.wMinute = biw & 0x3F;
+					biw >>= 6;
 					recFlexTime.wSecond = seconds;
 					bTime = true;
 					FLEX_time=1;
 //					OUTPUTDEBUGMSG((("BIW TIME: %02d:%02d:%02d\n"), recFlexTime.wHour, recFlexTime.wMinute, recFlexTime.wSecond));
 					break;
+				}
 				case 5:
 //					OUTPUTDEBUGMSG((("frame[i]: Type == System Information (I9-I0. A3-A0) - related to NID roaming\n")));		
 					break;
@@ -1089,6 +1102,13 @@ void FLEX::showframe(int asa, int vsa)
 		// frame-info word — comparing groupcall framenumbers against 999
 		// would otherwise count phantom misses.
 		if (bCurrentFrameValid) Check4_MissedGroupcalls();
+
+		// FIX [RxqFrameGate]: recompute the EMA only on a VALID-BIW frame, matching
+		// p2kflexDecoder Flex.cpp:834 (the call lives INSIDE the valid branch). On a
+		// bad BIW we only drop the 400-bit penalty into the bucket; the next valid
+		// frame folds it into the EMA. Previously this ran on every frame, so PDW
+		// reacted one frame earlier (jumpier) than p2kflexDecoder on noisy headers.
+		Rxq_UpdateTimeBased();
 	}
 	else
 	{
@@ -1096,9 +1116,6 @@ void FLEX::showframe(int asa, int vsa)
 		// Flex.cpp:839 "RXQ_ApplyPenaltyBits(400)" in the else branch).
 		Rxq_ApplyPenaltyBits(400);
 	}
-
-	// p2kflex parity: EMA + trend update once per frame (Flex.cpp:834).
-	Rxq_UpdateTimeBased();
 } // Reset for new message.
 
 
@@ -1194,6 +1211,10 @@ void FLEX::showblock(int blknum)
 			{
 				if (xsumchk(frame[bi]) != 0)
 				{
+					// FIX [RxqDbg]: tijdelijke meting bewees de [FlexTimeMutate]-bug; uitgecommentarieerd.
+					// DebugLog("[BIWpen] %02d/%03d bi=%d biwCount=%d asa=%d vsa=%d f0=%06lX f1=%06lX f2=%06lX f3=%06lX",
+					//          DebugLogGetCycle(), iCurrentFrame, bi, biwCount, asa, vsa,
+					//          frame[0] & 0xFFFFFFl, frame[1] & 0xFFFFFFl, frame[2] & 0xFFFFFFl, frame[3] & 0xFFFFFFl);
 					Rxq_ApplyPenaltyBits(100);
 					bBiwBad = true;
 					break;
@@ -1545,10 +1566,23 @@ void frame_flex(char gin)
 
 				// p2kflex-compatible RXQ for the cycle-info word; mirrors
 				// p2kflexDecoder Flex.cpp:1035 + 1057.
-				if (cer >= 2) Rxq_ApplyPenaltyBits(200);
+				// FIX [RxqCerThreshold]: penalize ONLY on uncorrectable (cer>=3,
+				// ECD_UNCORRECTABLE), not on cer==2. cer==2 is a successfully BCH-
+				// corrected word; p2kflexDecoder ties RXQ_ApplyPenaltyBits(200) to its
+				// else-branch (cer>=ECD_UNCORRECTABLE). Penalizing cer==2 made PDW's
+				// telnet RXQ drop ~200 bits per cycle below p2kflexDecoder.
+				if (cer >= 3) Rxq_ApplyPenaltyBits(200);
 				Rxq_OnEcd((cer * cer) * RXQ_FLEX.dataBits * 10, &RXQ_FLEX, 0);
 
-				if (cer < 2)
+				// FIX [CycleInfoCer]: accept 2-error-corrected cycle-info words (cer<3)
+				// instead of only cer<2. The FLEX BCH(31,21) code is a t=2 corrector and
+				// the 32nd parity bit (ecd(), Misc.cpp:2842) confirms the correction, so
+				// cer==2 is a valid, spec-compliant decode. PDW already accepts cer==2 for
+				// all message/payload words (showblock Flex.cpp ~1141, POCSAG); this brings
+				// the cycle-info word in line and matches p2kflexDecoder (cer<ECD_UNCORRECTABLE).
+				// Effect: fewer 99/999 sentinels -> correct cycle/frame numbers on both the
+				// RS232 and audio/slicer input paths (shared decoder).
+				if (cer < 3)
 				{
 					for (ihd = 4; ihd<8; ihd++)
 					{

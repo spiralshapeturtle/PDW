@@ -7,9 +7,13 @@
 **
 ** Threading: all PDW decoder hooks run on the main thread (WaveIn
 ** callback path or RxThread → WM_TIMER → pdw_decode). The telnet worker
-** thread only READS the EMA in the TX_STOP emit path; on x86/x64 a
-** double load is atomic enough for monitoring purposes — a half-updated
-** integer value is impossible because doubles align naturally. No lock.
+** thread only READS the EMA in the TX_STOP emit path. NOTE: an 8-byte
+** double load/store is NOT guaranteed atomic on 32-bit x86, so a reader
+** can in theory observe a torn value. This is left unlocked deliberately:
+** the EMA is a best-effort monitoring number, a one-off wrong <RXQ:NN> is
+** harmless and self-corrects on the next update, and a lock on the hot
+** decode path is not worth it. (If exactness is ever required, store the
+** EMA as a fixed-point LONG and read/write it via the Interlocked* APIs.)
 */
 
 #ifndef STRICT
