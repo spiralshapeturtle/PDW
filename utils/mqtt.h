@@ -22,4 +22,10 @@ void MqttNotify(const char *capcode, const char *message, const char *label,
 void MqttFlushGroup(int groupbit);
 void MqttSetStatusWnd(HWND hWnd);
 
+// FIX [ConnTest]: synchronous connection test for the Setup dialog. Uses its OWN MQTTClient (never
+// touches the running worker's client/queue). Fills szMsg with a human-readable result either way.
+// Blocks up to ~5 s; call from a user-initiated action (the Test button) only. Returns TRUE on OK.
+BOOL MqttTestConnection(const char *broker, int port, const char *clientId,
+                        const char *user, const char *pass, char *szMsg, int msgLen);
+
 #endif /* PDW_MQTT_H */

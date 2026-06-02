@@ -136,6 +136,22 @@ static void PostStatus(int status, LPARAM lp)
 static CRITICAL_SECTION g_logCs;
 static BOOL g_logCsInit = FALSE;
 
+// FIX [LogRotate]: cap the webhook log by keeping one previous generation (.1) — a feed that keeps
+// failing logs every retry; without a cap that file grows without bound and can fill the disk on a
+// long-running install. Rotating at ~5 MB bounds total disk use to ~10 MB. Called under g_logCs.
+#define WEBHOOK_LOG_MAX_BYTES  (5 * 1024 * 1024)
+static void RotateLogIfLarge(const char *path)
+{
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return;
+    ULONGLONG sz = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+    if (sz < WEBHOOK_LOG_MAX_BYTES) return;
+    char bak[MAX_PATH];
+    _snprintf(bak, sizeof(bak) - 1, "%s.1", path);
+    bak[sizeof(bak) - 1] = '\0';
+    MoveFileExA(path, bak, MOVEFILE_REPLACE_EXISTING);
+}
+
 static void WriteLog(const char *fmt, ...)
 {
     if (!g_bLogToFile) return;
@@ -155,9 +171,12 @@ static void WriteLog(const char *fmt, ...)
 
     const char *logDir = (Profile.LogfilePath[0]) ? Profile.LogfilePath : (const char *)szPath;
     char szFile[MAX_PATH];
-    sprintf(szFile, "%s\\pdw_webhook.log", logDir);
+    _snprintf(szFile, sizeof(szFile) - 1, "%s\\%02d%02d%02d_webhook.log",
+              logDir, st.wYear % 100, st.wMonth, st.wDay);   // FIX [L2]: bounded path
+    szFile[sizeof(szFile) - 1] = '\0';
 
     EnterCriticalSection(&g_logCs);
+    RotateLogIfLarge(szFile);   // FIX [LogRotate]
     FILE *fp = fopen(szFile, "a");
     if (fp)
     {
@@ -451,6 +470,13 @@ static BOOL EnsureSession(void)
                              0);
     if (!g_hSession) return FALSE;
 
+    // FIX [ShutdownRace]: bound the WinHTTP timeouts. The library default leaves DNS resolution
+    // with NO timeout and connect/send/receive at 60/30/30 s, so a request to a dead host could
+    // block the worker (and therefore a clean shutdown/reconfigure join) for minutes. 10 s each
+    // keeps a stalled send bounded; the retry loop in DoSend also bails out early on stop.
+    // (resolve, connect, send, receive) in milliseconds.
+    WinHttpSetTimeouts(g_hSession, 10000, 10000, 10000, 10000);
+
     // Enable TLS 1.0 through 1.3 so self-hosted servers with older configs work.
     DWORD dwProto = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1
                   | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_1
@@ -593,6 +619,11 @@ static void DoSend(const WebhookJob *job)
     {
         if (attempt > 0)
         {
+            // FIX [ShutdownRace]: don't burn the retry back-off sleeps once a shutdown/reconfigure
+            // is requested, so the worker exits promptly and the INFINITE join returns quickly. The
+            // first attempt (attempt 0) still runs even with g_bRunning==FALSE, so the exit-flush of
+            // queued jobs in WorkerThreadProc still delivers each remaining message once.
+            if (!g_bRunning) return;
             PostStatus(WHS_RETRY, attempt);
             WriteLog("RETRY   %d/%d", attempt, MAX_RETRIES);
             Sleep(g_retryDelays[attempt - 1]);
@@ -747,7 +778,13 @@ void WebhookShutdown(void)
 
     if (g_hThread)
     {
-        WaitForSingleObject(g_hThread, 5000);
+        // FIX [ShutdownRace]: join to FULL completion before CloseHandle / (later) DeleteCriticalSection.
+        // The old 5 s timeout could return while the worker was still inside a WinHTTP request, after
+        // which CloseHandle + DeleteCriticalSection ran under a live thread (crash on exit) and a runtime
+        // reconfigure would start a SECOND worker on the same g_cs/g_queue. With the bounded WinHTTP
+        // timeouts above and the !g_bRunning early-out in DoSend, the worker now returns within ~30 s
+        // worst case, so INFINITE is safe and correct.
+        WaitForSingleObject(g_hThread, INFINITE);
         CloseHandle(g_hThread);
         g_hThread = NULL;
     }

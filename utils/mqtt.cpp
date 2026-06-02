@@ -161,6 +161,22 @@ static void PostStatus(int status, LPARAM lp)
 static CRITICAL_SECTION g_logCs;
 static BOOL g_logCsInit = FALSE;
 
+// FIX [LogRotate]: cap the MQTT log by keeping one previous generation (.1) — a feed that keeps
+// failing logs every retry; without a cap that file grows without bound and can fill the disk on a
+// long-running install. Rotating at ~5 MB bounds total disk use to ~10 MB. Called under g_logCs.
+#define MQTT_LOG_MAX_BYTES  (5 * 1024 * 1024)
+static void RotateLogIfLarge(const char *path)
+{
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return;
+    ULONGLONG sz = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+    if (sz < MQTT_LOG_MAX_BYTES) return;
+    char bak[MAX_PATH];
+    _snprintf(bak, sizeof(bak) - 1, "%s.1", path);
+    bak[sizeof(bak) - 1] = '\0';
+    MoveFileExA(path, bak, MOVEFILE_REPLACE_EXISTING);
+}
+
 static void WriteLog(const char *fmt, ...)
 {
     if (!g_bLogToFile || !g_logCsInit) return;
@@ -180,9 +196,12 @@ static void WriteLog(const char *fmt, ...)
 
     const char *logDir = (Profile.LogfilePath[0]) ? Profile.LogfilePath : (const char *)szPath;
     char szFile[MAX_PATH];
-    sprintf(szFile, "%s\\pdw_mqtt.log", logDir);
+    _snprintf(szFile, sizeof(szFile) - 1, "%s\\%02d%02d%02d_mqtt.log",
+              logDir, st.wYear % 100, st.wMonth, st.wDay);   // FIX [L2]: bounded path
+    szFile[sizeof(szFile) - 1] = '\0';
 
     EnterCriticalSection(&g_logCs);
+    RotateLogIfLarge(szFile);   // FIX [LogRotate]
     FILE *fp = fopen(szFile, "a");
     if (fp)
     {
@@ -683,7 +702,13 @@ void MqttShutdown(void)
 
     if (g_hThread)
     {
-        WaitForSingleObject(g_hThread, 5000);
+        // FIX [ShutdownRace]: join to FULL completion before CloseHandle / (later) DeleteCriticalSection.
+        // The old 5 s timeout returned while the worker could still be inside a Paho call, after which
+        // CloseHandle + DeleteCriticalSection ran under a live thread (crash on exit) — and on a runtime
+        // reconfigure MqttInit would start a SECOND worker sharing g_mqttClient/g_cs/g_queue. All Paho
+        // calls here are timeout-bounded (connectTimeout=5s, waitForCompletion=5s, disconnect=2s) plus a
+        // 200 ms event wait, so the worker always returns within ~12 s; INFINITE is safe and correct.
+        WaitForSingleObject(g_hThread, INFINITE);
         CloseHandle(g_hThread);
         g_hThread = NULL;
     }
@@ -832,4 +857,71 @@ void MqttSetStatusWnd(HWND hWnd)
     EnterCriticalSection(&g_cs);
     g_hStatusWnd = hWnd;
     LeaveCriticalSection(&g_cs);
+}
+
+// FIX [ConnTest]: one-shot connection test for the Setup dialog. Uses a LOCAL MQTTClient so it never
+// interferes with the running worker's g_mqttClient. Blocks up to ~5 s (connectTimeout).
+BOOL MqttTestConnection(const char *broker, int port, const char *clientId,
+                        const char *user, const char *pass, char *szMsg, int msgLen)
+{
+    if (!szMsg || msgLen < 1) return FALSE;
+    szMsg[0] = '\0';
+
+    if (!broker || !broker[0]) {
+        _snprintf(szMsg, msgLen - 1, "No broker host entered.");
+        szMsg[msgLen - 1] = '\0';
+        return FALSE;
+    }
+    if (port <= 0) port = 1883;
+
+    char szURI[320];
+    _snprintf(szURI, sizeof(szURI) - 1, "tcp://%s:%d", broker, port);
+    szURI[sizeof(szURI) - 1] = '\0';
+
+    char szId[80];
+    strncpy(szId, (clientId && clientId[0]) ? clientId : "PDW-test", sizeof(szId) - 1);
+    szId[sizeof(szId) - 1] = '\0';
+
+    MQTTClient cli = NULL;
+    int rc = MQTTClient_create(&cli, szURI, szId, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    if (rc != MQTTCLIENT_SUCCESS || !cli) {
+        _snprintf(szMsg, msgLen - 1, "Could not create MQTT client (rc=%d).", rc);
+        szMsg[msgLen - 1] = '\0';
+        if (cli) MQTTClient_destroy(&cli);
+        return FALSE;
+    }
+
+    MQTTClient_connectOptions opts = MQTTClient_connectOptions_initializer;
+    opts.keepAliveInterval = 20;
+    opts.cleansession      = 1;
+    opts.connectTimeout    = 5;
+    if (user && user[0]) {
+        opts.username = (char *)user;
+        opts.password = (char *)pass;
+    }
+
+    rc = MQTTClient_connect(cli, &opts);
+    if (rc == MQTTCLIENT_SUCCESS) {
+        MQTTClient_disconnect(cli, 1000);
+        MQTTClient_destroy(&cli);
+        _snprintf(szMsg, msgLen - 1, "Success!\n\nConnected to MQTT broker %s:%d.", broker, port);
+        szMsg[msgLen - 1] = '\0';
+        return TRUE;
+    }
+
+    MQTTClient_destroy(&cli);
+
+    // Map the common Paho / MQTT CONNACK return codes to friendly text.
+    const char *hint;
+    switch (rc) {
+    case 1:  hint = "broker refused the protocol version";            break;
+    case 2:  hint = "client ID rejected by the broker";               break;
+    case 3:  hint = "broker unavailable";                             break;
+    case 4:  hint = "bad username or password";                       break;
+    case 5:  hint = "not authorized (check username/password)";       break;
+    default: hint = "connection failed (broker down, wrong host/port, or firewall)"; break;
+    }
+    _snprintf(szMsg, msgLen - 1, "Could not connect to %s:%d.\n\n%s (rc=%d).", broker, port, hint, rc);
+    szMsg[msgLen - 1] = '\0';
+    return FALSE;
 }
