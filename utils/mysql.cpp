@@ -83,6 +83,7 @@ static char  g_szDatabase[64]  = "";
 static char  g_szTable   [64]  = "alarmeringen";
 static int   g_iFields         = MYF_ALL;
 static int   g_iSchema         = MYSQL_SCHEMA_OPTIMIZED;
+static BOOL  g_bLinefeed       = FALSE;   // FIX [MysqlUtf8]: snapshot van Profile.Linefeed — 0xBB -> '\n' i.p.v. « »
 
 // ---------------------------------------------------------------------------
 // Job queue (ring buffer)
@@ -349,19 +350,78 @@ static BOOL NativePasswordToken(const char *pass, const BYTE scramble[20], BYTE 
 // String helpers
 // ===========================================================================
 
+/* FIX [MysqlUtf8]: lengte (1..4) van de geldige UTF-8 reeks die bij p begint, of 0 als p geen
+   structureel geldige reeks start. We controleren alleen de structuur (kopbyte + de juiste
+   continuation-bytes) — precies wat een utf8mb4-kolom nodig heeft om de bytes te accepteren. */
+static int Utf8SeqLen(const unsigned char *p)
+{
+    unsigned char c = p[0];
+    if (c < 0x80) return 1;                   /* ASCII */
+    int n;
+    if      ((c & 0xE0) == 0xC0) n = 1;       /* 110xxxxx + 1 staart */
+    else if ((c & 0xF0) == 0xE0) n = 2;       /* 1110xxxx + 2 staarten */
+    else if ((c & 0xF8) == 0xF0) n = 3;       /* 11110xxx + 3 staarten */
+    else return 0;                            /* losse staart (0x80-0xBF) of ongeldige kop */
+    for (int k = 1; k <= n; k++)
+        if ((p[k] & 0xC0) != 0x80) return 0;  /* NUL of niet-staart breekt de reeks af */
+    return n + 1;
+}
+
+/* FIX [MysqlUtf8]: maak een willekeurige bytestring veilig voor een utf8mb4-kolom. PDW-tekst is een
+   mix van ASCII, de 0xBB-linefeedmarker en (bij MOBITEX/encrypted verkeer) ruwe hoge bytes die geen
+   geldig UTF-8 vormen. MySQL weigert elke niet-UTF-8 byte met error 1366 en sloopt daarmee de hele
+   rij. We herschrijven hier, één keer bij het enqueuen, naar gegarandeerd geldig UTF-8 zodat de
+   worker-retry alleen schone data ziet.
+     bLinefeed == TRUE  : 0xBB -> '\n'        (gelijk aan de »-als-linefeed weergave)
+     bLinefeed == FALSE : 0xBB -> 0xC2 0xBB   (echte UTF-8 « » , net zoals het scherm dan toont)
+     byte die geen deel is van geldige UTF-8  -> '?'   (encrypted garbage / losse hoge byte)
+     geldige (multibyte) UTF-8                -> ongewijzigd doorgelaten */
+static void Utf8SanitizeForMysql(char *dst, int dstLen, const char *src, BOOL bLinefeed)
+{
+    int j = 0;
+    const unsigned char *p = (const unsigned char *)src;
+    while (*p) {
+        if (*p == 0xBB) {                         /* PDW-linefeedmarker — vóór de UTF-8 regels */
+            if (bLinefeed) { if (j > dstLen - 2) break; dst[j++] = '\n'; }
+            else           { if (j > dstLen - 3) break; dst[j++] = (char)0xC2; dst[j++] = (char)0xBB; }
+            p++;
+            continue;
+        }
+        int n = Utf8SeqLen(p);
+        if (n == 0) {                             /* ongeldige / losse byte: garbage */
+            if (j > dstLen - 2) break;
+            dst[j++] = '?';
+            p++;
+        } else {                                  /* geldige UTF-8: 1-op-1 doorlaten */
+            if (j + n > dstLen - 1) break;
+            for (int k = 0; k < n; k++) dst[j++] = (char)p[k];
+            p += n;
+        }
+    }
+    dst[j] = '\0';
+}
+
 /* Escape a string for use inside a JSON double-quoted value (RFC 7159). */
 static void JsonEscapeStr(char *dst, int dstLen, const char *src)
 {
     int j = 0;
-    for (int i = 0; src[i] && j < dstLen - 2; i++) {
-        unsigned char c = (unsigned char)src[i];
-        if      (c == '"')  { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = '"';  }
-        else if (c == '\\') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = '\\'; }
-        else if (c == '\n') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = 'n';  }
-        else if (c == '\r') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = 'r';  }
-        else if (c == '\t') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = 't';  }
-        else if (c < 32)    { /* skip non-printable control chars */ }
-        else dst[j++] = (char)c;
+    const unsigned char *p = (const unsigned char *)src;
+    while (*p && j < dstLen - 2) {
+        unsigned char c = *p;
+        if      (c == '"')  { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = '"';  p++; }
+        else if (c == '\\') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = '\\'; p++; }
+        else if (c == '\n') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = 'n';  p++; }
+        else if (c == '\r') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = 'r';  p++; }
+        else if (c == '\t') { dst[j++] = '\\'; if (j < dstLen-1) dst[j++] = 't';  p++; }
+        else if (c < 32)    { p++; /* skip non-printable control chars */ }
+        else if (c < 0x80)  { dst[j++] = (char)c; p++; }
+        else {
+            /* FIX [MysqlUtf8]: alleen geldige UTF-8 in de subscribers-JSON; losse hoge bytes
+               (0xBB, encrypted garbage) -> '?' zodat de utf8mb4-kolom de rij niet weigert. */
+            int n = Utf8SeqLen(p);
+            if (n > 0 && j + n <= dstLen - 2) { for (int k = 0; k < n; k++) dst[j++] = (char)p[k]; p += n; }
+            else                              { dst[j++] = '?'; p++; }
+        }
     }
     dst[j] = '\0';
 }
@@ -1014,7 +1074,8 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
         ga->nSubscr    = 0;
         ga->iMatchType = matchType;
 #define GACOPY(dst, src) strncpy(dst, (src) ? (src) : "", sizeof(dst) - 1); dst[sizeof(dst)-1] = '\0'
-        GACOPY(ga->szMessage,    message);
+        // FIX [MysqlUtf8]: groepsbericht-body net zo saneren als MysqlNotify (zelfde UTF-8 garantie).
+        Utf8SanitizeForMysql(ga->szMessage, sizeof(ga->szMessage), message ? message : "", g_bLinefeed);
         GACOPY(ga->szTime,       szTime);
         GACOPY(ga->szDate,       szDate);
         GACOPY(ga->szMode,       szMode);
@@ -1294,6 +1355,7 @@ void MysqlInit(void)
     g_iPort      = (Profile.mysql_port > 0) ? Profile.mysql_port : 3306;
     g_iFields    = Profile.mysql_fields;
     g_iSchema    = Profile.mysql_schema;
+    g_bLinefeed  = Profile.Linefeed ? TRUE : FALSE;   // FIX [MysqlUtf8]: spiegelt de GUI »-als-linefeed checkbox
     g_bLogToFile = Profile.mysql_logToFile ? TRUE : FALSE;
 
     g_hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -1330,8 +1392,10 @@ void MysqlNotify(const char *capcode, const char *message, const char *label,
     strncpy((dst), (src) ? (src) : "", sizeof(dst) - 1); \
     (dst)[sizeof(dst) - 1] = '\0'
         SAFE_COPY(j->szCapcode,    capcode);
-        SAFE_COPY(j->szMessage,    message);
-        SAFE_COPY(j->szLabel,      label);
+        // FIX [MysqlUtf8]: message + label naar geldig UTF-8 vóór de queue, zodat de worker-retry
+        // nooit een byte herverstuurt die utf8mb4 weigert (was: 3x INSERT FAIL -> rij gedropt).
+        Utf8SanitizeForMysql(j->szMessage, sizeof(j->szMessage), message ? message : "", g_bLinefeed);
+        Utf8SanitizeForMysql(j->szLabel,   sizeof(j->szLabel),   label   ? label   : "", FALSE);
         SAFE_COPY(j->szTime,       szTime);
         SAFE_COPY(j->szDate,       szDate);
         SAFE_COPY(j->szMode,       szMode);
