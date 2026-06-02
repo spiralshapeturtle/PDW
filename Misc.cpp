@@ -22,6 +22,7 @@
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
 #include "utils\telnet_server.h"
+#include "utils\mysql.h"
 #include "utils\rxq.h"
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
@@ -570,6 +571,7 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 			iConvertingGroupcall=0;		// PH: Reset for next groupmessage
 			WebhookFlushGroup(groupbit);
 			MqttFlushGroup(groupbit);
+			if (Profile.mysql_enabled) MysqlFlushGroup(groupbit); // FIX [MySQLFeed]: flush group row with accumulated subscribers
 			TrayBalloonFlush(); // FIX [TrayBalloon]
 		}
 		else
@@ -712,7 +714,9 @@ static FILE *OpenGroupcallLog(void)
 {
 	char szFile[MAX_PATH];
 	const char *logDir = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char *)szPath;
-	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\missed-groupcalls.log", logDir);
+	SYSTEMTIME st; GetLocalTime(&st);
+	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\%02d%02d%02d_missed_groupcalls.log",
+				logDir, st.wYear % 100, st.wMonth, st.wDay);
 	bool bNew = !FileExists(szFile);
 	FILE *fp = fopen(szFile, "a");
 	if (!fp) return NULL;
@@ -763,8 +767,15 @@ void MissedGroupcallSessionSummary(void)
 	extern int nCount_Missed[2];
 	char szFile[MAX_PATH];
 	const char *logDir = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char *)szPath;
-	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\missed-groupcalls.log", logDir);
+	SYSTEMTIME st; GetLocalTime(&st);
+	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\%02d%02d%02d_missed_groupcalls.log",
+				logDir, st.wYear % 100, st.wMonth, st.wDay);
 	if (!FileExists(szFile)) return;
+	// FIX [GroupCallLog]: alleen samenvatting schrijven bij een echte fout. Lege
+	// sessies (Missed=0 && No-SI=0) leverden voorheen een nietszeggende "0/0"-regel
+	// op die de log volledig overspoelde — elke PDW-afsluiting schreef er één. Zo
+	// blijft elke regel in de log een herleidbare fout.
+	if (nCount_Missed[0] == 0 && nCount_Missed[1] == 0) return;
 	FILE *fp = fopen(szFile, "a");
 	if (!fp) return;
 	Get_Date_Time();
@@ -844,6 +855,17 @@ void ShowMessage()
 	bMobitexReplace=false;
 
 	iMatch=Check_4_Filtermatch();	// PH: Check if current message matches a filter
+
+	// FIX [RawFeed]: label vroeg toewijzen zodat rejected/duplicate-blocked early-return paden
+	// szCurrentLabel[0] al gevuld hebben wanneer webhook/mqtt die meesturen (SendIn==3).
+	// De toewijzing op r1347 blijft staan voor het normale displaypad (harmloze herberekening).
+	if (iMatch != -1 && Profile.filters[iMatch].label_enabled && Profile.filters[iMatch].label[0])
+	{
+		if (strstr(Profile.filters[iMatch].label, "%"))
+			MakeFilterLabel(Profile.filters[iMatch].label, Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
+		else
+			strcpy(szCurrentLabel[0], Profile.filters[iMatch].label);
+	}
 
 	bGroupcode = memcmp(Current_MSG[MSG_CAPCODE], "20295", 5) ? false : true;
 
@@ -1661,6 +1683,52 @@ void ShowMessage()
 		}
 	}
 
+	// FIX [MySQLFeed]: MySQL INSERT.
+	// Subscriber rows (iConvertingGroupcall>0 && !bGroupcode) are accumulated for the
+	// group row; the group capcode row itself is flushed from ConvertGroupcall via
+	// MysqlFlushGroup, not here. Non-group messages are stored immediately via MysqlNotify.
+	if (Profile.mysql_enabled)
+	{
+		// match_type: 1=in filter pane, 2=monitor-only (filter match), 0=no match
+		int mysqlMatchType = bFILTERED ? 1 : (bMONITOR_ONLY ? 2 : 0);
+
+		// label_color: PDW COLORREF → "#RRGGBB" for the website; empty if no label
+		char szLabelColorHex[8] = "";
+		if (iMatch >= 0 && Profile.filters[iMatch].label_enabled && Profile.filters[iMatch].label[0])
+		{
+			int ci = Profile.filters[iMatch].label_color;
+			if (ci >= 0 && ci < 17)
+			{
+				COLORREF cr = Profile.color_filterlabel[ci];
+				_snprintf(szLabelColorHex, sizeof(szLabelColorHex) - 1, "#%02X%02X%02X",
+				          GetRValue(cr), GetGValue(cr), GetBValue(cr));
+				szLabelColorHex[sizeof(szLabelColorHex) - 1] = '\0';
+			}
+		}
+
+		if (iConvertingGroupcall > 0 && !bGroupcode)
+		{
+			// Accumulate subscriber capcode + label for the Optimized subscribers column.
+			MysqlGroupAccumulate(Current_MSG[MSG_CAPCODE], szCurrentLabel[0],
+			                     iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			                     Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+			                     Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+			                     mysqlMatchType, szLabelColorHex,
+			                     iConvertingGroupcall - 1);
+		}
+		else if (!iConvertingGroupcall)
+		{
+			// Normal (non-group) message.
+			MysqlNotify(Current_MSG[MSG_CAPCODE],
+			            iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			            szCurrentLabel[0],
+			            Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+			            Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+			            mysqlMatchType, szLabelColorHex);
+		}
+		// bGroupcode (iConvertingGroupcall > 0): stored by MysqlFlushGroup from ConvertGroupcall.
+	}
+
 	// Telnet-server fan-out — reads Current_MSG[] directly, emits one wire-line
 	// in p2kflexDecoder format to all connected clients.
 	// Skip per-subscriber duplicates that ConvertGroupcall generates: when
@@ -2395,23 +2463,82 @@ void ActivateCommandFile()
 			//           ruim 4x oversprappen → stack corruption.
 			if (arg>0 && arg<8)
 			{
-				for (pos=0; Current_MSG[arg][pos] != 0 && arg_pos < (int)sizeof(param_str) - 1; pos++, arg_pos++)
+				if (arg == 7)
 				{
-					if (Profile.monitor_mobitex && (arg==7) && (Current_MSG[7][pos] == '"' || Current_MSG[7][pos] == '\''))
+					// FIX [CmdQuote]: full Windows CreateProcess/CommandLineToArgvW escaping.
+					// Rules:
+					//   '"'  → '""'  (literal quote inside quoted arg)
+					//   '\'  before '"' or end-of-string → doubled ('\\' or '\\\\' etc.)
+					//        so a trailing '\' never accidentally escapes the closing '"'
+					//        that the user put in the Arguments template (e.g. "%7")
+					//   '\'  before other chars → copied as-is (no escaping needed)
+					pos = 0;
+					while (Current_MSG[7][pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
 					{
-						param_str[arg_pos] = ' ';
+						if (Current_MSG[7][pos] == '\\')
+						{
+							int bs_start = pos;
+							while (Current_MSG[7][pos] == '\\') pos++;
+							int n   = pos - bs_start;
+							// Double backslashes if followed by '"' or end-of-string
+							int emit = (Current_MSG[7][pos] == '"' || Current_MSG[7][pos] == '\0') ? n * 2 : n;
+							for (int b = 0; b < emit && arg_pos < (int)sizeof(param_str) - 1; b++)
+								param_str[arg_pos++] = '\\';
+						}
+						else if (Current_MSG[7][pos] == '"')
+						{
+							param_str[arg_pos++] = '"';
+							if (arg_pos < (int)sizeof(param_str) - 1)
+								param_str[arg_pos++] = '"';
+							pos++;
+						}
+						else if (Profile.monitor_mobitex && Current_MSG[7][pos] == '\'')
+						{
+							param_str[arg_pos++] = ' ';
+							pos++;
+						}
+						else
+						{
+							param_str[arg_pos++] = Current_MSG[7][pos++];
+						}
 					}
-					else param_str[arg_pos] = Current_MSG[arg][pos];
+				}
+				else
+				{
+					for (pos=0; Current_MSG[arg][pos] != 0 && arg_pos < (int)sizeof(param_str) - 1; pos++, arg_pos++)
+						param_str[arg_pos] = Current_MSG[arg][pos];
 				}
 				i+=2;
 			}
 			else if (Profile.filter_cmd_args[i+1] == '8')
 			{
+				// FIX [CmdQuote]: apply same backslash/quote escaping to the label (%8)
+				// as we do for the message (%7). Labels are user-defined and can contain
+				// '"' or '\', which would break Windows command-line parsing identically.
 				MakeFilterLabel(Profile.filters[iMatch].label, Current_MSG[MSG_CAPCODE], szLabel);
 				pos = 0;
 				while (szLabel[pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
 				{
-					param_str[arg_pos++] = szLabel[pos++];
+					if (szLabel[pos] == '\\')
+					{
+						int bs_start = pos;
+						while (szLabel[pos] == '\\') pos++;
+						int n    = pos - bs_start;
+						int emit = (szLabel[pos] == '"' || szLabel[pos] == '\0') ? n * 2 : n;
+						for (int b = 0; b < emit && arg_pos < (int)sizeof(param_str) - 1; b++)
+							param_str[arg_pos++] = '\\';
+					}
+					else if (szLabel[pos] == '"')
+					{
+						param_str[arg_pos++] = '"';
+						if (arg_pos < (int)sizeof(param_str) - 1)
+							param_str[arg_pos++] = '"';
+						pos++;
+					}
+					else
+					{
+						param_str[arg_pos++] = szLabel[pos++];
+					}
 				}
 				i+=2;
 			}

@@ -195,6 +195,14 @@ typedef struct
 	int  nMailBodyOptions;			// FIX [MailSplit]: fields for Body (when split mode ON)
 	int  bMailLogErrors;			// FIX [SmtpLog]: log SMTP errors to disk (checkbox)
 
+	// FIX [RxQualAlert]: low-quality e-mail alert
+	bool bRxQualAlertEnabled;
+	char szRxQualMailTo[512];		// semicolon-separated recipient list
+	int  nRxQualThreshold;			// alert when quality drops below this (default 25)
+	int  nRxQualRecover;			// reset alert when quality rises above this (default 35)
+	int  nRxQualMinutes;			// minutes below threshold before alerting (default 15)
+	int  nRxQualCooldown;			// minutes to suppress repeated alerts (default 120)
+
 	COLORREF color_background;
 	COLORREF color_address;
 	COLORREF color_timestamp;
@@ -280,6 +288,19 @@ typedef struct
 	int  telnetServerBufferTime;      // backlog replay window (sec), default 60
 	int  telnetServerLogToFile;       // 0=off, 1=write pdw_telnet_server.log (lifecycle events)
 	int  telnetServerWireLog;         // 0=off, 1=write pdw_flexdecoder.log (full wire-format messages)
+
+	// FIX [MySQLFeed]: MySQL output feed — zero external DLLs, mysql_native_password auth.
+	// See utils/mysql.{h,cpp}.
+	bool mysql_enabled;
+	char mysql_host    [128];         // hostname or IP, default "localhost"
+	int  mysql_port;                  // default 3306
+	char mysql_user    [64];
+	char mysql_pass    [64];
+	char mysql_database[64];
+	char mysql_table   [64];          // default "alarmeringen"
+	int  mysql_fields;                // bitmask MYF_*, default 0x1F (all on)
+	int  mysql_logToFile;             // 0=off, 1=write pdw_mysql.log
+	int  mysql_schema;                // MYSQL_SCHEMA_* (0=Classic, 1=Extended, 2=Optimized)
 } PROFILE, *PPROFILE;
 
 extern PROFILE Profile;     // profile information
@@ -471,6 +492,7 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL FAR PASCAL MysqlDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL DisplayOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL NEAR SetTitle(HWND hWnd, TCHAR *cTitle);
 

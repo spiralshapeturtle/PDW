@@ -317,7 +317,10 @@
 #include "utils\webhook.h"
 #include "utils\mqtt.h"
 #include "utils\telnet_server.h"
+#include "utils\mysql.h"
 #include "utils\debuglog.h"
+#include "RxQualAlertDlg.h"		// FIX [RxQualAlert]
+#include "RxQualMonitor.h"		// FIX [RxQualAlert]
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
 #include "headers\helper_funcs.h"	// Extra functies van Andreas
@@ -334,6 +337,7 @@
 #define SECOND_TIMER		103		// Timer ID
 #define MINUTE_TIMER		104		// Timer ID
 #define CLICK_TIMER			105		// Timer ID
+#define RXQUAL_TIMER		106		// FIX [RxQualAlert]: 1-minute RX quality check
 
 #define WM_MOUSEWHEEL		0x020A
 
@@ -550,6 +554,14 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.telnetServerLogToFile    = 0;
 	Profile.telnetServerWireLog      = 0;
 
+	// FIX [RxQualAlert]: RX quality e-mail alert defaults
+	Profile.bRxQualAlertEnabled = false;
+	Profile.szRxQualMailTo[0]   = '\0';
+	Profile.nRxQualThreshold    = 25;
+	Profile.nRxQualRecover      = 35;
+	Profile.nRxQualMinutes      = 15;
+	Profile.nRxQualCooldown     = 120;
+
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
 
@@ -758,8 +770,9 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 			SetTimer(ghWnd, PDW_TIMER, 100, (TIMERPROC) NULL); // start timer.
 		}
 	}
-	SetTimer(ghWnd, MINUTE_TIMER, 1000*60, (TIMERPROC) NULL); // start minute timer
-	SetTimer(ghWnd, SECOND_TIMER, 1000,    (TIMERPROC) NULL); // start second timer
+	SetTimer(ghWnd, MINUTE_TIMER,  1000*60, (TIMERPROC) NULL); // start minute timer
+	SetTimer(ghWnd, SECOND_TIMER,  1000,    (TIMERPROC) NULL); // start second timer
+	SetTimer(ghWnd, RXQUAL_TIMER,  1000*60, (TIMERPROC) NULL); // FIX [RxQualAlert]: 1-min quality check
 
 	if (Profile.trayNotifyMode > 0) SystemTrayIcon(false); // FIX [TrayBalloon]: icon bij opstarten als notificaties aan
 
@@ -798,6 +811,25 @@ void Free_Common_Objects(void)
 	FreeToolBarImages(ghInstance);	// Free toolbar button bitmaps
 }
 
+// FIX [DecodeGuard]: the decoder runs synchronously on the GUI thread via WM_TIMER. An access
+// violation on a malformed/truncated frame would otherwise propagate out of DispatchMessage and
+// silently kill the whole process. Wrap the decode entry points in SEH so a single bad frame is
+// logged and skipped instead of taking the app down. Kept in its own function because
+// __try/__except cannot share a stack frame with C++ object unwinding (compiler error C2712).
+static void SafeDecodeTick(HWND hWnd)
+{
+	__try
+	{
+		if		(bPlayback) pdw_playback();				// RAH: Playing recording?
+		else if (nDriverLoaded) pdw_decode();			// Log messages/statistics & Update signal indicator.
+		else if (bCapturing) Process_ReadyBuffers(hWnd);// Using sound card?
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		OutputDebugStringA("PDW: decode tick raised an exception — frame skipped\n");
+	}
+}
+
 LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	HDC ghDC;
@@ -830,9 +862,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		if (!bPauseFlag)
 		{
-			if		(bPlayback) pdw_playback();				// RAH: Playing recording?
-			else if (nDriverLoaded) pdw_decode();			// Log messages/statistics & Update signal indicator.
-			else if (bCapturing) Process_ReadyBuffers(hWnd);// Using sound card?
+			SafeDecodeTick(hWnd);							// FIX [DecodeGuard]: SEH-wrapped decode tick
 
 			switch (wParam) 
 			{ 
@@ -894,6 +924,10 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				}
 				break;
 				}
+
+				case RXQUAL_TIMER:	// FIX [RxQualAlert]: RX quality monitor tick
+				RxQualMonitor_OnTimer();
+				break;
 
 				case CLICK_TIMER:	// Handle click timer
 
@@ -1581,6 +1615,16 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 												 hWnd, (DLGPROC) TelnetServerDlgProc, 0L);
 				break;
 
+				case IDM_RXQUAL_ALERT:	// FIX [RxQualAlert]
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(RXQUAL_ALERT_DLGBOX),
+												 hWnd, (DLGPROC) RxQualAlertDlgProc, 0L);
+				break;
+
+				case IDM_MYSQL:			// FIX [MySQLFeed]
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(MYSQL_DLGBOX),
+												 hWnd, (DLGPROC) MysqlDlgProc, 0L);
+				break;
+
 				case IDM_DEBUGLOG:
 					Profile.bDebugLog = !Profile.bDebugLog;
 					CheckMenuItem(GetMenu(hWnd), IDM_DEBUGLOG,
@@ -1962,9 +2006,14 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		case WM_DESTROY:
 
+		// FIX [TsShutdownRs232]: markeer graceful shutdown vóór UnloadDriver/rs232_disconnect,
+		// zodat het telnet-pad geen <RS232:0> emit (anders gaat de remote slave in backoff).
+		TelnetServerBeginShutdown();
+
 		KillTimer(ghWnd, PDW_TIMER);
 		KillTimer(ghWnd, MINUTE_TIMER);
 		KillTimer(ghWnd, SECOND_TIMER);
+		KillTimer(ghWnd, RXQUAL_TIMER);	// FIX [RxQualAlert]
 
 		if (pLogFile)    fclose(pLogFile);
 		if (pFilterFile) fclose(pFilterFile);
@@ -2002,6 +2051,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
 		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
 		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
+		MysqlDestroy();    // FIX [MySQLFeed]: shutdown + DeleteCriticalSection
 		TelnetServerDestroy();
 		MissedGroupcallSessionSummary();  // FIX [GroupCallLog]: write X/Y counters to missed-groupcalls.log
 		DebugLogShutdown();
@@ -8343,16 +8393,34 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		{
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTERMATCHEXACT), (text && temp[0] != '^'));
 
-			if (type == POCSAG_FILTER)	// Monitoring POCSAG? Show function number combo box
-			{
-				ShowWindow(GetDlgItem(hDlg,   IDC_FILTERFNU), SW_SHOW);
-				SetWindowPos(GetDlgItem(hDlg, IDC_FILTERCAPCODE), NULL, 0, 0, 75, 21, SWP_NOMOVE);
-				EnableWindow(GetDlgItem(hDlg, IDC_FILTERFNU), capcode);
-		}
-			else
-		{
-				ShowWindow(GetDlgItem(hDlg,   IDC_FILTERFNU), SW_HIDE);
-				SetWindowPos(GetDlgItem(hDlg, IDC_FILTERCAPCODE), NULL, 0, 0, 125, 21, SWP_NOMOVE);
+			{	// FIX [FilterCapResize]: De Address/capcode-edit wisselt van breedte: smal
+				// naast de Fnu-combo (POCSAG) versus breed (overige types). Twee bugs opgelost:
+				//  1) Witte rest bij KRIMPEN: het vrijgekomen parent-gebied op de oude (bredere)
+				//     afmeting werd niet hertekend. We bewaren de huidige rect in parent-client
+				//     coords en wissen die na het resizen met InvalidateRect+UpdateWindow.
+				//  2) High-DPI: de vaste 75/125x21 px schaalden niet mee met de DPI-upgrade (de
+				//     template-edit wel) -> te smal/laag -> riccode afgeknipt. Breedte nu via
+				//     Scale() (>= ontwerpbreedte, dus nooit smaller dan op 100% DPI); hoogte
+				//     ongemoeid laten (curH) zodat de DPI-correcte template-hoogte het font niet knipt.
+				HWND hCap = GetDlgItem(hDlg, IDC_FILTERCAPCODE);
+				RECT rcCap;
+				GetWindowRect(hCap, &rcCap);
+				MapWindowPoints(NULL, hDlg, (LPPOINT)&rcCap, 2);	// scherm -> parent-client
+				int curW = rcCap.right  - rcCap.left;
+				int curH = rcCap.bottom - rcCap.top;				// bestaande (DPI-correcte) hoogte behouden
+				int newW = Scale((type == POCSAG_FILTER) ? 75 : 125);
+
+				ShowWindow(GetDlgItem(hDlg, IDC_FILTERFNU), (type == POCSAG_FILTER) ? SW_SHOW : SW_HIDE);
+
+				if (newW != curW)	// alleen herschalen+hertekenen bij echte breedtewijziging (geen flikker per toets)
+				{
+					SetWindowPos(hCap, NULL, 0, 0, newW, curH, SWP_NOMOVE | SWP_NOZORDER);
+					InvalidateRect(hDlg, &rcCap, TRUE);	// oude (bredere) rect wissen -> witte rest weg
+					UpdateWindow(hDlg);
+				}
+
+				if (type == POCSAG_FILTER)
+					EnableWindow(GetDlgItem(hDlg, IDC_FILTERFNU), capcode);
 			}
 		}
 		else	// If Mobitex filter
@@ -10063,6 +10131,21 @@ BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				CheckDlgButton(hDlg, IDC_MQTT_LABEL_PERCAP, BST_UNCHECKED);
 			}
 			break;
+		case IDC_MQTT_TEST:   // FIX [ConnTest]: test the values currently typed in the dialog
+		{
+			char broker[256], clientId[64], user[64], pass[128], portbuf[16];
+			GetDlgItemText(hDlg, IDC_MQTT_BROKER,   broker,   sizeof(broker));
+			GetDlgItemText(hDlg, IDC_MQTT_CLIENTID, clientId, sizeof(clientId));
+			GetDlgItemText(hDlg, IDC_MQTT_USER,     user,     sizeof(user));
+			GetDlgItemText(hDlg, IDC_MQTT_PASSWORD, pass,     sizeof(pass));
+			GetDlgItemText(hDlg, IDC_MQTT_PORT,     portbuf,  sizeof(portbuf));
+			char szResult[512];
+			HCURSOR hOld = SetCursor(LoadCursor(NULL, IDC_WAIT));
+			BOOL bOk = MqttTestConnection(broker, atoi(portbuf), clientId, user, pass, szResult, sizeof(szResult));
+			SetCursor(hOld);
+			MessageBox(hDlg, szResult, "MQTT Connection Test", MB_OK | (bOk ? MB_ICONINFORMATION : MB_ICONWARNING));
+			break;
+		}
 		case IDOK:
 			Profile.mqttEnabled     = IsDlgButtonChecked(hDlg, IDC_MQTT_ENABLED)     ? 1 : 0;
 			Profile.mqttRetain      = IsDlgButtonChecked(hDlg, IDC_MQTT_RETAIN)      ? 1 : 0;
@@ -10112,6 +10195,133 @@ BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	}
 	return (FALSE);
 } // end of MqttDlgProc
+
+
+// FIX [MySQLFeed]: enable/disable the Optimized-only field checkboxes based on schema selection.
+static void MysqlUpdateFieldCheckboxes(HWND hDlg, int schema)
+{
+	BOOL bOpt = (schema == MYSQL_SCHEMA_OPTIMIZED);
+	EnableWindow(GetDlgItem(hDlg, IDC_MYSQL_FIELD_MODE),    bOpt);
+	EnableWindow(GetDlgItem(hDlg, IDC_MYSQL_FIELD_TYPE),    bOpt);
+	EnableWindow(GetDlgItem(hDlg, IDC_MYSQL_FIELD_BITRATE), bOpt);
+	EnableWindow(GetDlgItem(hDlg, IDC_MYSQL_FIELD_MESSAGE), bOpt);
+	EnableWindow(GetDlgItem(hDlg, IDC_MYSQL_FIELD_LABEL),   bOpt);
+}
+
+// FIX [MySQLFeed]: MySQL feed settings dialog
+BOOL FAR PASCAL MysqlDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	char szBuf[32];
+
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_MYSQL_ENABLED,       Profile.mysql_enabled ? BST_CHECKED : BST_UNCHECKED);
+		SetDlgItemText(hDlg, IDC_MYSQL_HOST,           Profile.mysql_host);
+		SetDlgItemInt (hDlg, IDC_MYSQL_PORT,           Profile.mysql_port > 0 ? Profile.mysql_port : 3306, FALSE);
+		SetDlgItemText(hDlg, IDC_MYSQL_USER,           Profile.mysql_user);
+		SetDlgItemText(hDlg, IDC_MYSQL_PASSWORD,       Profile.mysql_pass);
+		SetDlgItemText(hDlg, IDC_MYSQL_DATABASE,       Profile.mysql_database);
+		SetDlgItemText(hDlg, IDC_MYSQL_TABLE,          Profile.mysql_table[0] ? Profile.mysql_table : "alarmeringen");
+		{
+			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Classic: meld2mysql.exe compatible (capcode/melding/label)");
+			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Extended: alle 8 PDW tekstvelden als strings");
+			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Optimized: type-correcte kolommen (aanbevolen)");
+			int iSel = Profile.mysql_schema;
+			if (iSel < 0 || iSel > 2) iSel = MYSQL_SCHEMA_OPTIMIZED;
+			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_SETCURSEL, (WPARAM)iSel, 0);
+			MysqlUpdateFieldCheckboxes(hDlg, iSel);
+		}
+		CheckDlgButton(hDlg, IDC_MYSQL_FIELD_MODE,    (Profile.mysql_fields & MYF_MODE)     ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MYSQL_FIELD_TYPE,    (Profile.mysql_fields & MYF_MSG_TYPE) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MYSQL_FIELD_BITRATE, (Profile.mysql_fields & MYF_BITRATE)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MYSQL_FIELD_MESSAGE, (Profile.mysql_fields & MYF_MESSAGE)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MYSQL_FIELD_LABEL,   (Profile.mysql_fields & MYF_LABEL)    ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_MYSQL_LOG,            Profile.mysql_logToFile ? BST_CHECKED : BST_UNCHECKED);
+		SetDlgItemText(hDlg, IDC_MYSQL_STATUS,         "Status: Idle");
+		MysqlSetStatusWnd(hDlg);
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_DESTROY:
+		MysqlSetStatusWnd(NULL);
+		break;
+
+	case WM_MYSQL_STATUS:
+	{
+		char szStatus[64];
+		switch ((int)wParam)
+		{
+		case MYS_IDLE:     strcpy(szStatus, "Status: Idle");        break;
+		case MYS_SENDING:  strcpy(szStatus, "Status: Sending...");  break;
+		case MYS_OK:       strcpy(szStatus, "Status: OK");          break;
+		case MYS_ERROR:    strcpy(szStatus, "Status: Error");       break;
+		case MYS_DISABLED: strcpy(szStatus, "Status: Disabled");    break;
+		default:           strcpy(szStatus, "Status: ...");          break;
+		}
+		SetDlgItemText(hDlg, IDC_MYSQL_STATUS, szStatus);
+		break;
+	}
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDC_MYSQL_SCHEMA:
+			if (HIWORD(wParam) == CBN_SELCHANGE) {
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_GETCURSEL, 0, 0);
+				MysqlUpdateFieldCheckboxes(hDlg, (iSel == CB_ERR) ? MYSQL_SCHEMA_OPTIMIZED : iSel);
+			}
+			break;
+		case IDC_MYSQL_TEST:   // FIX [ConnTest]: test the values currently typed in the dialog
+		{
+			char host[128], user[64], pass[64], database[64], portbuf[16];
+			GetDlgItemText(hDlg, IDC_MYSQL_HOST,     host,     sizeof(host));
+			GetDlgItemText(hDlg, IDC_MYSQL_USER,     user,     sizeof(user));
+			GetDlgItemText(hDlg, IDC_MYSQL_PASSWORD, pass,     sizeof(pass));
+			GetDlgItemText(hDlg, IDC_MYSQL_DATABASE, database, sizeof(database));
+			GetDlgItemText(hDlg, IDC_MYSQL_PORT,     portbuf,  sizeof(portbuf));
+			char szResult[512];
+			HCURSOR hOld = SetCursor(LoadCursor(NULL, IDC_WAIT));
+			BOOL bOk = MysqlTestConnection(host, atoi(portbuf), user, pass, database, szResult, sizeof(szResult));
+			SetCursor(hOld);
+			MessageBox(hDlg, szResult, "MySQL Connection Test", MB_OK | (bOk ? MB_ICONINFORMATION : MB_ICONWARNING));
+			break;
+		}
+		case IDOK:
+			MysqlSetStatusWnd(NULL);
+			Profile.mysql_enabled    = IsDlgButtonChecked(hDlg, IDC_MYSQL_ENABLED) ? true : false;
+			Profile.mysql_logToFile  = IsDlgButtonChecked(hDlg, IDC_MYSQL_LOG)     ? 1    : 0;
+			GetDlgItemText(hDlg, IDC_MYSQL_HOST,     Profile.mysql_host,     sizeof(Profile.mysql_host)     - 1);
+			GetDlgItemText(hDlg, IDC_MYSQL_USER,     Profile.mysql_user,     sizeof(Profile.mysql_user)     - 1);
+			GetDlgItemText(hDlg, IDC_MYSQL_PASSWORD, Profile.mysql_pass,     sizeof(Profile.mysql_pass)     - 1);
+			GetDlgItemText(hDlg, IDC_MYSQL_DATABASE, Profile.mysql_database, sizeof(Profile.mysql_database) - 1);
+			GetDlgItemText(hDlg, IDC_MYSQL_TABLE,    Profile.mysql_table,    sizeof(Profile.mysql_table)    - 1);
+			GetDlgItemText(hDlg, IDC_MYSQL_PORT,     szBuf,                  sizeof(szBuf)                  - 1);
+			Profile.mysql_port = atoi(szBuf);
+			if (Profile.mysql_port <= 0) Profile.mysql_port = 3306;
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_GETCURSEL, 0, 0);
+				Profile.mysql_schema = (iSel >= 0 && iSel <= 2) ? iSel : MYSQL_SCHEMA_OPTIMIZED;
+			}
+			Profile.mysql_fields =
+				(IsDlgButtonChecked(hDlg, IDC_MYSQL_FIELD_MODE)    ? MYF_MODE     : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MYSQL_FIELD_TYPE)    ? MYF_MSG_TYPE : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MYSQL_FIELD_BITRATE) ? MYF_BITRATE  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MYSQL_FIELD_MESSAGE) ? MYF_MESSAGE  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_MYSQL_FIELD_LABEL)   ? MYF_LABEL    : 0);
+			MysqlInit();
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+		case IDCANCEL:
+			MysqlSetStatusWnd(NULL);
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of MysqlDlgProc
 
 
 BOOL FAR PASCAL MonStatDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -10701,6 +10911,28 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->telnetServerWireLog    = (INT) GetPrivateProfileInt("TelnetServer", TEXT("WireLog"),       0,      lpszIniPathName);
 	TelnetServerInit();
 
+	// FIX [MySQLFeed]: MySQL output feed settings
+	pProfile->mysql_enabled  = (bool) GetPrivateProfileInt("MySQL", TEXT("Enabled"),  0,                lpszIniPathName);
+	GetPrivateProfileString("MySQL", TEXT("Host"),     "localhost",     pProfile->mysql_host,     sizeof(pProfile->mysql_host),     lpszIniPathName);
+	pProfile->mysql_port     = (INT)  GetPrivateProfileInt("MySQL", TEXT("Port"),     3306,             lpszIniPathName);
+	GetPrivateProfileString("MySQL", TEXT("User"),     "",              pProfile->mysql_user,     sizeof(pProfile->mysql_user),     lpszIniPathName);
+	GetPrivateProfileString("MySQL", TEXT("Pass"),     "",              pProfile->mysql_pass,     sizeof(pProfile->mysql_pass),     lpszIniPathName);
+	GetPrivateProfileString("MySQL", TEXT("Database"), "",              pProfile->mysql_database, sizeof(pProfile->mysql_database), lpszIniPathName);
+	GetPrivateProfileString("MySQL", TEXT("Table"),    "alarmeringen",  pProfile->mysql_table,    sizeof(pProfile->mysql_table),    lpszIniPathName);
+	pProfile->mysql_fields      = (INT)  GetPrivateProfileInt("MySQL", TEXT("Fields"),    0x1F,                  lpszIniPathName);
+	pProfile->mysql_logToFile   = (INT)  GetPrivateProfileInt("MySQL", TEXT("LogToFile"), 0,                     lpszIniPathName);
+	pProfile->mysql_schema      = (INT)  GetPrivateProfileInt("MySQL", TEXT("Schema"),    MYSQL_SCHEMA_OPTIMIZED, lpszIniPathName);
+	MysqlInit();
+
+	// FIX [RxQualAlert]: RX quality e-mail alert settings
+	pProfile->bRxQualAlertEnabled = (bool) GetPrivateProfileInt("RxQualAlert", "Enabled",   0,  lpszIniPathName);
+	GetPrivateProfileString("RxQualAlert", "MailTo",    "", pProfile->szRxQualMailTo, sizeof(pProfile->szRxQualMailTo), lpszIniPathName);
+	pProfile->nRxQualThreshold = (INT) GetPrivateProfileInt("RxQualAlert", "Threshold", 25,  lpszIniPathName);
+	pProfile->nRxQualRecover   = (INT) GetPrivateProfileInt("RxQualAlert", "Recover",   35,  lpszIniPathName);
+	pProfile->nRxQualMinutes   = (INT) GetPrivateProfileInt("RxQualAlert", "Minutes",   15,  lpszIniPathName);
+	pProfile->nRxQualCooldown  = (INT) GetPrivateProfileInt("RxQualAlert", "Cooldown",  120, lpszIniPathName);
+	RxQualMonitor_Reset();
+
 	pProfile->bDebugLog        = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),  0,    lpszIniPathName);
 
 	pProfile->betterContrast    = (INT) GetPrivateProfileInt("Display", TEXT("better_contrast"),   0, lpszIniPathName);
@@ -11229,6 +11461,28 @@ void WriteSettings()
 		fprintf(pFile, "BufferTimeSec=%i\n", Profile.telnetServerBufferTime);
 		fprintf(pFile, "LogToFile=%i\n",     Profile.telnetServerLogToFile);
 		fprintf(pFile, "WireLog=%i\n",       Profile.telnetServerWireLog);
+
+		// FIX [MySQLFeed]
+		fprintf(pFile, "\n[MySQL]\n");
+		fprintf(pFile, "Enabled=%i\n",   Profile.mysql_enabled ? 1 : 0);
+		fprintf(pFile, "Host=%s\n",      Profile.mysql_host);
+		fprintf(pFile, "Port=%i\n",      Profile.mysql_port);
+		fprintf(pFile, "User=%s\n",      Profile.mysql_user);
+		fprintf(pFile, "Pass=%s\n",      Profile.mysql_pass);
+		fprintf(pFile, "Database=%s\n",  Profile.mysql_database);
+		fprintf(pFile, "Table=%s\n",     Profile.mysql_table);
+		fprintf(pFile, "Fields=%i\n",    Profile.mysql_fields);
+		fprintf(pFile, "LogToFile=%i\n", Profile.mysql_logToFile);
+		fprintf(pFile, "Schema=%i\n",   Profile.mysql_schema);
+
+		// FIX [RxQualAlert]
+		fprintf(pFile, "\n[RxQualAlert]\n");
+		fprintf(pFile, "Enabled=%i\n",   Profile.bRxQualAlertEnabled ? 1 : 0);
+		fprintf(pFile, "MailTo=%s\n",    Profile.szRxQualMailTo);
+		fprintf(pFile, "Threshold=%i\n", Profile.nRxQualThreshold);
+		fprintf(pFile, "Recover=%i\n",   Profile.nRxQualRecover);
+		fprintf(pFile, "Minutes=%i\n",   Profile.nRxQualMinutes);
+		fprintf(pFile, "Cooldown=%i\n",  Profile.nRxQualCooldown);
 
 		fprintf(pFile, "\n[Logging]\n");
 		fprintf(pFile, "DebugLog=%i\n",      Profile.bDebugLog);
