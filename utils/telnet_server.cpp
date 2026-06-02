@@ -204,22 +204,39 @@ static void TsLogEvent(const char *fmt, ...)
 /* Wire-log: every wire-line that goes out can optionally be appended to a
 ** disk file in CS FlexDecoder format. Separate from g_tsLogToFile (which is
 ** for lifecycle events). Uses g_tsLogCs to serialize. */
+/* FIX [WireLogRotate]: maandafkortingen voor de niet-numerieke datumvorm,
+** identiek aan debuglog.cpp zodat beide PDW-logs dezelfde naamgeving delen. */
+static const char *kWireMonthAbbr[12] = {
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
+};
+
 static void TsWriteWireLog(const char *line, int len)
 {
     if (!Profile.telnetServerWireLog || !g_tsLogCsInit) return;
     if (!line || len <= 0) return;
+    if (len >= 4 && memcmp(line, "<WD>", 4) == 0) return; // FIX [WireLogWD]: <WD> niet naar disk, wel over de lijn
 
+    SYSTEMTIME st; GetLocalTime(&st);
+
+    // FIX [WireLogRotate]: dagelijks geroteerde bestandsnaam met de standaard PDW-
+    // datumnotatie (zelfde als de live debug log, debuglog.cpp). Voorheen schreef dit
+    // naar één oneindig groeiend pdw_flexdecoder.log; nu één bestand per dag zodat een
+    // vergelijk-script per dag op bestandsnaam kan koppelen aan de p2kflexDecoder-logs.
+    const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
     char path[MAX_PATH];
-    if (Profile.LogfilePath[0]) {
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\pdw_flexdecoder.log", Profile.LogfilePath);
+    if (Profile.MonthNumber) {
+        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%02d%02d_telnet_traffic.log",
+                    root, st.wYear % 100, st.wMonth, st.wDay);
     } else {
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\pdw_flexdecoder.log", szPath);
+        const char *mon = (st.wMonth >= 1 && st.wMonth <= 12) ? kWireMonthAbbr[st.wMonth - 1] : "???";
+        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%s%02d_telnet_traffic.log",
+                    root, st.wYear % 100, mon, st.wDay);
     }
 
     EnterCriticalSection(&g_tsLogCs);
     FILE *fp = NULL;
     if (fopen_s(&fp, path, "a") == 0 && fp) {
-        SYSTEMTIME st; GetLocalTime(&st);
         fprintf(fp, "%04d-%02d-%02d %02d:%02d:%02d.%03d  ",
                 st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
         /* line already ends with \r; strip and append \n for log readability. */
@@ -243,10 +260,13 @@ static void TsLog(const char *fmt, ...)
     if (!g_tsLogToFile || !g_tsLogCsInit) return;
 
     char path[MAX_PATH];
+    SYSTEMTIME st; GetLocalTime(&st);
     if (Profile.LogfilePath[0]) {
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\pdw_telnet_server.log", Profile.LogfilePath);
+        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%02d%02d_telnet_server.log",
+                    Profile.LogfilePath, st.wYear % 100, st.wMonth, st.wDay);
     } else {
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\pdw_telnet_server.log", szPath);
+        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%02d%02d_telnet_server.log",
+                    szPath, st.wYear % 100, st.wMonth, st.wDay);
     }
 
     EnterCriticalSection(&g_tsLogCs);
@@ -480,9 +500,18 @@ static int BitCount8(BYTE b)
     return (int)((b + (b >> 4)) & 0x0Fu);
 }
 
+/* FIX [TsShutdownRs232]: bij graceful app-shutdown onderdrukken we <RS232:0>
+** zodat de remote slave niet in exponential backoff gaat. De TCP-close van
+** TelnetServerDestroy() signaleert de remote al dat de sessie eindigt; <RS232:1>
+** bij (her)start blijft ongemoeid. Reconfig (COM-poort wijzigen) zet deze vlag
+** NIET en blijft dus wel <RS232:0>/<RS232:1> emitten. */
+static volatile BOOL g_tsShuttingDown = FALSE;
+void TelnetServerBeginShutdown(void) { g_tsShuttingDown = TRUE; }
+
 static void EmitRS232_Locked(int active)
 {
     if (active == g_tsRS232State) return;
+    if (!active && g_tsShuttingDown) return;   // FIX [TsShutdownRs232]: geen <RS232:0> bij afsluiten
     g_tsRS232State = active;
     TsLogEvent(active ? "<RS232:1> RS232 data active" : "<RS232:0> RS232 data lost");
     EmitMarker(active ? "<RS232:1>" : "<RS232:0>");
@@ -564,7 +593,10 @@ void TelnetServerRS232Enable(int active)
 
     if (active) {
         g_tsRS232Enabled     = 1;
-        g_tsRS232State       = -1;
+        /* FIX [TsStartupGating]: behoud een hangende 'lost'(0) over een disable/enable-
+        ** cyclus (bv. COM-poort reconfig) zodat de reconnect <RS232:1> als recovery
+        ** stuurt. Een verse eerste start staat op -1 (global init) en blijft dus stil. */
+        if (g_tsRS232State != 0) g_tsRS232State = -1;
         g_tsRS232Initialized = FALSE;
         g_tsRS232SilentTicks = 0;   /* FIX [RS232Flap] */
         g_tsRS232EnabledMs   = NowMs();
@@ -581,7 +613,10 @@ void TelnetServerRS232Enable(int active)
             EmitRS232_Locked(0);
         }
         g_tsRS232Enabled     = 0;
-        g_tsRS232State       = -1;
+        /* FIX [TsStartupGating]: zojuist geëmit <RS232:0> (state=0) bewaren i.p.v. -1,
+        ** zodat de volgende Enable(1)+data <RS232:1> (recovery) stuurt. Een nooit-
+        ** opgekomen link blijft -1 → stil bij verse start. */
+        if (g_tsRS232State != 0) g_tsRS232State = -1;
         g_tsRS232Initialized = FALSE;
         g_tsRS232SilentTicks = 0;   /* FIX [RS232Flap] */
         g_tsAudioState       = -1;
@@ -624,12 +659,16 @@ void TelnetServerRS232BytesReceived(const BYTE *data, int len)
     g_tsRS232LastHbMs    = now;
     g_tsRS232Initialized = TRUE;
 
-    /* p2kflexDecoder starts from RS232Active=false (≡ state 0) and emits
-    ** <RS232:1> on first data arrival — there is no separate "unset" state.
-    ** We mirror that: any state != 1 (unset -1 OR lost 0) emits <RS232:1>.
-    ** EmitRS232_Locked is idempotent (guards against same-state re-emit). */
-    if (g_tsRS232State != 1) {
-        EmitRS232_Locked(1);
+    /* FIX [TsStartupGating]: spiegel p2kflexDecoder exact. Daar emit de EERSTE data
+    ** bij startup GEEN <RS232:1> — RS232.cpp:333-335 zet enkel g_rs232StateInitialized
+    ** = true (stille init). <RS232:1> komt uitsluitend uit de recovery-tak
+    ** (if g_RS232_waslost, RS232.cpp:305-312). Wij scheiden daarom unset(-1) van
+    ** lost(0): lost->present = echt herstel -> emit; unset->present = stille
+    ** startup-init, geen emit. EmitRS232_Locked blijft idempotent. */
+    if (g_tsRS232State == 0) {
+        EmitRS232_Locked(1);        /* genuine recovery after loss */
+    } else if (g_tsRS232State == -1) {
+        g_tsRS232State = 1;         /* first data at startup: silent init (p2kflex parity) */
     }
 
     /* Accumulate bit transitions for AUDIO window (p2kflex RS232_ACTIVITY) */
@@ -663,9 +702,12 @@ void TelnetServerSlicerActivity(int nBytes)
     g_tsRS232LastHbMs    = now;
     g_tsRS232Initialized = TRUE;
 
-    /* Same logic as BytesReceived: any non-1 state → emit <RS232:1>. */
-    if (g_tsRS232State != 1) {
-        EmitRS232_Locked(1);
+    /* FIX [TsStartupGating]: zelfde gating als BytesReceived — startup-init is stil,
+    ** alleen lost(0)->present emit <RS232:1> (p2kflex recovery-semantiek). */
+    if (g_tsRS232State == 0) {
+        EmitRS232_Locked(1);        /* genuine recovery after loss */
+    } else if (g_tsRS232State == -1) {
+        g_tsRS232State = 1;         /* first data at startup: silent init (p2kflex parity) */
     }
 
     /* Guarantee the audio-present threshold is met for this window. */
@@ -1367,7 +1409,13 @@ void TelnetServerShutdown(void)
             g_tsListenSock = INVALID_SOCKET;
         }
         if (g_tsThread) {
-            WaitForSingleObject(g_tsThread, 5000);
+            // FIX [TelnetJoin]: join to FULL completion before CloseHandle and (later, in
+            // TelnetServerDestroy) DeleteCriticalSection — same hardening as the mqtt/webhook/mysql
+            // workers. A 5 s timeout could expire while the worker was still live, after which those
+            // teardown steps ran under a running thread (crash on exit). The worker select()s on a
+            // 1 s timeout, all sockets are non-blocking, and we just closed the listen socket to
+            // unblock select(), so it returns within ~1 s — INFINITE is safe and correct.
+            WaitForSingleObject(g_tsThread, INFINITE);
             CloseHandle(g_tsThread);
             g_tsThread = NULL;
         }

@@ -88,6 +88,12 @@ void TelnetServerSlicerActivity(int nBytes);
 ** does not trigger a spurious <RS232:0>. Does not change link state. */
 void TelnetServerRS232Heartbeat(void);
 
+/* TelnetServerBeginShutdown: call at the very start of WM_DESTROY (before
+** UnloadDriver/rs232_disconnect). Suppresses the graceful-shutdown <RS232:0>
+** so the remote slave does not enter exponential backoff; the TCP close from
+** TelnetServerDestroy() already signals session end. See FIX [TsShutdownRs232]. */
+void TelnetServerBeginShutdown(void);
+
 /* Hook for the dialog: registers/clears the HWND that receives WM_TELNET_STATUS. */
 void TelnetServerSetStatusWnd(HWND hWnd);
 

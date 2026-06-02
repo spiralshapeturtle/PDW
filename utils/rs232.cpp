@@ -95,6 +95,10 @@ static volatile ULONGLONG g_connectTickMs  = 0;
 // reopen) or "device removed" (long backoff).
 static volatile DWORD g_lastReadError = 0;
 
+// NOTE [AssertNoOp]: 'assert' is DELIBERATELY redefined to a non-aborting, log-only check. This is
+// intentional for a long-running unattended daemon: a failed assertion logs to the debug channel
+// (DebugView) but must NEVER call abort()/terminate() and kill the process. Standard <assert.h>
+// semantics do NOT apply here — do not assume a failing assert stops execution.
 #define assert(a)		if(!(a))  { OUTPUTDEBUGMSG(("SIMULATE ASSERT in file %s at %d\n", __FILE__, __LINE__ )); }
 
 // Apply our standard DCB settings and read timeouts to m_ComPortHandle.
