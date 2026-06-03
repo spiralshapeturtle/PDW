@@ -24,7 +24,7 @@ enum LogCat : uint32_t {
     LC_WIRE     = 1u << 2,   // {YYMMDD}_telnet_traffic.log
     LC_MQTT     = 1u << 3,   // {YYMMDD}_mqtt.log
     LC_WEBHOOK  = 1u << 4,   // {YYMMDD}_webhook.log
-    LC_MYSQL    = 1u << 5,   // pdw_mysql.log  (no date prefix — rotating at 5 MB)
+    LC_MYSQL    = 1u << 5,   // {YYMMDD}_mysql.log  (daily rotation)
     LC_SQLITE   = 1u << 6,   // {YYMMDD}_sqlite.log
     LC_SMTP     = 1u << 7,   // {YYMMDD}_mail.log
     LC_ALL      = 0x000000FFu

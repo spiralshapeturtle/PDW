@@ -277,31 +277,21 @@ void LogManager::BuildPath(char* out, int outSize, LogCat cat, const SYSTEMTIME&
     default:         suffix = "_pdw.log";               break;
     }
 
-    if (noDate) {
-        _snprintf_s(out, outSize, _TRUNCATE, "%s\\%s", root, suffix);
-    } else if (m_monthNumber) {
+    static const char* kMon[12] = {
+        "JAN","FEB","MAR","APR","MAY","JUN",
+        "JUL","AUG","SEP","OCT","NOV","DEC"
+    };
+
+    if (m_monthNumber) {
         // Numeric month: 260603_pdw_debug.log
-        static const char* kMon[12] = {
-            "JAN","FEB","MAR","APR","MAY","JUN",
-            "JUL","AUG","SEP","OCT","NOV","DEC"
-        };
         _snprintf_s(out, outSize, _TRUNCATE, "%s\\%02d%02d%02d%s",
-                    root,
-                    st.wYear % 100, st.wMonth, st.wDay,
-                    suffix);
-        (void)kMon; // suppress unused warning
+                    root, st.wYear % 100, st.wMonth, st.wDay, suffix);
     } else {
         // Abbreviated month: 26JUN03_pdw_debug.log
-        static const char* kMon[12] = {
-            "JAN","FEB","MAR","APR","MAY","JUN",
-            "JUL","AUG","SEP","OCT","NOV","DEC"
-        };
         const char* mon = (st.wMonth >= 1 && st.wMonth <= 12)
                           ? kMon[st.wMonth - 1] : "???";
         _snprintf_s(out, outSize, _TRUNCATE, "%s\\%02d%s%02d%s",
-                    root,
-                    st.wYear % 100, mon, st.wDay,
-                    suffix);
+                    root, st.wYear % 100, mon, st.wDay, suffix);
     }
 }
 

@@ -1536,7 +1536,7 @@ void ShowMessage()
 					char lmBuf[LM_LINE_MAX];
 					int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
 					                         "%s    %s  %s\n",
-					                         bFragment ? szFragment : "               ",
+					                         bFragment ? szFragment : (Profile.logISO8601 ? "                 " : "               "),
 					                         Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
 					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
 				}
@@ -1630,7 +1630,7 @@ void ShowMessage()
 						char lmBuf[LM_LINE_MAX];
 						int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
 						                         "%s    %s  %s\n",
-						                         bFragment ? szFragment : "               ",
+						                         bFragment ? szFragment : (Profile.logISO8601 ? "                 " : "               "),
 						                         Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
 						if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
 					}
@@ -1684,7 +1684,7 @@ void ShowMessage()
 							char lmBuf[LM_LINE_MAX];
 							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
 							                         "%s    %s  %s\n",
-							                         bFragment ? szFragment : "               ",
+							                         bFragment ? szFragment : (Profile.logISO8601 ? "                 " : "               "),
 							                         Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
 							if (lmLen > 0) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], lmBuf, lmLen);
 						}
