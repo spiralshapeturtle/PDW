@@ -1496,6 +1496,8 @@ void ShowMessage()
 
 			if (Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING)
 			{
+				// FlexGroupMode writes szLogFileLine directly (decoder-formatted group header).
+				// ISO timestamp does not apply here — the group header has its own format.
 				if (isdigit(szLogFileLine[0]) && !bLogged[MONITOR] && !bCombine[MONITOR])
 				{
 					char lmBuf[LM_LINE_MAX];
@@ -2772,7 +2774,21 @@ void CollectLogfileLine(char *string, bool bFilter)
 	int spacing=0;
 
 	szLogFileLine[0] = '\0';
-	
+
+	// ISO mode: write timestamp unconditionally as the first field, independent of
+	// which columns are selected.  Col 2 (Time) and col 3 (Date) are then skipped
+	// in the loop below so they don't also appear.
+	if (Profile.logISO8601)
+	{
+		SYSTEMTIME ist; GetLocalTime(&ist);
+		char isoBuf[22];
+		_snprintf_s(isoBuf, sizeof(isoBuf), _TRUNCATE,
+		            "%04d-%02d-%02d %02d:%02d:%02d ",
+		            ist.wYear, ist.wMonth, ist.wDay,
+		            ist.wHour, ist.wMinute, ist.wSecond);
+		strcat(szLogFileLine, isoBuf);
+	}
+
 	for (int col=1; col<8; col++)
 	{
 		if (col == 7)
@@ -2834,24 +2850,13 @@ void CollectLogfileLine(char *string, bool bFilter)
 				}
 				else strcat(szLogFileLine, Current_MSG[MSG_MESSAGE]);
 			}
-			else if (Profile.logISO8601 && col == MSG_TIME)
+			else if (Profile.logISO8601 && (col == MSG_TIME || col == MSG_DATE))
 			{
-				// ISO mode: write combined YYYY-MM-DD HH:MM:SS instead of separate HH:MM:SS
-				SYSTEMTIME ist; GetLocalTime(&ist);
-				char isoBuf[22];
-				_snprintf_s(isoBuf, sizeof(isoBuf), _TRUNCATE,
-				            "%04d-%02d-%02d %02d:%02d:%02d",
-				            ist.wYear, ist.wMonth, ist.wDay,
-				            ist.wHour, ist.wMinute, ist.wSecond);
-				strcat(szLogFileLine, isoBuf);
-			}
-			else if (Profile.logISO8601 && col == MSG_DATE)
-			{
-				// ISO mode: date already written as part of MSG_TIME above — skip
+				// ISO timestamp already written before the loop — skip these columns.
 			}
 			else strcat(szLogFileLine, Current_MSG[col]);
 
-			if (col < 7 && !(Profile.logISO8601 && col == MSG_DATE))
+			if (col < 7 && !(Profile.logISO8601 && (col == MSG_TIME || col == MSG_DATE)))
 				strcat(szLogFileLine, " ");
 
 			if (col == 1 && Profile.monitor_paging && FLEX_9 > 25)
