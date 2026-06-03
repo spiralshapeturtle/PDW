@@ -25,6 +25,11 @@
 #include "utils\mysql.h"
 #include "utils\rxq.h"
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
+#include "utils\logmanager.h"
+
+// Sentinel value: FILE* is logically "open" but writes go through LogManager.
+// Never passed to fread/fwrite/fclose — only used as a non-NULL guard.
+#define LM_FILE_OPEN  ((FILE*)0x1)
 
 #define FILTER_PARAM_LEN	500
 #define MAXIMUM_GROUPSIZE	1000
@@ -480,7 +485,8 @@ static void TrayBalloonFlush()
 	s_trayAccumLabels[0] = '\0';
 }
 
-static FILE *OpenGroupcallLog(void);  // FIX [GroupCallLog]: forward declaration
+static void GetGroupcallLogPath(char *out, int outSize);   // forward declarations
+static void EnsureGroupcallLogHeader(const char *szFile);
 
 void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 {
@@ -526,15 +532,25 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 
 					if (Profile.BlockDuplicate & BLOCK_LOGFILE)
 					{
-						sprintf(szFile, "%s\\blocked.txt", szPath);
-
-						if ((pBlocked = fopen(szFile, "a")) != NULL)
-						{
-							Get_Date_Time();
-							fprintf(pBlocked, "%i %s %s  %s\n", 2029568+groupbit, szCurrentTime, szCurrentDate, message_buffer);
-							fclose(pBlocked);
-							pBlocked = NULL;
+						// FIX [LogManager]: blocked groupcall via ring buffer; date-stamped.
+						const char *blkDir2 = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char*)szPath;
+						SYSTEMTIME bst2; GetLocalTime(&bst2);
+						char blkPath[MAX_PATH];
+						if (Profile.MonthNumber)
+							_snprintf_s(blkPath, sizeof(blkPath), _TRUNCATE, "%s\\%02d%02d%02d_blocked.txt",
+							            blkDir2, bst2.wYear % 100, bst2.wMonth, bst2.wDay);
+						else {
+							static const char *kMon2[12] = { "JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC" };
+							const char *mon2 = (bst2.wMonth >= 1 && bst2.wMonth <= 12) ? kMon2[bst2.wMonth - 1] : "???";
+							_snprintf_s(blkPath, sizeof(blkPath), _TRUNCATE, "%s\\%02d%s%02d_blocked.txt",
+							            blkDir2, bst2.wYear % 100, mon2, bst2.wDay);
 						}
+						Get_Date_Time();
+						char lmBuf2[512];
+						int  lmLen2 = _snprintf_s(lmBuf2, sizeof(lmBuf2), _TRUNCATE,
+						                           "%i %s %s  %s\n",
+						                           2029568+groupbit, szCurrentTime, szCurrentDate, message_buffer);
+						if (lmLen2 > 0) LogManager::Get().WriteLineTo(blkPath, lmBuf2, lmLen2);
 					}
 					nCount_Blocked++;
 
@@ -603,18 +619,20 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 					nCount_Missed[1]++;
 					DebugLog("[ConvertGroupcall] Y++ now=%d (X=%d)", nCount_Missed[1], nCount_Missed[0]);
 					{
-						// FIX [GroupCallLog]: merged into missed-groupcalls.log in Logs dir
-						FILE *fp = OpenGroupcallLog();
-						if (fp)
+						// FIX [GroupCallLog]: merged into missed-groupcalls.log
 						{
 							Get_Date_Time();
+							char szFile[MAX_PATH];
+							GetGroupcallLogPath(szFile, sizeof(szFile));
+							EnsureGroupcallLogHeader(szFile);
 							const char *szReason = (savedGroupFrame == -1) ? "no Short Instruction" : "SI frame mismatch";
-							fprintf(fp, " %s %s  NO-SI    capcode %i frame %i  %s  %s\n",
-								szCurrentDate, szCurrentTime,
-								capcode, iCurrentFrame,
-								szReason,
-								message_buffer);
-							fclose(fp);
+							char lmBuf[512];
+							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+							                          " %s %s  NO-SI    capcode %i frame %i  %s  %s\n",
+							                          szCurrentDate, szCurrentTime,
+							                          capcode, iCurrentFrame,
+							                          szReason, message_buffer);
+							if (lmLen > 0) LogManager::Get().WriteLineTo(szFile, lmBuf, lmLen);
 						}
 					}
 				}
@@ -709,24 +727,32 @@ void Check4_MissedGroupcalls()
 }
 
 
-// FIX [GroupCallLog]: combined missed-groupcalls.log in Profile.LogfilePath (replaces missed-groupcalls.txt + no-si-groupcalls.txt)
-static FILE *OpenGroupcallLog(void)
+// FIX [GroupCallLog]: combined missed-groupcalls.log in Profile.LogfilePath.
+// FIX [LogManager]: writes go via LogManager; header written directly on first use only.
+static void GetGroupcallLogPath(char *out, int outSize)
 {
-	char szFile[MAX_PATH];
 	const char *logDir = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char *)szPath;
 	SYSTEMTIME st; GetLocalTime(&st);
-	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\%02d%02d%02d_missed_groupcalls.log",
-				logDir, st.wYear % 100, st.wMonth, st.wDay);
-	bool bNew = !FileExists(szFile);
-	FILE *fp = fopen(szFile, "a");
-	if (!fp) return NULL;
-	if (bNew)
-	{
-		fprintf(fp, " PDW Missed Groupcalls\n");
-		fprintf(fp, " MISSED = Short Instruction received, group message did not arrive\n");
-		fprintf(fp, " NO-SI  = Group message received without prior Short Instruction\n\n");
+	if (Profile.MonthNumber)
+		_snprintf_s(out, outSize, _TRUNCATE, "%s\\%02d%02d%02d_missed_groupcalls.log",
+		            logDir, st.wYear % 100, st.wMonth, st.wDay);
+	else {
+		static const char *kMon[12] = { "JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC" };
+		const char *mon = (st.wMonth >= 1 && st.wMonth <= 12) ? kMon[st.wMonth - 1] : "???";
+		_snprintf_s(out, outSize, _TRUNCATE, "%s\\%02d%s%02d_missed_groupcalls.log",
+		            logDir, st.wYear % 100, mon, st.wDay);
 	}
-	return fp;
+}
+
+static void EnsureGroupcallLogHeader(const char *szFile)
+{
+	if (FileExists(szFile)) return;
+	FILE *fp = fopen(szFile, "a");
+	if (!fp) return;
+	fprintf(fp, " PDW Missed Groupcalls\n");
+	fprintf(fp, " MISSED = Short Instruction received, group message did not arrive\n");
+	fprintf(fp, " NO-SI  = Group message received without prior Short Instruction\n\n");
+	fclose(fp);
 }
 
 
@@ -737,19 +763,29 @@ void Remove_MissedGroupcall(int groupbit)
 	Get_Date_Time();
 	SortGroupCall(groupbit);	// PH: Sort current groupcall in ascending order
 
-	FILE *fp = OpenGroupcallLog();  // FIX [GroupCallLog]
-	if (fp)
+	char szFile[MAX_PATH];
+	GetGroupcallLogPath(szFile, sizeof(szFile));
+	EnsureGroupcallLogHeader(szFile);
+
+	// Accumulate full line into buffer, then write via LogManager.
+	char lmBuf[2048];
+	int  lmPos = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+	                          " %s %s  MISSED   group %i frame %03i  members:",
+	                          szCurrentDate, szCurrentTime,
+	                          groupbit + 2029568, GroupFrame[groupbit]);
+	if (lmPos < 0) lmPos = 0;
+	for (int nCapcode = 1; aGroupCodes[groupbit][nCapcode] > 0; nCapcode++)
 	{
-		fprintf(fp, " %s %s  MISSED   group %i frame %03i  members:",
-			szCurrentDate, szCurrentTime, groupbit + 2029568, GroupFrame[groupbit]);
-		for (int nCapcode = 1; aGroupCodes[groupbit][nCapcode] > 0; nCapcode++)
-		{
-			if (aGroupCodes[groupbit][nCapcode] == 9999999) fprintf(fp, " ???????");
-			else fprintf(fp, " %07i", aGroupCodes[groupbit][nCapcode]);
-		}
-		fprintf(fp, "\n");
-		fclose(fp);
+		int n;
+		if (aGroupCodes[groupbit][nCapcode] == 9999999)
+			n = _snprintf_s(lmBuf + lmPos, sizeof(lmBuf) - lmPos, _TRUNCATE, " ???????");
+		else
+			n = _snprintf_s(lmBuf + lmPos, sizeof(lmBuf) - lmPos, _TRUNCATE,
+			                " %07i", aGroupCodes[groupbit][nCapcode]);
+		if (n > 0) lmPos += n;
 	}
+	if (lmPos < (int)sizeof(lmBuf) - 2) { lmBuf[lmPos++] = '\n'; lmBuf[lmPos] = '\0'; }
+	LogManager::Get().WriteLineTo(szFile, lmBuf, lmPos);
 	memset(aGroupCodes[groupbit], 0, sizeof(int) * MAXIMUM_GROUPSIZE);
 
 	strcpy(szWindowText[5], "MISSED GROUPCALL!");
@@ -765,23 +801,20 @@ void Remove_MissedGroupcall(int groupbit)
 void MissedGroupcallSessionSummary(void)
 {
 	extern int nCount_Missed[2];
-	char szFile[MAX_PATH];
-	const char *logDir = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char *)szPath;
-	SYSTEMTIME st; GetLocalTime(&st);
-	_snprintf_s(szFile, sizeof(szFile), _TRUNCATE, "%s\\%02d%02d%02d_missed_groupcalls.log",
-				logDir, st.wYear % 100, st.wMonth, st.wDay);
-	if (!FileExists(szFile)) return;
-	// FIX [GroupCallLog]: alleen samenvatting schrijven bij een echte fout. Lege
-	// sessies (Missed=0 && No-SI=0) leverden voorheen een nietszeggende "0/0"-regel
-	// op die de log volledig overspoelde — elke PDW-afsluiting schreef er één. Zo
-	// blijft elke regel in de log een herleidbare fout.
+	// FIX [GroupCallLog]: alleen samenvatting schrijven bij een echte fout.
 	if (nCount_Missed[0] == 0 && nCount_Missed[1] == 0) return;
-	FILE *fp = fopen(szFile, "a");
-	if (!fp) return;
+
+	char szFile[MAX_PATH];
+	GetGroupcallLogPath(szFile, sizeof(szFile));
+	if (!FileExists(szFile)) return;  // don't create a new file just for the summary
+
 	Get_Date_Time();
-	fprintf(fp, "\n Session end  %s %s  Missed: %i  No-SI: %i\n",
-		szCurrentDate, szCurrentTime, nCount_Missed[0], nCount_Missed[1]);
-	fclose(fp);
+	char lmBuf[256];
+	int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+	                          "\n Session end  %s %s  Missed: %i  No-SI: %i\n",
+	                          szCurrentDate, szCurrentTime,
+	                          nCount_Missed[0], nCount_Missed[1]);
+	if (lmLen > 0) LogManager::Get().WriteLineTo(szFile, lmBuf, lmLen);
 }
 
 
@@ -982,17 +1015,28 @@ void ShowMessage()
 
 				if (Profile.BlockDuplicate & BLOCK_LOGFILE)
 				{
-					sprintf(szFilename, "%s\\blocked.txt", szPath);	// Add to blocked.txt
-
-					if ((pBlocked = fopen(szFilename, "a")) != NULL)
-					{
-						fprintf(pBlocked, "%s %s %s  %s\n",	Current_MSG[MSG_CAPCODE],
-															Current_MSG[MSG_TIME],
-															Current_MSG[MSG_DATE],
-															Current_MSG[MSG_MESSAGE]);
-						fclose(pBlocked);
-						pBlocked = NULL;
+					// FIX [LogManager]: blocked log via ring buffer; date-stamped for daily rotation.
+					const char *blkDir = Profile.LogfilePath[0] ? Profile.LogfilePath : (const char*)szPath;
+					SYSTEMTIME bst; GetLocalTime(&bst);
+					if (Profile.MonthNumber)
+						_snprintf_s(szFilename, sizeof(szFilename), _TRUNCATE,
+						            "%s\\%02d%02d%02d_blocked.txt",
+						            blkDir, bst.wYear % 100, bst.wMonth, bst.wDay);
+					else {
+						static const char *kBlkMon[12] = { "JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC" };
+						const char *mon = (bst.wMonth >= 1 && bst.wMonth <= 12) ? kBlkMon[bst.wMonth - 1] : "???";
+						_snprintf_s(szFilename, sizeof(szFilename), _TRUNCATE,
+						            "%s\\%02d%s%02d_blocked.txt",
+						            blkDir, bst.wYear % 100, mon, bst.wDay);
 					}
+					char lmBuf[LM_LINE_MAX];
+					int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+					                          "%s %s %s  %s\n",
+					                          Current_MSG[MSG_CAPCODE],
+					                          Current_MSG[MSG_TIME],
+					                          Current_MSG[MSG_DATE],
+					                          Current_MSG[MSG_MESSAGE]);
+					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
 				}
 				nCount_Blocked++;
 				// FIX [TelnetReject]: telnet output is unfiltered — send even duplicate-blocked messages
@@ -1440,9 +1484,8 @@ void ShowMessage()
 		if (Profile.logfile_enabled && bMONITOR && !pLogFile)
 		{
 			LogFileHandling(MONITOR, szFilename, OPEN_FILE);
-
 			bNewFile = (!FileExists(szFilename)) ? true : false;
-			pLogFile = fopen(szFilename, "a");
+			pLogFile = LM_FILE_OPEN;  // FIX [LogManager]: sentinel; writes go via LogManager
 		}
 
 		if (pLogFile)
@@ -1453,14 +1496,21 @@ void ShowMessage()
 			{
 				if (isdigit(szLogFileLine[0]) && !bLogged[MONITOR] && !bCombine[MONITOR])
 				{
-					fprintf(pLogFile, "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+					char lmBuf[LM_LINE_MAX];
+					int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+					                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+					bNewLine = false;
 				}
-				fprintf(pLogFile, "%s    %s  %s\n", bFragment ? szFragment : "               ", Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
-
-				if (!bLogged[MONITOR])
 				{
-					bLogged[MONITOR] = true;
+					char lmBuf[LM_LINE_MAX];
+					int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+					                         "%s    %s  %s\n",
+					                         bFragment ? szFragment : "               ",
+					                         Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
+					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
 				}
+				if (!bLogged[MONITOR]) bLogged[MONITOR] = true;
 			}
 			else
 			{
@@ -1488,7 +1538,10 @@ void ShowMessage()
 				}
 				strcat(szLogFileLine, "\n");
 
-				fprintf(pLogFile, "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+				char lmBuf[LM_LINE_MAX];
+				int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+				                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+				if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
 			}
 		}
 
@@ -1526,9 +1579,8 @@ void ShowMessage()
 				if (Profile.filterfile_enabled && !pFilterFile)
 				{
 					LogFileHandling(FILTER, szFilename, OPEN_FILE);
-
 					bNewFile = (!FileExists(szFilename)) ? true : false;
-					pFilterFile = fopen(szFilename, "a");
+					pFilterFile = LM_FILE_OPEN;  // FIX [LogManager]: sentinel
 				}
 				if (pFilterFile)		// PH: Write current message to filterfile
 				{
@@ -1538,12 +1590,27 @@ void ShowMessage()
 					{
 						if (isdigit(szLogFileLine[0]) && !bLogged[FILTER] && !bCombine[FILTER])
 						{
-							fprintf(pFilterFile, "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-							bLogged[FILTER]=true;
+							char lmBuf[LM_LINE_MAX];
+							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+							                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+							if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+							bLogged[FILTER] = true;
+							bNewLine = false;
 						}
-						fprintf(pFilterFile, "%s    %s  %s\n", bFragment ? szFragment : "               ", Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
+						char lmBuf[LM_LINE_MAX];
+						int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+						                         "%s    %s  %s\n",
+						                         bFragment ? szFragment : "               ",
+						                         Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
+						if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
 					}
-					else fprintf(pFilterFile, "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+					else
+					{
+						char lmBuf[LM_LINE_MAX];
+						int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+						                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+						if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+					}
 				}
 			}
 
@@ -1569,7 +1636,7 @@ void ShowMessage()
 							break;
 						}
 					}
-					if (!pSepFilterFiles[iSepfile]) pSepFilterFiles[iSepfile] = fopen(szSepfilenames[CURRENT], "a");
+					if (!pSepFilterFiles[iSepfile]) pSepFilterFiles[iSepfile] = LM_FILE_OPEN; // FIX [LogManager]: sentinel
 
 					if (pSepFilterFiles[iSepfile])		// PH: Write current message to separate filterfile
 					{
@@ -1577,11 +1644,25 @@ void ShowMessage()
 						{
 							if (!bLogged[SEPARATE] && isdigit(szLogFileLine[0]))
 							{
-								fprintf(pSepFilterFiles[iSepfile], "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+								char lmBuf[LM_LINE_MAX];
+								int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+								                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+								if (lmLen > 0) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], lmBuf, lmLen);
 							}
-							fprintf(pSepFilterFiles[iSepfile], "%s    %s  %s\n", bFragment ? szFragment : "               ", Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
+							char lmBuf[LM_LINE_MAX];
+							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+							                         "%s    %s  %s\n",
+							                         bFragment ? szFragment : "               ",
+							                         Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
+							if (lmLen > 0) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], lmBuf, lmLen);
 						}
-						else fprintf(pSepFilterFiles[iSepfile], "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+						else
+						{
+							char lmBuf[LM_LINE_MAX];
+							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+							                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+							if (lmLen > 0) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], lmBuf, lmLen);
+						}
 					}
 				}
 			}
@@ -2003,24 +2084,19 @@ char LogFileHandling(int file, char *szFileName, int action)
 	}
 	else // if (action == CLOSE_FILES)
 	{
-		if (pLogFile)						// PH: If active, close logfile
-		{
-			fclose(pLogFile);
-			pLogFile = NULL;
-		}
-		if (pFilterFile)					// PH: If active, close filterfile
-		{
-			fclose(pFilterFile);
-			pFilterFile = NULL;
-		}
+		// FIX [LogManager]: pLogFile/pFilterFile/pSepFilterFiles hold LM_FILE_OPEN sentinel;
+		// never pass sentinel to fclose. Real FILE*s (from legacy code paths) are still closed.
+		if (pLogFile && pLogFile != LM_FILE_OPEN) fclose(pLogFile);
+		pLogFile = NULL;
+
+		if (pFilterFile && pFilterFile != LM_FILE_OPEN) fclose(pFilterFile);
+		pFilterFile = NULL;
 
 		for (int i=0; i<MAX_SEPFILES; i++)
 		{
-			if (pSepFilterFiles[i])
-			{
+			if (pSepFilterFiles[i] && pSepFilterFiles[i] != LM_FILE_OPEN)
 				fclose(pSepFilterFiles[i]);
-				pSepFilterFiles[i] = NULL;
-			}
+			pSepFilterFiles[i] = NULL;
 		}
 		return(FALSE);
 	}
@@ -2717,9 +2793,25 @@ void CollectLogfileLine(char *string, bool bFilter)
 				}
 				else strcat(szLogFileLine, Current_MSG[MSG_MESSAGE]);
 			}
+			else if (Profile.logISO8601 && col == MSG_TIME)
+			{
+				// ISO mode: write combined YYYY-MM-DD HH:MM:SS instead of separate HH:MM:SS
+				SYSTEMTIME ist; GetLocalTime(&ist);
+				char isoBuf[22];
+				_snprintf_s(isoBuf, sizeof(isoBuf), _TRUNCATE,
+				            "%04d-%02d-%02d %02d:%02d:%02d",
+				            ist.wYear, ist.wMonth, ist.wDay,
+				            ist.wHour, ist.wMinute, ist.wSecond);
+				strcat(szLogFileLine, isoBuf);
+			}
+			else if (Profile.logISO8601 && col == MSG_DATE)
+			{
+				// ISO mode: date already written as part of MSG_TIME above — skip
+			}
 			else strcat(szLogFileLine, Current_MSG[col]);
-			
-			if (col < 7) strcat(szLogFileLine, " ");
+
+			if (col < 7 && !(Profile.logISO8601 && col == MSG_DATE))
+				strcat(szLogFileLine, " ");
 
 			if (col == 1 && Profile.monitor_paging && FLEX_9 > 25)
 			{

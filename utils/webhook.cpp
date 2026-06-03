@@ -26,6 +26,7 @@
 #include "..\headers\pdw.h"
 #include "..\headers\initapp.h"
 #include "webhook.h"
+#include "logmanager.h"
 
 extern TCHAR szPath[];          // from Initapp.cpp — PDW executable directory
 
@@ -133,25 +134,6 @@ static void PostStatus(int status, LPARAM lp)
 // Log file  (separate critical section)
 // ---------------------------------------------------------------------------
 
-static CRITICAL_SECTION g_logCs;
-static BOOL g_logCsInit = FALSE;
-
-// FIX [LogRotate]: cap the webhook log by keeping one previous generation (.1) — a feed that keeps
-// failing logs every retry; without a cap that file grows without bound and can fill the disk on a
-// long-running install. Rotating at ~5 MB bounds total disk use to ~10 MB. Called under g_logCs.
-#define WEBHOOK_LOG_MAX_BYTES  (5 * 1024 * 1024)
-static void RotateLogIfLarge(const char *path)
-{
-    WIN32_FILE_ATTRIBUTE_DATA fad;
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return;
-    ULONGLONG sz = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
-    if (sz < WEBHOOK_LOG_MAX_BYTES) return;
-    char bak[MAX_PATH];
-    _snprintf(bak, sizeof(bak) - 1, "%s.1", path);
-    bak[sizeof(bak) - 1] = '\0';
-    MoveFileExA(path, bak, MOVEFILE_REPLACE_EXISTING);
-}
-
 static void WriteLog(const char *fmt, ...)
 {
     if (!g_bLogToFile) return;
@@ -159,31 +141,10 @@ static void WriteLog(const char *fmt, ...)
     char szLine[1024];
     va_list ap;
     va_start(ap, fmt);
-    _vsnprintf(szLine, sizeof(szLine) - 1, fmt, ap);
-    szLine[sizeof(szLine) - 1] = '\0';
+    _vsnprintf_s(szLine, sizeof(szLine), _TRUNCATE, fmt, ap);
     va_end(ap);
 
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    char szTimestamp[32];
-    sprintf(szTimestamp, "%04d-%02d-%02d %02d:%02d:%02d ",
-            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-
-    const char *logDir = (Profile.LogfilePath[0]) ? Profile.LogfilePath : (const char *)szPath;
-    char szFile[MAX_PATH];
-    _snprintf(szFile, sizeof(szFile) - 1, "%s\\%02d%02d%02d_webhook.log",
-              logDir, st.wYear % 100, st.wMonth, st.wDay);   // FIX [L2]: bounded path
-    szFile[sizeof(szFile) - 1] = '\0';
-
-    EnterCriticalSection(&g_logCs);
-    RotateLogIfLarge(szFile);   // FIX [LogRotate]
-    FILE *fp = fopen(szFile, "a");
-    if (fp)
-    {
-        fprintf(fp, "%s%s\n", szTimestamp, szLine);
-        fclose(fp);
-    }
-    LeaveCriticalSection(&g_logCs);
+    PDW_WEBHOOKLOG("%s", szLine);
 }
 
 // ---------------------------------------------------------------------------
@@ -735,8 +696,6 @@ void WebhookInit(void)
     if (!s_webhookCsInit)
     {
         InitializeCriticalSection(&g_cs);
-        InitializeCriticalSection(&g_logCs);
-        g_logCsInit = TRUE;
         s_webhookCsInit = TRUE;
     }
 
@@ -802,8 +761,6 @@ void WebhookDestroy(void)
     WebhookShutdown();
     if (s_webhookCsInit)
     {
-        g_logCsInit = FALSE;
-        DeleteCriticalSection(&g_logCs);
         DeleteCriticalSection(&g_cs);
         s_webhookCsInit = FALSE;
     }

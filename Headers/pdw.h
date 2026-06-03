@@ -301,6 +301,12 @@ typedef struct
 	int  mysql_fields;                // bitmask MYF_*, default 0x1F (all on)
 	int  mysql_logToFile;             // 0=off, 1=write pdw_mysql.log
 	int  mysql_schema;                // MYSQL_SCHEMA_* (0=Classic, 1=Extended, 2=Optimized)
+
+	// FIX [LogManager]: central write-buffering (NVMe protection)
+	int  logBufferEnabled;            // 0=off, 1=buffer all subsystem log writes
+	int  logFlushIntervalMs;          // flush interval in ms (default 500)
+	int  logBufferSlots;              // ring-buffer capacity in entries (default 512)
+	int  logISO8601;                  // 0=legacy time+date columns, 1=ISO (YYYY-MM-DD HH:MM:SS)
 } PROFILE, *PPROFILE;
 
 extern PROFILE Profile;     // profile information

@@ -211,6 +211,7 @@
     <ClCompile Include="utils\telnet_server.cpp" />
     <ClCompile Include="utils\rxq.cpp" />
     <ClCompile Include="utils\debuglog.cpp" />
+    <ClCompile Include="utils\logmanager.cpp" />
     <ClCompile Include="utils\winrt_toast.cpp" />
     <ClCompile Include="RxQualAlertDlg.cpp" />
     <ClCompile Include="RxQualMonitor.cpp" />

@@ -319,6 +319,7 @@
 #include "utils\telnet_server.h"
 #include "utils\mysql.h"
 #include "utils\debuglog.h"
+#include "utils\logmanager.h"
 #include "RxQualAlertDlg.h"		// FIX [RxQualAlert]
 #include "RxQualMonitor.h"		// FIX [RxQualAlert]
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
@@ -733,6 +734,16 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	}
 
 	DebugLogInit();		// Init critical section for live debug log
+
+	// FIX [LogManager]: callers gate on their own flags (g_bLogToFile, Profile.bDebugLog, etc.)
+	// so we enable all categories here — LogManager never drops entries due to its own mask.
+	{
+		const char* lmPath = Profile.LogfilePath[0] ? Profile.LogfilePath : szPath;
+		LogManager::Get().Init(lmPath, LC_ALL, Profile.MonthNumber,
+		                       Profile.logBufferEnabled != 0,
+		                       (DWORD)Profile.logFlushIntervalMs,
+		                       Profile.logBufferSlots);
+	}
 
 	if (hToolbar) TB_AutoSize(hToolbar);	// keep toolbar correct size!
 
@@ -2054,6 +2065,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		MysqlDestroy();    // FIX [MySQLFeed]: shutdown + DeleteCriticalSection
 		TelnetServerDestroy();
 		MissedGroupcallSessionSummary();  // FIX [GroupCallLog]: write X/Y counters to missed-groupcalls.log
+		LogManager::Get().Shutdown();
 		DebugLogShutdown();
 		rs232_cleanup();   // FIX [L2]: DeleteCriticalSection g_handleCs
 
@@ -3391,8 +3403,17 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 		if (!CenterWindow(hDlg)) return (FALSE);
 
 		// Check/uncheck the 'use date as filename checkbox'.
-		CheckDlgButton(hDlg, IDC_LOGFILEEN,   Profile.logfile_enabled);
-		CheckDlgButton(hDlg, IDC_LOGFILEDATE, Profile.logfile_use_date);
+		CheckDlgButton(hDlg, IDC_LOGFILEEN,      Profile.logfile_enabled);
+		CheckDlgButton(hDlg, IDC_LOGFILEDATE,    Profile.logfile_use_date);
+		CheckDlgButton(hDlg, IDC_LOG_ISO_DATETIME, Profile.logISO8601);
+		CheckDlgButton(hDlg, IDC_LOG_BUFFER_EN,   Profile.logBufferEnabled);
+		SetDlgItemInt (hDlg, IDC_LOG_FLUSH_MS,    Profile.logFlushIntervalMs, FALSE);
+		SetDlgItemInt (hDlg, IDC_LOG_BUFFER_SLOTS, Profile.logBufferSlots,    FALSE);
+		{
+			BOOL bBuf = (Profile.logBufferEnabled != 0);
+			EnableWindow(GetDlgItem(hDlg, IDC_LOG_FLUSH_MS),     bBuf);
+			EnableWindow(GetDlgItem(hDlg, IDC_LOG_BUFFER_SLOTS), bBuf);
+		}
 
 		if (Profile.monitor_mobitex)
 		{
@@ -3428,10 +3449,16 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 			SetDlgItemText(hDlg, IDC_LOGFILE, Profile.logfile);
 		}
 
-		for (i=1; i<=7; i++)
 		{
-			EnableWindow(GetDlgItem(hDlg, IDC_LOGCOLUMN+i), enabled);
-			CheckDlgButton(hDlg, IDC_LOGCOLUMN+i, strchr(Profile.ColLogfile, '0'+i) != 0);
+			BOOL bISO = IsDlgButtonChecked(hDlg, IDC_LOG_ISO_DATETIME);
+			for (i=1; i<=7; i++)
+			{
+				// Time (col 2) and Date (col 3) are grayed when ISO mode is active.
+				BOOL colEnabled = enabled && !(bISO && (i == 2 || i == 3));
+				EnableWindow(GetDlgItem(hDlg, IDC_LOGCOLUMN+i), colEnabled);
+				CheckDlgButton(hDlg, IDC_LOGCOLUMN+i, strchr(Profile.ColLogfile, '0'+i) != 0);
+			}
+			EnableWindow(GetDlgItem(hDlg, IDC_LOG_ISO_DATETIME), enabled);
 		}
 
 		SetDlgItemText(hDlg, IDC_LOGFILE, date ? szFilenameDate : "");
@@ -3473,15 +3500,55 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 			case IDC_LOGFILEEN:
 			case IDC_LOGFILEDATE:
-
-			SendMessage(hDlg, WM_WININICHANGE, NULL, 0L);
-
+			case IDC_LOG_ISO_DATETIME:
+			case IDC_LOG_BUFFER_EN:
+			{
+				BOOL bBuf = IsDlgButtonChecked(hDlg, IDC_LOG_BUFFER_EN);
+				EnableWindow(GetDlgItem(hDlg, IDC_LOG_FLUSH_MS),     bBuf);
+				EnableWindow(GetDlgItem(hDlg, IDC_LOG_BUFFER_SLOTS), bBuf);
+				SendMessage(hDlg, WM_WININICHANGE, NULL, 0L);
+			}
 			break;
 
 			case IDOK:
 
-			Profile.logfile_enabled  = IsDlgButtonChecked(hDlg, IDC_LOGFILEEN);
-			Profile.logfile_use_date = IsDlgButtonChecked(hDlg, IDC_LOGFILEDATE);
+			Profile.logfile_enabled      = IsDlgButtonChecked(hDlg, IDC_LOGFILEEN);
+			Profile.logfile_use_date     = IsDlgButtonChecked(hDlg, IDC_LOGFILEDATE);
+			Profile.logISO8601           = IsDlgButtonChecked(hDlg, IDC_LOG_ISO_DATETIME);
+			Profile.logBufferEnabled     = IsDlgButtonChecked(hDlg, IDC_LOG_BUFFER_EN);
+			{
+				int ms    = (int)GetDlgItemInt(hDlg, IDC_LOG_FLUSH_MS,     NULL, FALSE);
+				int slots = (int)GetDlgItemInt(hDlg, IDC_LOG_BUFFER_SLOTS, NULL, FALSE);
+
+				// Clamp to safe ranges.
+				if (ms    < 100)   ms    = 100;
+				if (ms    > 10000) ms    = 10000;
+				if (slots < 64)    slots = 64;
+				if (slots > 4096)  slots = 4096;
+
+				// Warn when buffer is too small for the chosen flush interval.
+				// Peak load estimate: 250 msg/sec (all feeds active simultaneously).
+				if (Profile.logBufferEnabled)
+				{
+					int needed = (250 * ms) / 1000;
+					if (slots < needed)
+					{
+						char szWarn[512];
+						_snprintf_s(szWarn, sizeof(szWarn), _TRUNCATE,
+							"Buffer slots (%d) is too small for this flush interval.\n\n"
+							"At peak load (~250 msg/sec x %d ms) you need at least %d slots.\n"
+							"Either increase slots or decrease the flush interval.\n\n"
+							"Settings corrected to %d slots.",
+							slots, ms, needed, needed);
+						MessageBox(hDlg, szWarn, "Write buffer warning", MB_ICONWARNING | MB_OK);
+						slots = needed;
+						SetDlgItemInt(hDlg, IDC_LOG_BUFFER_SLOTS, slots, FALSE);
+					}
+				}
+
+				Profile.logFlushIntervalMs = ms;
+				Profile.logBufferSlots     = slots;
+			}
 
 			GetDlgItemText(hDlg, IDC_LOGFILE, szFileLog, MAX_FILE_LEN+1);
 
@@ -3545,6 +3612,15 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 			// Update profile
 			WriteSettings();
+
+			// Reconfigure LogManager (callers gate on their own flags, mask stays LC_ALL).
+			{
+				const char* lmPath = Profile.LogfilePath[0] ? Profile.LogfilePath : szPath;
+				LogManager::Get().Reconfigure(lmPath, LC_ALL, Profile.MonthNumber,
+				                              Profile.logBufferEnabled != 0,
+				                              (DWORD)Profile.logFlushIntervalMs,
+				                              Profile.logBufferSlots);
+			}
 
 			EndDialog(hDlg, TRUE);
 			return (TRUE);
@@ -10933,7 +11009,14 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->nRxQualCooldown  = (INT) GetPrivateProfileInt("RxQualAlert", "Cooldown",  120, lpszIniPathName);
 	RxQualMonitor_Reset();
 
-	pProfile->bDebugLog        = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),  0,    lpszIniPathName);
+	pProfile->bDebugLog           = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),        0,    lpszIniPathName);
+	pProfile->logBufferEnabled    = (INT) GetPrivateProfileInt("Logging", TEXT("BufferEnabled"),    0,    lpszIniPathName);
+	pProfile->logFlushIntervalMs  = (INT) GetPrivateProfileInt("Logging", TEXT("FlushIntervalMs"),  500,  lpszIniPathName);
+	pProfile->logBufferSlots      = (INT) GetPrivateProfileInt("Logging", TEXT("BufferSlots"),      512,  lpszIniPathName);
+	pProfile->logISO8601          = (INT) GetPrivateProfileInt("Logging", TEXT("ISO8601"),           0,    lpszIniPathName);
+	if (pProfile->logFlushIntervalMs < 100)  pProfile->logFlushIntervalMs = 100;
+	if (pProfile->logBufferSlots    < 64)    pProfile->logBufferSlots     = 64;
+	if (pProfile->logBufferSlots    > 4096)  pProfile->logBufferSlots     = 4096;
 
 	pProfile->betterContrast    = (INT) GetPrivateProfileInt("Display", TEXT("better_contrast"),   0, lpszIniPathName);
 	pProfile->lighterBackground = (INT) GetPrivateProfileInt("Display", TEXT("lighter_background"), 0, lpszIniPathName);
@@ -11485,7 +11568,11 @@ void WriteSettings()
 		fprintf(pFile, "Cooldown=%i\n",  Profile.nRxQualCooldown);
 
 		fprintf(pFile, "\n[Logging]\n");
-		fprintf(pFile, "DebugLog=%i\n",      Profile.bDebugLog);
+		fprintf(pFile, "DebugLog=%i\n",          Profile.bDebugLog);
+		fprintf(pFile, "BufferEnabled=%i\n",     Profile.logBufferEnabled);
+		fprintf(pFile, "FlushIntervalMs=%i\n",   Profile.logFlushIntervalMs);
+		fprintf(pFile, "BufferSlots=%i\n",       Profile.logBufferSlots);
+		fprintf(pFile, "ISO8601=%i\n",           Profile.logISO8601);
 
 		fprintf(pFile, "\n[Display]\n");
 		fprintf(pFile, "better_contrast=%i\n",    Profile.betterContrast);

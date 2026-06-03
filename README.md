@@ -1,10 +1,10 @@
 # PDW — Paging Decoder for Windows
 
-**Version 3.5.6** | Windows 7–11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.5.8** | Windows 7–11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
-This fork builds on the classic PDW 3.2 codebase and adds **five years of production-hardened improvements**: modern SMTP, MQTT/webhook integration, a built-in Telnet server, a MySQL output feed, RX quality monitoring, High-DPI support, and many reliability fixes.
+This fork builds on the classic PDW 3.2 codebase and adds **five years of production-hardened improvements**: modern SMTP, MQTT/webhook integration, a built-in Telnet server, MySQL and SQLite output feeds, RX quality monitoring, High-DPI support, a central log manager with write buffering, and many reliability fixes.
 
 ---
 
@@ -17,6 +17,7 @@ If you already know PDW, here is what you get over the original 3.2 release:
 | **MQTT output** | Push every decoded page to a broker; Node-RED, Home Assistant, or any subscriber picks it up |
 | **Webhook output** | HTTP/HTTPS POST to any endpoint — Zapier, n8n, custom APIs |
 | **MySQL output** | Persist all decoded messages in a relational database; three schema variants available |
+| **SQLite output** | Same as MySQL but a single local file — no server, no install, works on any machine |
 | **RX Quality Alerts** | Get an e-mail when signal quality drops below a threshold for too long |
 | **SMTP hardening** | STARTTLS (port 587) + implicit TLS (port 465) + RFC-compliant EHLO + reliable worker thread |
 | **Telnet server** (port 8024) | Drop-in replacement for CS FlexDecoder — compatible wire-format streams to p2kflexMonitor or any Telnet client without extra software |
@@ -24,6 +25,8 @@ If you already know PDW, here is what you get over the original 3.2 release:
 | **Windows 11 toast notifications** | Modern native notifications instead of the obsolete tray balloon API |
 | **High-DPI support** | Crisp display on 4K/HiDPI monitors |
 | **x64 build** | 64-bit binary for modern systems |
+| **Central log manager** | All log output through one path; uniform timestamps; write buffering reduces SSD wear on busy networks — configure flush interval and buffer size in the Logfile dialog |
+| **ISO timestamps in logs** | Optional `YYYY-MM-DD HH:MM:SS` format inside monitor/filter log lines (sortable); all log files now date-rotate daily |
 
 ---
 
@@ -63,8 +66,8 @@ Sends a formatted e-mail for any matched filter. The SMTP client is fully self-c
 - RFC 5321-compliant EHLO with IP-literal fallback (`[a.b.c.d]`)
 - LOGIN / PLAIN authentication with Base64
 - **Split Subject/Body mode** — choose independently which fields (capcode, time, date, mode, type, bitrate, message, label) go into the Subject line and which go into the Body. Added to customize alerts to mobile push services like pushover.net
-- Error logging to disk (`pdw_smtp.log`)
-- Single long-lived worker thread — no heap corruption from concurrent sends
+- Error logging to disk (`YYMMDD_mail.log`)
+- Reliable single worker thread
 
 ---
 
@@ -91,7 +94,7 @@ PDW includes a built-in **Telnet server on port 8024** that streams every decode
 - Max simultaneous clients (default 25)
 - Watchdog interval
 - Reconnect backlog window (default 60 s)
-- Wire-format log file (`pdw_flexdecoder.log`)
+- Event log (`YYMMDD_telnet_server.log`) and wire-format log (`YYMMDD_telnet_traffic.log`)
 
 ---
 
@@ -160,7 +163,7 @@ HTTP POST to any endpoint using WinHTTP. No external libraries.
 
 ### MySQL output
 
-Persists all decoded messages to a MySQL/MariaDB database. **Zero external DLL dependencies** — the MySQL wire protocol v10 and `mysql_native_password` authentication are implemented natively using Win32 sockets and Windows CryptoAPI SHA-1.
+Persists all decoded messages to a MySQL or MariaDB database. No external DLLs or MySQL client libraries required.
 
 **Three schema variants** — choose in settings:
 
@@ -221,10 +224,10 @@ CREATE TABLE `alarmeringen` (
 - Auto-creates database if it does not exist
 - Exponential-backoff reconnect (1 s → 2 s → 4 s → … → 30 s)
 - TCP keep-alive (60 s interval)
-- Worker thread + 64-slot ring buffer (decoder never blocks)
+- Non-blocking background worker — decoding is never delayed by database writes
 - Group-call subscribers stored as a JSON array in `subscribers`
 - Optional activity log (`pdw_mysql.log`)
-- Field bitmask — write only the columns you need
+- Select which fields to write
 
 **Column reference (Optimized schema):**
 
@@ -232,7 +235,7 @@ CREATE TABLE `alarmeringen` (
 |--------|------|-------|
 | `id` | BIGINT | Monotonic auto-increment. Use for live polling: `WHERE id > :since` |
 | `ontvangen` | DATETIME | Message time in PDW machine's local timezone (no UTC offset stored) |
-| `capcode` | CHAR(9) | Pager address stored as a zero-padded string. FLEX group capcodes are `2029568`–`2029583`. Leading zeros are preserved (required for ASTRID long addresses) |
+| `capcode` | CHAR(9) | Pager address stored as a zero-padded string. Leading zeros are preserved for long POCSAG addresses. FLEX group capcodes are `2029568`–`2029583` |
 | `mode` | VARCHAR | Protocol + rate, e.g. `FLEX-1600`, `POCSAG-1200`. Protocol = part before `-` |
 | `msg_type` | VARCHAR | `ALPHA` / `NUMERIC` / `TONE` / `GROUP` / `TRANSP` |
 | `bitrate` | SMALLINT | 512 / 1200 / 2400 (POCSAG) or 1600 / 3200 / 6400 (FLEX) |
@@ -299,6 +302,64 @@ foreach ($rows as $r) {
 
 ---
 
+### SQLite output
+
+Persists all decoded messages to a local SQLite database file. No server, no installer, no external DLLs — everything is compiled into PDW. The database is a single file you can copy, backup, or open with any SQLite tool.
+
+`capcode` is stored as text to preserve leading zeros in long POCSAG pager addresses.
+
+**Schema:**
+
+```sql
+CREATE TABLE IF NOT EXISTS "alarmeringen" (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ontvangen   TEXT    NOT NULL DEFAULT '',   -- 'YYYY-MM-DD HH:MM:SS'
+    capcode     TEXT    NOT NULL DEFAULT '',   -- leading zeros preserved
+    mode        TEXT    NOT NULL DEFAULT '',
+    msg_type    TEXT    NOT NULL DEFAULT '',
+    bitrate     INTEGER NOT NULL DEFAULT 0,
+    message     TEXT    NOT NULL DEFAULT '',
+    label       TEXT    NOT NULL DEFAULT '',
+    subscribers TEXT    NOT NULL DEFAULT '',
+    match_type  INTEGER NOT NULL DEFAULT 0,
+    label_color TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_alarmeringen_capcode   ON alarmeringen(capcode);
+CREATE INDEX IF NOT EXISTS idx_alarmeringen_ontvangen ON alarmeringen(ontvangen);
+CREATE INDEX IF NOT EXISTS idx_alarmeringen_match     ON alarmeringen(match_type);
+CREATE INDEX IF NOT EXISTS idx_alarmeringen_label     ON alarmeringen(label);
+```
+
+**Default file path:** `<PDW exe directory>\pdw.db` (configurable).
+
+**Best-practice defaults applied automatically:**
+
+| PRAGMA | Default | LowWrite mode |
+|--------|---------|---------------|
+| `journal_mode` | `WAL` | `WAL` |
+| `synchronous` | `NORMAL` | `OFF` |
+| `auto_vacuum` | `INCREMENTAL` | `INCREMENTAL` |
+| `wal_autocheckpoint` | 1000 pages | 10000 pages |
+| Commit cadence | every message | ~15 s batched |
+
+**LowWrite mode** (`Options → SQLite → Reduce NVMe writes`): commits are batched every ~15 seconds instead of per message. Significantly reduces write amplification on SSDs. Trade-off: up to 15 seconds of messages may be lost on a hard crash or power failure.
+
+**Automatic maintenance** (runs once per hour in the worker thread, off by default):
+
+| Option | Description |
+|--------|-------------|
+| `PurgeDays` | Delete rows older than N days |
+| `MaxSizeMB` | Delete oldest rows until the file is under this size |
+
+Both options are disabled by default — PDW never deletes data without explicit configuration.
+
+**Other features:**
+- Connection test button in the settings dialog
+- Optional activity log (`YYMMDD_pdw_sqlite.log`)
+- Select which fields to write
+
+---
+
 ### RX Quality monitoring
 
 The on-screen RX Quality bar is also tracked over time. When signal quality stays below a configurable threshold for too long, PDW sends an e-mail alert.
@@ -307,8 +368,8 @@ The on-screen RX Quality bar is also tracked over time. When signal quality stay
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Threshold | 25 % | Quality below this triggers the timer |
-| Recovery level | 35 % | Quality above this cancels the timer |
+| Threshold | 80 % | Quality below this triggers the timer |
+| Recovery level | 90 % | Quality above this cancels the timer |
 | Minimum duration | 15 min | How long below threshold before sending |
 | Cooldown | 120 min | Silence period between repeated alerts |
 
@@ -377,7 +438,8 @@ No runtime installer required — PDW ships as a single `.exe`.
    - **Options → SMTP Settings** — e-mail on filter match
    - **Options → Webhook** — HTTP POST on every message
    - **Options → MQTT** — publish to a broker
-   - **Options → MySQL** — persist to database
+   - **Options → MySQL** — persist to MySQL/MariaDB database
+   - **Options → SQLite** — persist to a local database file (no server needed)
    - **Options → Telnet Server** — stream to Telnet clients
    - **Options → RX Quality Alert** — e-mail on signal loss
 
@@ -397,40 +459,36 @@ The PDW executable is intentionally large. OpenSSL, Paho MQTT, and all other thi
 
 ## Changelog highlights
 
+### v3.5.7 (June 2026)
+- **SQLite output feed** — single local file, no DLL, LowWrite mode, optional auto-purge
+
 ### v3.5.6 (June 2026)
-- **MySQL output feed** — native wire-protocol, no external DLLs, three schema modes
-- **RX Quality Alert** — sustained low-quality e-mail notifications
-- **UTF-8 sanitization** for MySQL inserts (invalid byte sequences replaced with `?`)
-- SMTP worker thread race condition fixed (heap corruption on rapid Test-button clicks)
-- MQTT/Webhook/Telnet: raw feed mode added; reliable worker shutdown on application exit
-- Telnet RXQ scoring aligned with CS FlexDecoder reference (cycle-info weighting, small-sample handling)
-- Log rotation and reliable worker joins for all output threads
+- **MySQL output feed** — no external DLLs required, three schema modes
+- **RX Quality Alert** — e-mail notification when signal quality is poor for a sustained period
+- SMTP crash on rapid Test-button clicks fixed
+- Raw feed mode added to MQTT, Webhook, and Telnet
+- Date-stamped log files for all output feeds
 
 ### v3.4 (2026)
-- **Telnet server** on port 8024 — CS FlexDecoder-compatible wire-format; p2kflexMonitor connects without changes
-- RX Quality (`<RXQ:NN>`) and watchdog (`<WD>`) markers
-- RS232 and Audio presence markers with startup-gating (no false recovery events)
-- Reconnection backlog replay window (60 s)
+- **Telnet server** on port 8024 — CS FlexDecoder-compatible wire-format
+- RX Quality (`<RXQ:NN>`), watchdog (`<WD>`), RS232 and Audio presence markers
+- Reconnect backlog replay window (60 s)
 
 ### v3.3 (2026)
-- **High-DPI support** (System DPI Aware manifest + runtime scaling)
-- **SMTP split Subject/Body** field selection
-- SMTP error logging to disk
+- **High-DPI support** — crisp layout on 4K and HiDPI monitors
+- **SMTP split Subject/Body** — choose which fields appear in subject vs. body
 - SMTP encryption combobox (Auto / STARTTLS / SSL)
+- SMTP error logging to disk
 
 ### v3.2 → v3.3 (2026)
 - **MQTT output** with PDW-native and flat/Node-RED JSON formats
-- **Webhook HTTP(S)** output with retry and keep-alive
-- **Windows 11 toast notifications** (replaces legacy balloon API)
-- FLEX fragment reassembly for multi-frame messages
-- SMTP persistent connection; stale-connection detection
+- **Webhook HTTP(S)** output
+- **Windows 11 toast notifications**
+- FLEX multi-frame message reassembly
 - SMTP STARTTLS (port 587) and implicit TLS (port 465)
-- Base64 buffer overflow and dot-stuffing fixes
-- Memory leak fixes; POCSAG duplicate-blocker bug fixed
 - x64 build target added
 - COM port numbers ≥ 10 supported
 - Filter label length increased to 256 characters
-- OpenSSL updated from 0.9.8 → 1.0.1 → 3.5.x
 
 ---
 
