@@ -37,6 +37,28 @@ Enable via **File → Open/Close Logfile → "Reduce disk writes (buffer)"**.
 - For minimum writes on very active networks: 2000 ms / 1024 slots
 - Maximum potential log loss on hard crash equals the flush interval
 
+### Bug fixes
+
+**Large group calls no longer corrupt MQTT and webhook output**
+
+Very large FLEX group calls (e.g. a regional proefalarm hitting ~80 capcodes in one message)
+exceeded the internal MQTT and webhook buffers. The space-separated address list was truncated
+after ~64 capcodes, and the subscribers JSON array was cut off mid-object — after which a closing
+`]` was appended blindly, producing invalid JSON that Node-RED / Home Assistant could not parse.
+
+- MQTT and webhook subscriber buffers raised from 2 KB to 32 KB (now matching the MySQL feed),
+  covering ~170 capcodes with long labels
+- Address-list buffers raised from 512 B to 2 KB
+- The MySQL feed was already correctly sized and was not affected
+
+**Fewer MQTT reconnect errors (`rc=-1`) on idle connections**
+
+The MQTT keep-alive interval was lowered from 60 s to 30 s. Out-of-band TCP resets by the broker,
+NAT, or firewall could leave the connection stale, so the next publish hit a dead socket and logged
+`rc=-1` before retrying. The shorter keep-alive detects a dead connection sooner — reconnecting
+cleanly before the next publish — and keeps NAT/firewall mappings warm so resets occur less often.
+No messages were lost previously; the existing retry already recovered them.
+
 ---
 
 ## New in 3.5.7

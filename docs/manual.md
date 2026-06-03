@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 3.5.8** | Windows 7–11 | FLEX / ReFLEX / POCSAG decoder
+**Version 3.5.8** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -18,6 +18,7 @@
    - 5.2 [Message columns](#52-message-columns)
 6. [File menu](#6-file-menu)
 7. [Monitor menu](#7-monitor-menu)
+   - 7.1 [Statistics window](#71-statistics-window)
 8. [Interface menu](#8-interface-menu)
    - 8.1 [Sound card setup](#81-sound-card-setup)
    - 8.2 [Serial port setup](#82-serial-port-setup)
@@ -37,23 +38,29 @@
     - 10.9 [Program options](#109-program-options)
 11. [Display menu](#11-display-menu)
 12. [Protocols decoded](#12-protocols-decoded)
+    - 12.1 [POCSAG](#121-pocsag)
+    - 12.2 [FLEX and ReFLEX](#122-flex-and-reflex)
+    - 12.3 [ACARS](#123-acars)
+    - 12.4 [MOBITEX](#124-mobitex)
+    - 12.5 [ERMES](#125-ermes)
 13. [Paging message format](#13-paging-message-format)
 14. [Log file format](#14-log-file-format)
-15. [Windows notifications](#15-windows-notifications)
-16. [High-DPI support](#16-high-dpi-support)
-17. [Multi-instance / title bar](#17-multi-instance--title-bar)
-18. [COM ports >= 10](#18-com-ports--10)
-19. [Troubleshooting](#19-troubleshooting)
-20. [Changelog](#20-changelog)
-21. [Credits and license](#21-credits-and-license)
+15. [Support files](#15-support-files)
+16. [Windows notifications](#16-windows-notifications)
+17. [High-DPI support](#17-high-dpi-support)
+18. [Multi-instance / title bar](#18-multi-instance--title-bar)
+19. [COM ports >= 10](#19-com-ports--10)
+20. [Troubleshooting](#20-troubleshooting)
+21. [Changelog](#21-changelog)
+22. [Credits and license](#22-credits-and-license)
 
 ---
 
 ## 1. Introduction
 
-PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
+PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (3.5.8) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. The main additions over the original release are listed in [section 20](#20-changelog).
+This version (3.5.8) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. The main additions over the original release are listed in [section 21](#21-changelog).
 
 ---
 
@@ -72,12 +79,10 @@ Decoding paging signals may be illegal in your country. This software is provide
 | RAM | 32 MB |
 | Disk | 10 MB for the application; extra for log files and the optional database |
 | Sound card | Any Windows-compatible sound card with a line-in or microphone input |
-| Radio | Any scanner or receiver covering the paging frequency band in your area |
+| Radio | Any scanner or receiver covering the frequency band you want to decode |
 | Runtime | Microsoft Visual C++ Redistributable 2017 or later (x86 for the Win32 build, x64 for the 64-bit build). Download from Microsoft if not already installed. |
 
-A serial port interface (hardware slicer) can be used instead of a sound card — see [section 8.2](#82-serial-port-setup).
-
-> **Note:** ACARS, MOBITEX, and ERMES decoding were present in earlier versions of PDW (v1.x) but are not part of this fork. This version focuses on FLEX, ReFLEX, and POCSAG.
+A serial port interface (hardware slicer) can be used instead of a sound card — see [section 8.2](#82-serial-port-setup). Serial port input works on all supported Windows versions including Windows 10 and 11.
 
 ---
 
@@ -93,8 +98,8 @@ A serial port interface (hardware slicer) can be used instead of a sound card �
    - **Tape/Rec Out** — use the radio's tape or record output
 3. Open **Interface → Volume** to open the Windows mixer. Make sure **Line In** or **Mic** is selected as the recording source.
 4. Switch your radio on, set the squelch to its lowest position, and tune to white noise on the VHF band. The signal indicator (top right of the toolbar) should start moving. If it does not, increase the radio volume.
-5. From the **Monitor** menu, select the protocol you want to decode (**POCSAG** or **FLEX**).
-6. Tune to a known FLEX or POCSAG frequency in your area. Messages should appear within a minute. If they do not, try adjusting the volume or try a different configuration in step 2.
+5. From the **Monitor** menu, select the protocol you want to decode.
+6. Tune to a known frequency in your area. Messages should appear within a minute. If they do not, try adjusting the volume or try a different configuration in step 2.
 
 **Custom threshold / centering / resync settings**
 
@@ -107,19 +112,19 @@ If you can decode one baud rate but not another (e.g. POCSAG 1200 works but 2400
 
 ### 4.2 Serial port input
 
-A hardware slicer (serial port interface) converts the discriminator audio to a two- or four-level digital signal and feeds it into the PC's COM port. This gives the best possible signal quality.
+A hardware slicer (serial port interface) converts the discriminator audio to a two- or four-level digital signal and feeds it into the PC's COM port. This gives the best possible signal quality and works on all Windows versions including Windows 10 and 11.
 
-1. Build or obtain a serial port slicer for 2-level (POCSAG) or 4-level (FLEX) FSK.
+1. Build or obtain a serial port slicer for 2-level (POCSAG / ACARS / ERMES) or 4-level (FLEX / MOBITEX) FSK.
 2. Connect the slicer to a spare COM port.
-3. Open **Interface → Setup**, select **Serial** and choose the correct COM port number. COM ports 10 and higher are supported (enter the number directly).
+3. Open **Interface → Setup**, select **Serial** and choose the correct COM port number. COM ports 10 and higher are supported — see [section 19](#19-com-ports--10).
 4. Connect the slicer's audio input to your radio's discriminator output or earphone socket.
-5. Select the protocol from the **Monitor** menu and tune to a paging frequency.
+5. Select the protocol from the **Monitor** menu and tune to the appropriate frequency.
 
 ### 4.3 Discriminator tap
 
 If sound card input gives poor results at any configuration setting, a discriminator tap is the solution. This mod takes the signal directly from the FM discriminator IC of your scanner before the de-emphasis filter, giving a flat frequency response ideal for data decoding.
 
-The tap is a **0.1 uF** capacitor soldered to the discriminator output pin. A shielded wire runs from the capacitor to the sound card line-in or serial port interface. This mod always works when done correctly.
+The tap is a **0.1 uF** capacitor soldered to the discriminator output pin. A shielded wire runs from the capacitor to the sound card line-in or serial port interface. This tap always works when done correctly.
 
 > Discriminator tap modification opens the radio and may void its warranty. If you are not comfortable with soldering, use the earphone output instead.
 
@@ -154,8 +159,9 @@ Click a column header to sort by that column. Double-click a message row to open
 
 | Item | Description |
 |------|-------------|
-| Open/Close Logfile | Start or stop writing decoded messages to a `.log` file |
+| Open/Close Logfile | Start or stop writing decoded messages to a `.log` file; also opens write-buffering and ISO timestamp options |
 | Open/Close Filter Log | Start or stop writing filter-matched messages to a separate `.flt` file |
+| Filters | Open the filter editor (also Ctrl+F) |
 | Print | Print the current message list |
 | Exit | Close PDW |
 
@@ -165,11 +171,21 @@ Log files are date-stamped (`YYMMDD_*.log`) and rotate automatically at midnight
 
 ## 7. Monitor menu
 
-Select which protocol PDW should decode:
+Select which protocol PDW should decode. Only one mode is active at a time.
 
-- **POCSAG** — decodes 512, 1200, and 2400 baud simultaneously
-- **FLEX** — decodes 1600, 3200, and 6400 baud; also ReFLEX
-- **All** — attempt both simultaneously (higher CPU usage)
+| Menu item | Description |
+|-----------|-------------|
+| **POCSAG/FLEX** | Decode POCSAG (512 / 1200 / 2400 baud) and FLEX / ReFLEX (1600 / 3200 / 6400 baud) simultaneously |
+| **ACARS** | Aircraft Communications Addressing and Reporting System (2400 baud) |
+| **MOBITEX** | Mobile packet data network protocol |
+| **ERMES** | European Radio Messaging System |
+| **Statistics...** (Alt+S) | Open the statistics window (see [7.1](#71-statistics-window)) |
+
+### 7.1 Statistics window
+
+Open via **Monitor → Statistics** or press **Alt+S**.
+
+Shows hourly and daily message counts per protocol and type (Alpha / Numeric). Statistics are tracked for all nine protocol/rate combinations: FLEX 6400 / 3200 / 1600, POCSAG 2400 / 1200 / 512, ACARS 2400, MOBITEX, and ERMES. Statistics can be saved to a `.st` file.
 
 ---
 
@@ -183,15 +199,15 @@ See [section 4.1](#41-sound-card-input) for the initial setup. The **Custom** op
 
 ### 8.2 Serial port setup
 
-Select the COM port number and baud rate matching your hardware slicer. COM port numbers 10 and higher can be entered directly in the field. The port is opened immediately after clicking OK.
+Select the COM port number matching your hardware slicer. COM port numbers 10 and higher can be entered directly in the field. The port is opened immediately after clicking OK.
 
 ---
 
 ## 9. Filters
 
-Filters let you assign labels, colours, alerts, and separate log files to specific capcodes, label patterns, or message text patterns. Every incoming message is checked against all filters in order.
+Filters let you assign labels, colours, alerts, and separate log files to specific capcodes, label patterns, or message text patterns. Every incoming message is checked against all active filters in order. There is no hard limit on the number of filters.
 
-Open the filter list via **File → Filters** or press **Ctrl+F**.
+Open the filter editor via **File → Filters** or press **Ctrl+F**.
 
 ### 9.1 Filter fields
 
@@ -209,17 +225,17 @@ Each filter can independently trigger any combination of the following:
 | Action | Description |
 |--------|-------------|
 | **Sound** | Play a WAV file |
-| **E-mail** | Send an SMTP alert (uses Settings from Options → SMTP) |
+| **E-mail** | Send an SMTP alert (uses settings from Options → SMTP) |
 | **Command** | Run an external program or script |
-| **Log 1/2/3** | Write matched messages to up to three separate log files |
-| **Monitor only** | Show on screen but do not include in the main log or feed outputs |
+| **Log 1 / 2 / 3** | Write matched messages to up to three separate log files |
+| **Monitor only** | Show on screen but exclude from main log and feed outputs |
 | **Reject** | Suppress this message entirely — do not show or log |
 
 Filter labels can be up to **256 characters** long.
 
 ### 9.3 Search while typing
 
-In the filter list dialog, start typing in the search box to filter the displayed entries in real time. This is useful when you have hundreds of filters.
+In the filter editor, start typing in the search box to filter the displayed entries in real time. This is useful when you have hundreds of filters.
 
 ---
 
@@ -236,14 +252,14 @@ PDW includes a fully self-contained SMTP client (no external library).
 | Server | Hostname or IP of your SMTP server |
 | Port | 465 for implicit TLS; 587 or 25 for STARTTLS |
 | Username / Password | LOGIN or PLAIN authentication |
-| From / To | Sender and recipient addresses |
+| From / To | Sender and recipient addresses; multiple recipients separated by semicolons |
 | Subject / Body fields | Choose which message fields appear in the subject line and which in the body |
 
 **Encryption is automatic:** port 465 uses implicit TLS (SSL from the first byte); ports 587 and 25 use STARTTLS with a mandatory second EHLO over the encrypted channel. No separate setting is needed.
 
 **Split Subject / Body mode** lets you choose different fields for the subject line and the message body independently. This is useful for push notification services (such as pushover.net) where the subject becomes the notification title and the body becomes the detail text.
 
-SMTP activity is logged to `YYMMDD_mail.log`. Click **Test** in the dialog to send a test message. Multiple recipients can be entered separated by semicolons.
+SMTP activity is logged to `YYMMDD_mail.log`. Click **Test** in the dialog to send a test message.
 
 ### 10.2 Webhook
 
@@ -284,7 +300,7 @@ Publishes every decoded page to an MQTT broker. Uses the static-linked Paho C li
 |---------|-------------|
 | Broker | Hostname or IP |
 | Port | Default 1883; use 8883 for TLS |
-| Topic | Base topic; individual fields are published as sub-topics |
+| Topic | Base topic |
 | Client ID | MQTT client identifier |
 | Fields bitmask | Choose which fields to publish |
 | JSON format | PDW-native or Flat / Node-RED |
@@ -569,15 +585,106 @@ Recommended for busy POCSAG/FLEX networks where many messages per second can cau
 
 ## 12. Protocols decoded
 
-| Protocol | Rates | Types |
-|----------|-------|-------|
-| POCSAG | 512 / 1200 / 2400 baud | Alpha, Numeric, Tone |
-| FLEX | 1600 / 3200 / 6400 baud | Alpha, Numeric, Tone, Short-Instruction, Frame-Info, Group calls |
-| ReFLEX | same as FLEX | Extended FLEX protocol |
+### 12.1 POCSAG
 
-**FLEX multi-frame reassembly:** long FLEX alpha messages that span multiple frames are accumulated and displayed as a single complete string.
+POCSAG (Post Office Code Standardisation Advisory Group) is the most common paging protocol worldwide.
 
-**FLEX group calls:** a group capcode (in the range 2029568–2029583) addresses multiple individual pagers simultaneously. PDW displays all subscriber capcodes and their labels together with the group message.
+| Rate | Usage |
+|------|-------|
+| 512 baud | Older systems |
+| 1200 baud | Most common |
+| 2400 baud | High-speed systems |
+
+PDW decodes all three rates simultaneously when POCSAG/FLEX mode is active. Message types: **Alpha**, **Numeric**, **Tone**.
+
+Typical paging frequencies (Europe):
+
+| Range | Notes |
+|-------|-------|
+| 136–139 MHz NFM | |
+| 153–154 MHz NFM | |
+| 454–455 MHz NFM | |
+| 466–467 MHz NFM | P2000 / Semafoon (NL/BE) |
+| 35–36 MHz NFM | |
+| 43–44 MHz NFM | |
+
+### 12.2 FLEX and ReFLEX
+
+FLEX is a high-speed paging protocol developed by Motorola.
+
+| Rate | Notes |
+|------|-------|
+| 1600 baud | 2-level FSK |
+| 3200 baud | 4-level FSK |
+| 6400 baud | 4-level FSK |
+
+PDW decodes all three rates simultaneously. Message types: **Alpha**, **Numeric**, **Tone**, **Short-Instruction**, **Frame-Info**, **Group calls**.
+
+**Multi-frame reassembly:** long FLEX alpha messages that span multiple frames are accumulated and displayed as a single complete string.
+
+**Group calls:** a group capcode (range 2029568–2029583) addresses multiple individual pagers simultaneously. PDW displays all subscriber capcodes and their labels together with the group message.
+
+**ReFLEX** is an extended version of FLEX supporting two-way paging. PDW decodes ReFLEX using the same decoder path.
+
+### 12.3 ACARS
+
+ACARS (Aircraft Communications Addressing and Reporting System) is used for data exchange between aircraft and ground stations.
+
+PDW decodes ACARS at **2400 baud** via sound card input.
+
+**ACARS frequencies:**
+
+| Frequency | Region |
+|-----------|--------|
+| 131.550 MHz | Primary — USA, Canada, Asia/Pacific |
+| 131.725 MHz | Primary — Europe |
+| 130.025 MHz | Secondary — USA |
+| 129.125 MHz | Tertiary — USA |
+| 131.475 MHz | Air Canada (private) |
+| 131.525 MHz | Tertiary — Europe |
+| 131.450 MHz | Primary — Japan |
+
+**ACARS database files:** PDW can look up airline codes, aircraft types, ground station IDs, and route information from optional database files placed in the PDW application directory:
+
+| File | Content |
+|------|---------|
+| `label.df` | Message label descriptions |
+| `aircraft.df` | Aircraft type codes |
+| `country.df` | Country codes |
+| `airline.df` | Airline codes |
+| `ground.df` | Ground station IDs |
+| `routes.df` | Flight route information |
+
+These files are optional. If not present, PDW still decodes ACARS messages but without the lookup labels.
+
+### 12.4 MOBITEX
+
+MOBITEX is a mobile packet data network protocol used primarily for paging and data terminals.
+
+**First-time setup — frame sync:**
+
+When decoding a Mobitex network for the first time you need to set the correct frame sync for your local network:
+
+1. Tune to an active Mobitex signal.
+2. Set the **Invert data** option in Interface Setup manually (Auto does not work until the frame sync is known).
+3. Watch the 4-digit frame sync numbers on the left side of the display. The number that appears most often and occasionally has message data alongside it is the correct one. The common European frame sync is **EB90**.
+4. Open **Options → Program** and enable **Check Frame Sync**.
+5. Enter your 4-digit frame sync number in the **Frame Sync** field.
+
+**Base station labels (base-ids.txt):** PDW reads `base-ids.txt` from the application directory to display base station names in the title bar. The format is one entry per line:
+
+```
+# base-ids.txt
+0001=London
+001B=Amsterdam
+011B=Zoetermeer
+```
+
+Lines starting with `#` are comments. The ID is the hexadecimal Base-ID as shown in the PDW display. If the file is not present, the raw numeric Base-ID is shown instead.
+
+### 12.5 ERMES
+
+ERMES (European Radio Messaging System) is a pan-European paging standard operating at 6.25 kHz channel spacing. PDW decodes ERMES tone, numeric, and alphanumeric messages including error detection and correction.
 
 ---
 
@@ -618,7 +725,26 @@ Filter log (`.flt`) lines follow the same format but include the matched label.
 
 ---
 
-## 15. Windows notifications
+## 15. Support files
+
+PDW reads several optional support files from the application directory. None are required for basic operation.
+
+| File | Used by | Description |
+|------|---------|-------------|
+| `filters.ini` | Filter system | Your filter rules. Created and updated by PDW when you save filters. |
+| `pdw.ini` | All | Main settings file. Created by PDW on first run. |
+| `language.df` | UI | Interface language strings. Place in the PDW directory to override default English text. |
+| `base-ids.txt` | MOBITEX | Maps hexadecimal Base-ID codes to readable station names. Format: `ID=Name` per line, `#` for comments. |
+| `label.df` | ACARS | ACARS message label descriptions. |
+| `aircraft.df` | ACARS | Aircraft type code lookup. |
+| `country.df` | ACARS | Country code lookup. |
+| `airline.df` | ACARS | Airline code lookup. |
+| `ground.df` | ACARS | Ground station ID lookup. |
+| `routes.df` | ACARS | Flight route lookup. |
+
+---
+
+## 16. Windows notifications
 
 Press **Ctrl+T** to send a test Windows toast notification. PDW uses the native `IUserNotification` COM interface (Action Center toast), not the obsolete balloon-tip API that Windows 10 and Windows 11 no longer display.
 
@@ -629,43 +755,49 @@ The system tray icon provides:
 
 ---
 
-## 16. High-DPI support
+## 17. High-DPI support
 
 PDW declares `System DPI Aware` in its application manifest. Fonts, toolbar, and layout are recalculated from the actual display DPI at startup. PDW displays correctly on 125 %, 150 %, and 200 % scaled (4K / HiDPI) monitors without blurring or clipping.
 
 ---
 
-## 17. Multi-instance / title bar
+## 18. Multi-instance / title bar
 
 When running two PDW windows simultaneously (for example one decoding audio and one on a serial port), the title bar shows the active **[MODE]** — FLEX or POCSAG — so you can immediately see which window is which.
 
 ---
 
-## 18. COM ports >= 10
+## 19. COM ports >= 10
 
 COM port numbers 10 and higher are fully supported. Enter the port number directly in the Interface Setup dialog. PDW opens the port using the `\\.\COMn` notation required by Windows for high-numbered ports.
 
 ---
 
-## 19. Troubleshooting
+## 20. Troubleshooting
 
 **No messages are decoded**
 - Check that the signal indicator bar (top right) is moving. If not, the audio signal is not reaching PDW. Increase radio volume or check the cable.
 - Make sure the correct input source (Line In / Mic) is selected in the Windows recording mixer.
 - Check that the correct protocol is selected in the Monitor menu.
 - Try all four configurations in Interface Setup (Discriminator, Earphone, Speaker Out, Tape/Rec Out).
-- Try a discriminator tap for the best signal quality.
+- A discriminator tap gives the best signal quality and often resolves persistent issues.
 
 **Poor decode rate / many errors**
 - Try the Custom threshold settings (see [section 4.1](#41-sound-card-input)).
 - Reduce other audio sources that may interfere.
 - A discriminator tap will usually solve persistent quality issues.
 
+**MOBITEX decodes nothing**
+- Verify the frame sync number is set correctly for your network (see [section 12.4](#124-mobitex)).
+- Make sure Invert data is set correctly — Auto does not work until the frame sync is known.
+
+**ACARS: no airline / aircraft labels**
+- The ACARS database files (`label.df`, `airline.df`, etc.) are missing from the PDW directory. PDW still decodes messages but cannot look up labels.
+
 **SMTP test fails**
 - Verify server, port, username, and password.
 - Port 465 = implicit TLS; port 587 = STARTTLS. Do not mix them.
 - Check `YYMMDD_mail.log` in the PDW directory for detailed error messages.
-- If the server requires `caching_sha2_password` (MySQL 8.0+), create the account with `mysql_native_password` instead.
 
 **Telnet clients do not connect**
 - Check that the Telnet server is enabled in Options and that the port (default 8024) is not blocked by a firewall.
@@ -684,7 +816,7 @@ COM port numbers 10 and higher are fully supported. Enter the port number direct
 
 ---
 
-## 20. Changelog
+## 21. Changelog
 
 ### v3.5.8
 - **Central Log Manager** — all log output flows through one consistent path; uniform `YYYY-MM-DD HH:MM:SS.mmm` timestamps; daily rotation for every log type
@@ -724,7 +856,7 @@ COM port numbers 10 and higher are fully supported. Enter the port number direct
 
 ---
 
-## 21. Credits and license
+## 22. Credits and license
 
 PDW is licensed under the **GNU General Public License v3.0** (GPL-3.0). All additions in this repository are released under the same terms. See `LICENSE` for the full text.
 

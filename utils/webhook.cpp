@@ -59,9 +59,13 @@ static int   g_iWebhookFields          = 0x7F;  // all 7 optional fields on by d
 // ---------------------------------------------------------------------------
 
 #define WEBHOOK_QUEUE_SIZE       64
-#define WEBHOOK_ADDR_LEN         512
+// FIX [WebhookGroupTrunc]: ADDR_LEN 512 -> 2048 en SUBSCRIBERS_LEN 2048 -> 32768 (gelijk aan
+// MySQL). Identiek probleem als MQTT: grote groepsoproepen (bv. GROUP15 met ~80 capcodes)
+// overschreden beide buffers; de subscribers-JSON-array kapte midden in een object af waarna
+// er blind een ']' achter werd geplakt -> ongeldige JSON. 32768 dekt ~170 lange-label capcodes.
+#define WEBHOOK_ADDR_LEN         2048
 #define WEBHOOK_MSG_LEN          (MAX_STR_LEN + 64)
-#define WEBHOOK_SUBSCRIBERS_LEN  2048   // pre-built JSON array for WHF_LABEL_ARRAY
+#define WEBHOOK_SUBSCRIBERS_LEN  32768   // pre-built JSON array for WHF_LABEL_ARRAY
 
 typedef struct {
     char     szAddress     [WEBHOOK_ADDR_LEN];
@@ -551,7 +555,10 @@ static void DoSend(const WebhookJob *job)
     // FIX [JSON UTF-8]: \u00XX escaping expands each byte up to 6 chars and the
     // PDW-native format emits the message twice; size for that worst case so an
     // encrypted/binary or long assembled message is never truncated into invalid JSON.
-    char jsonBody[2 * 6 * WEBHOOK_MSG_LEN + 6 * WEBHOOK_ADDR_LEN + WEBHOOK_SUBSCRIBERS_LEN + 1024];
+    // FIX [WebhookGroupTrunc]: static i.p.v. stack — met SUBSCRIBERS_LEN=32768 zou deze buffer
+    // ~108 KB op de stack zijn. Deze functie draait uitsluitend op de worker-thread, dus static
+    // is veilig en houdt de threadstack klein.
+    static char jsonBody[2 * 6 * WEBHOOK_MSG_LEN + 6 * WEBHOOK_ADDR_LEN + WEBHOOK_SUBSCRIBERS_LEN + 1024];
     if (g_bPagermonFormat)
         BuildJSONFlat(jsonBody, sizeof(jsonBody), szAddress, job);
     else

@@ -83,9 +83,14 @@ static int  g_iTopicSuffix     = 0;    // 0=base topic only, 1=base/{capcode}
 // ---------------------------------------------------------------------------
 
 #define MQTT_QUEUE_SIZE       64
-#define MQTT_ADDR_LEN         512
+// FIX [MqttGroupTrunc]: ADDR_LEN 512 -> 2048 en SUBSCRIBERS_LEN 2048 -> 32768 (gelijk aan
+// MySQL). Grote groepsoproepen (bv. GROUP15 met ~80 capcodes) overschreden beide buffers:
+// de spatie-gescheiden adreslijst kapte af na ~64 capcodes (data-verlies) en de subscribers-
+// JSON-array kapte midden in een object af, waarna MqttFlushGroup er blind een ']' achter
+// plakte -> ongeldige JSON die Node-RED/HA niet parst. 32768 dekt ~170 lange-label capcodes.
+#define MQTT_ADDR_LEN         2048
 #define MQTT_MSG_LEN          (MAX_STR_LEN + 64)
-#define MQTT_SUBSCRIBERS_LEN  2048
+#define MQTT_SUBSCRIBERS_LEN  32768
 
 typedef struct {
     char     szAddress     [MQTT_ADDR_LEN];
@@ -412,7 +417,12 @@ static BOOL ClientConnect(void)
     if (!g_mqttClient && !ClientCreate()) return FALSE;
 
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    conn_opts.keepAliveInterval = 60;
+    // FIX [MqttKeepAlive]: 60 -> 30s. Paho's achtergrond-thread pingt op dit interval; bij 60s
+    // bleef isConnected() te lang stale na een out-of-band TCP-reset (broker/NAT/firewall) zodat
+    // de eerstvolgende publish een dode socket raakte -> rc=-1 + retry. Bij 30s wordt de dode
+    // socket sneller gedetecteerd en reconnect EnsureConnected() schoon VOOR de publish (geen
+    // foutregel), en blijven NAT/firewall-mappings warmer zodat de reset minder vaak optreedt.
+    conn_opts.keepAliveInterval = 30;
     conn_opts.cleansession      = 1;
     conn_opts.connectTimeout    = 5;
 
@@ -452,7 +462,10 @@ static void DoSend(const MqttJob *job)
     // FIX [JSON UTF-8]: \u00XX escaping expands each byte up to 6 chars and the
     // PDW-native format emits the message twice; size for that worst case so an
     // encrypted/binary or long assembled message is never truncated into invalid JSON.
-    char jsonBody[2 * 6 * MQTT_MSG_LEN + 6 * MQTT_ADDR_LEN + MQTT_SUBSCRIBERS_LEN + 1024];
+    // FIX [MqttGroupTrunc]: static i.p.v. stack — met SUBSCRIBERS_LEN=32768 zou deze buffer
+    // ~108 KB op de stack zijn. DoSend draait uitsluitend op de worker-thread, dus static is
+    // veilig en houdt de threadstack klein.
+    static char jsonBody[2 * 6 * MQTT_MSG_LEN + 6 * MQTT_ADDR_LEN + MQTT_SUBSCRIBERS_LEN + 1024];
     if (g_bFlatJson)
         BuildJSONFlat(jsonBody, sizeof(jsonBody), szAddress, job);
     else
