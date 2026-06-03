@@ -103,6 +103,7 @@ BEGIN
         MENUITEM "&SMTP/Email...\tCtrl-M",      IDM_MAIL
         MENUITEM "&Webhook...\tCtrl-W",         IDM_WEBHOOK
         MENUITEM "MQ&TT...\tCtrl-Q",            IDM_MQTT
+        MENUITEM "Telnet &Server...\tCtrl-N",   IDM_TELNETSERVER
         MENUITEM "RX &Quality Alert...",        IDM_RXQUAL_ALERT
         MENUITEM "&MySQL...",                   IDM_MYSQL
         MENUITEM SEPARATOR
@@ -419,7 +420,8 @@ BEGIN
     EDITTEXT        IDC_BLOCKDUPTIMER,271,41,9,13,ES_CENTER | ES_AUTOHSCROLL | ES_NUMBER
     CONTROL         "Log blocked messages to 'blocked.txt'",IDC_BLOCKEDTXT,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,43,140,10
-    CONTROL         "Convert '>>' character to linefeed",IDC_LINEFEEDS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,15,62,122,10
+    CONTROL         "Convert '>>' character to linefeed",IDC_LINEFEEDS,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,15,62,122,10
     CONTROL         "Separate/group messages with empty line",IDC_SEPARATOR,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,142,62,154,10
     CONTROL         "Also in filter window",IDC_SEPARATOR_FILTER,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,152,73,144,10
@@ -867,38 +869,39 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,208,224,44,14
 END
 
-TELNETSERVER_DLGBOX DIALOG 10, 10, 340, 296
+TELNETSERVER_DLGBOX DIALOG 10, 10, 340, 305
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Telnet Server Settings"
 FONT 8, "Verdana"
 BEGIN
     CONTROL         "Enable Telnet server",IDC_TS_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,100,10
-    LTEXT           "Bind address",IDC_STATIC,8,26,44,8
-    EDITTEXT        IDC_TS_BIND,56,24,96,13,ES_AUTOHSCROLL
-    LTEXT           "(0.0.0.0 = all)",IDC_STATIC,156,26,76,8
-    LTEXT           "Port",IDC_STATIC,8,44,16,8
-    EDITTEXT        IDC_TS_PORT,56,42,40,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "(default 8024)",IDC_STATIC,100,44,76,8
-    LTEXT           "Max clients",IDC_STATIC,8,62,40,8
-    EDITTEXT        IDC_TS_MAXCLIENTS,56,60,40,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "(1-25)",IDC_STATIC,100,62,40,8
-    LTEXT           "Watchdog",IDC_STATIC,8,80,40,8
-    EDITTEXT        IDC_TS_WDSEC,56,78,40,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "seconds (<WD> heartbeat)",IDC_STATIC,100,80,120,8
-    LTEXT           "Buffer time",IDC_STATIC,8,98,40,8
-    EDITTEXT        IDC_TS_BUFFERTIME,56,96,40,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "seconds (reconnect replay)",IDC_STATIC,100,98,120,8
+    LTEXT           "LAN use only - do not expose this port to the internet. Check your firewall rules.",IDC_STATIC,8,21,324,8
+    LTEXT           "Bind address",IDC_STATIC,8,35,44,8
+    EDITTEXT        IDC_TS_BIND,56,33,96,13,ES_AUTOHSCROLL
+    LTEXT           "(0.0.0.0 = all)",IDC_STATIC,156,35,76,8
+    LTEXT           "Port",IDC_STATIC,8,53,16,8
+    EDITTEXT        IDC_TS_PORT,56,51,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "(default 8024)",IDC_STATIC,100,53,76,8
+    LTEXT           "Max clients",IDC_STATIC,8,71,40,8
+    EDITTEXT        IDC_TS_MAXCLIENTS,56,69,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "(1-25)",IDC_STATIC,100,71,40,8
+    LTEXT           "Watchdog",IDC_STATIC,8,89,40,8
+    EDITTEXT        IDC_TS_WDSEC,56,87,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "seconds (<WD> heartbeat)",IDC_STATIC,100,89,120,8
+    LTEXT           "Buffer time",IDC_STATIC,8,107,40,8
+    EDITTEXT        IDC_TS_BUFFERTIME,56,105,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "seconds (reconnect replay)",IDC_STATIC,100,107,120,8
     CONTROL         "Log lifecycle events (pdw_telnet_server.log)",IDC_TS_LOGTOFILE,
-                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,116,200,10
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,125,200,10
     CONTROL         "Log wire-format messages (pdw_flexdecoder.log)",IDC_TS_WIRELOG,
-                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,128,220,10
-    GROUPBOX        "Connected clients",IDC_STATIC,8,146,324,68
-    LISTBOX         IDC_TS_CLIENTS,14,158,312,52,LBS_USETABSTOPS | LBS_NOINTEGRALHEIGHT | NOT WS_BORDER | WS_VSCROLL | WS_TABSTOP
-    GROUPBOX        "Recent activity",IDC_STATIC,8,218,324,52
-    LISTBOX         IDC_TS_ACTIVITY,14,230,312,36,LBS_NOINTEGRALHEIGHT | NOT WS_BORDER | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Status: Disabled",IDC_TS_STATUS,8,274,224,8
-    DEFPUSHBUTTON   "OK",IDOK,232,278,44,14
-    PUSHBUTTON      "Cancel",IDCANCEL,288,278,44,14
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,137,220,10
+    GROUPBOX        "Connected clients",IDC_STATIC,8,153,324,68
+    LISTBOX         IDC_TS_CLIENTS,14,165,312,52,LBS_USETABSTOPS | LBS_NOINTEGRALHEIGHT | NOT WS_BORDER | WS_VSCROLL | WS_TABSTOP
+    GROUPBOX        "Recent activity",IDC_STATIC,8,227,324,52
+    LISTBOX         IDC_TS_ACTIVITY,14,239,312,36,LBS_NOINTEGRALHEIGHT | NOT WS_BORDER | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Status: Disabled",IDC_TS_STATUS,8,283,224,8
+    DEFPUSHBUTTON   "OK",IDOK,232,287,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,288,287,44,14
 END
 
 RXQUAL_ALERT_DLGBOX DIALOG 10, 10, 316, 196
@@ -977,7 +980,6 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,208,274,44,14
 END
 
-// FIX [MySQLFeed]: MySQL feed settings dialog
 MYSQL_DLGBOX DIALOGEX 10, 10, 260, 248
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "MySQL Settings"
@@ -1282,6 +1284,10 @@ BEGIN
     END
 
     DISPLAYOPTIONSDLGBOX, DIALOG
+    BEGIN
+    END
+
+    TELNETSERVER_DLGBOX, DIALOG
     BEGIN
     END
 

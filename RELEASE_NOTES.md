@@ -12,7 +12,7 @@ CryptAPI (advapi32.dll, always present on Windows). Authentication uses
   - **Classic** — compatible with existing `meld2mysql.exe` tooling (capcode / melding / label)
   - **Extended** — all eight PDW text fields stored as strings
   - **Optimized** — type-correct columns (timestamps, integers, label colour) — *recommended for
-    new deployments*; see `PDW-SCHEMA.md` for full column reference.
+    new deployments*; see `README.md` for full column reference and example queries.
 - Worker thread with a 64-slot ring buffer and exponential-backoff reconnect (1 s → 2 s → 4 s →
   30 s cap).
 - Connection test button in the settings dialog.

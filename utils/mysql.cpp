@@ -871,7 +871,7 @@ static void BuildCreateTable(char *out, int outLen)
             "CREATE TABLE IF NOT EXISTS `%s` ("
             "`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,"
             "`ontvangen` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-            "`capcode` INT UNSIGNED NOT NULL DEFAULT 0,"
+            "`capcode` CHAR(9) NOT NULL DEFAULT '',"
             "`mode` VARCHAR(15) NOT NULL DEFAULT '',"
             "`msg_type` VARCHAR(10) NOT NULL DEFAULT '',"
             "`bitrate` SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
@@ -958,7 +958,9 @@ static int BuildInsertOptimized(char *out, int outLen, const MysqlJob *job)
     char szDateTime[32];
     ConvertDateTime(job->szDate, job->szTime, szDateTime, sizeof(szDateTime));
 
-    unsigned long capcode = strtoul(job->szCapcode, NULL, 10);
+    // FIX [MysqlCapcodeChar]: capcode als string bewaren zodat leading zeros (ASTRID) intact blijven
+    char escCap[32];
+    MySqlEscape(escCap, sizeof(escCap), job->szCapcode ? job->szCapcode : "");
     int           bitrate = atoi(job->szBitrate);
     int           fields  = g_iFields;
 
@@ -972,7 +974,7 @@ static int BuildInsertOptimized(char *out, int outLen, const MysqlJob *job)
     cPos += _snprintf(colBuf + cPos, (int)sizeof(colBuf) - cPos - 1,
                       "`ontvangen`, `capcode`");
     vPos += _snprintf(valBuf + vPos, MYSQL_MAX_QUERY - vPos - 1,
-                      "'%s', %lu", szDateTime, capcode);
+                      "'%s', '%s'", szDateTime, escCap);
 
     if (fields & MYF_MODE) {
         char esc[64];
@@ -1092,12 +1094,14 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
             ga->szSubscr[ga->sPos++] = ',';
     }
 
-    /* Append {"capcode":N,"label":"escaped"[,"color":"#RRGGBB"]} entry,
+    /* Append {"capcode":"0123456","label":"escaped"[,"color":"#RRGGBB"]} entry,
        leave room for closing "]" */
     char escLabel[FILTER_LABEL_LEN * 2 + 4];
     JsonEscapeStr(escLabel, sizeof(escLabel), label ? label : "");
 
-    unsigned long cc = strtoul(capcode ? capcode : "0", NULL, 10);
+    // FIX [MysqlCapcodeChar]: capcode als string zodat leading zeros (ASTRID) intact blijven
+    char escCc[32];
+    JsonEscapeStr(escCc, sizeof(escCc), capcode ? capcode : "");
     int written;
     /* FIX [WebGroupColor]: kleur per abonnee meeschrijven zodat de website de
        capcode-labels onder een groepsbericht in hun eigen kleur kan tonen. */
@@ -1106,13 +1110,13 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
         JsonEscapeStr(escColor, sizeof(escColor), labelColor);
         written = _snprintf(ga->szSubscr + ga->sPos,
                             MYSQL_SUBSCRIBERS_LEN - ga->sPos - 2, /* -2 for final "]" + NUL */
-                            "{\"capcode\":%lu,\"label\":\"%s\",\"color\":\"%s\"}",
-                            cc, escLabel, escColor);
+                            "{\"capcode\":\"%s\",\"label\":\"%s\",\"color\":\"%s\"}",
+                            escCc, escLabel, escColor);
     } else {
         written = _snprintf(ga->szSubscr + ga->sPos,
                             MYSQL_SUBSCRIBERS_LEN - ga->sPos - 2, /* -2 for final "]" + NUL */
-                            "{\"capcode\":%lu,\"label\":\"%s\"}",
-                            cc, escLabel);
+                            "{\"capcode\":\"%s\",\"label\":\"%s\"}",
+                            escCc, escLabel);
     }
     if (written > 0) { ga->sPos += written; ga->nSubscr++; }
     else             { ga->sPos = sPosBack; } /* roll back comma — entry didn't fit, skip silently */
