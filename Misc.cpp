@@ -23,6 +23,7 @@
 #include "utils\mqtt.h"
 #include "utils\telnet_server.h"
 #include "utils\mysql.h"
+#include "utils\sqlite_feed.h"   // FIX [SqliteFeed]
 #include "utils\rxq.h"
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 #include "utils\logmanager.h"
@@ -588,6 +589,7 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 			WebhookFlushGroup(groupbit);
 			MqttFlushGroup(groupbit);
 			if (Profile.mysql_enabled) MysqlFlushGroup(groupbit); // FIX [MySQLFeed]: flush group row with accumulated subscribers
+			if (Profile.sqlite_enabled) SqliteFlushGroup(groupbit); // FIX [SqliteFeed]
 			TrayBalloonFlush(); // FIX [TrayBalloon]
 		}
 		else
@@ -1808,6 +1810,45 @@ void ShowMessage()
 			            mysqlMatchType, szLabelColorHex);
 		}
 		// bGroupcode (iConvertingGroupcall > 0): stored by MysqlFlushGroup from ConvertGroupcall.
+	}
+
+	// FIX [SqliteFeed]: SQLite INSERT — zelfde groep-/non-groep logica als de MySQL-feed hierboven.
+	if (Profile.sqlite_enabled)
+	{
+		int sqliteMatchType = bFILTERED ? 1 : (bMONITOR_ONLY ? 2 : 0);
+
+		char szLabelColorHex[8] = "";
+		if (iMatch >= 0 && Profile.filters[iMatch].label_enabled && Profile.filters[iMatch].label[0])
+		{
+			int ci = Profile.filters[iMatch].label_color;
+			if (ci >= 0 && ci < 17)
+			{
+				COLORREF cr = Profile.color_filterlabel[ci];
+				_snprintf(szLabelColorHex, sizeof(szLabelColorHex) - 1, "#%02X%02X%02X",
+				          GetRValue(cr), GetGValue(cr), GetBValue(cr));
+				szLabelColorHex[sizeof(szLabelColorHex) - 1] = '\0';
+			}
+		}
+
+		if (iConvertingGroupcall > 0 && !bGroupcode)
+		{
+			SqliteGroupAccumulate(Current_MSG[MSG_CAPCODE], szCurrentLabel[0],
+			                      iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			                      Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+			                      Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+			                      sqliteMatchType, szLabelColorHex,
+			                      iConvertingGroupcall - 1);
+		}
+		else if (!iConvertingGroupcall)
+		{
+			SqliteNotify(Current_MSG[MSG_CAPCODE],
+			             iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			             szCurrentLabel[0],
+			             Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+			             Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
+			             sqliteMatchType, szLabelColorHex);
+		}
+		// bGroupcode: stored by SqliteFlushGroup from ConvertGroupcall.
 	}
 
 	// Telnet-server fan-out — reads Current_MSG[] directly, emits one wire-line

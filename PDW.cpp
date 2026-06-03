@@ -318,6 +318,7 @@
 #include "utils\mqtt.h"
 #include "utils\telnet_server.h"
 #include "utils\mysql.h"
+#include "utils\sqlite_feed.h"   // FIX [SqliteFeed]
 #include "utils\debuglog.h"
 #include "utils\logmanager.h"
 #include "RxQualAlertDlg.h"		// FIX [RxQualAlert]
@@ -558,8 +559,8 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	// FIX [RxQualAlert]: RX quality e-mail alert defaults
 	Profile.bRxQualAlertEnabled = false;
 	Profile.szRxQualMailTo[0]   = '\0';
-	Profile.nRxQualThreshold    = 25;
-	Profile.nRxQualRecover      = 35;
+	Profile.nRxQualThreshold    = 80;
+	Profile.nRxQualRecover      = 90;
 	Profile.nRxQualMinutes      = 15;
 	Profile.nRxQualCooldown     = 120;
 
@@ -1636,6 +1637,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 												 hWnd, (DLGPROC) MysqlDlgProc, 0L);
 				break;
 
+				case IDM_SQLITE:		// FIX [SqliteFeed]
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(SQLITE_DLGBOX),
+												 hWnd, (DLGPROC) SqliteDlgProc, 0L);
+				break;
+
 				case IDM_DEBUGLOG:
 					Profile.bDebugLog = !Profile.bDebugLog;
 					CheckMenuItem(GetMenu(hWnd), IDM_DEBUGLOG,
@@ -2063,6 +2069,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
 		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
 		MysqlDestroy();    // FIX [MySQLFeed]: shutdown + DeleteCriticalSection
+		SqliteDestroy();   // FIX [SqliteFeed]: shutdown + DeleteCriticalSection
 		TelnetServerDestroy();
 		MissedGroupcallSessionSummary();  // FIX [GroupCallLog]: write X/Y counters to missed-groupcalls.log
 		LogManager::Get().Shutdown();
@@ -10301,8 +10308,8 @@ BOOL FAR PASCAL MysqlDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemText(hDlg, IDC_MYSQL_TABLE,          Profile.mysql_table[0] ? Profile.mysql_table : "alarmeringen");
 		{
 			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Classic: meld2mysql.exe compatible (capcode/melding/label)");
-			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Extended: alle 8 PDW tekstvelden als strings");
-			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Optimized: type-correcte kolommen (aanbevolen)");
+			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Extended: all 8 PDW text fields as strings");
+			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Optimized: type-correct columns (recommended)");
 			int iSel = Profile.mysql_schema;
 			if (iSel < 0 || iSel > 2) iSel = MYSQL_SCHEMA_OPTIMIZED;
 			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_SETCURSEL, (WPARAM)iSel, 0);
@@ -10398,6 +10405,119 @@ BOOL FAR PASCAL MysqlDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	}
 	return (FALSE);
 } // end of MysqlDlgProc
+
+
+// FIX [SqliteFeed]: SQLite feed settings dialog
+BOOL FAR PASCAL SqliteDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_SQLITE_ENABLED,      Profile.sqlite_enabled ? BST_CHECKED : BST_UNCHECKED);
+		SetDlgItemText(hDlg, IDC_SQLITE_PATH,          Profile.sqlite_path);
+		SetDlgItemText(hDlg, IDC_SQLITE_TABLE,         Profile.sqlite_table[0] ? Profile.sqlite_table : "alarmeringen");
+		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_MODE,    (Profile.sqlite_fields & SQF_MODE)     ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_TYPE,    (Profile.sqlite_fields & SQF_MSG_TYPE) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_BITRATE, (Profile.sqlite_fields & SQF_BITRATE)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_MESSAGE, (Profile.sqlite_fields & SQF_MESSAGE)  ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_LABEL,   (Profile.sqlite_fields & SQF_LABEL)    ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_SQLITE_LOWWRITE,      Profile.sqlite_lowWrite    ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hDlg, IDC_SQLITE_PURGE_EN,      Profile.sqlite_purgeEnabled ? BST_CHECKED : BST_UNCHECKED);
+		SetDlgItemInt (hDlg, IDC_SQLITE_PURGE_DAYS,    Profile.sqlite_purgeDays > 0 ? Profile.sqlite_purgeDays : 30, FALSE);
+		SetDlgItemInt (hDlg, IDC_SQLITE_MAXSIZE,       Profile.sqlite_maxSizeMB,    FALSE);
+		CheckDlgButton(hDlg, IDC_SQLITE_LOG,           Profile.sqlite_logToFile   ? BST_CHECKED : BST_UNCHECKED);
+		SetDlgItemText(hDlg, IDC_SQLITE_STATUS,        "Status: Idle");
+		SqliteSetStatusWnd(hDlg);
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_DESTROY:
+		SqliteSetStatusWnd(NULL);
+		break;
+
+	case WM_SQLITE_STATUS:
+	{
+		char szStatus[64];
+		switch ((int)wParam)
+		{
+		case SQS_IDLE:     strcpy(szStatus, "Status: Idle");      break;
+		case SQS_WRITING:  strcpy(szStatus, "Status: Writing..."); break;
+		case SQS_OK:       strcpy(szStatus, "Status: OK");        break;
+		case SQS_ERROR:    strcpy(szStatus, "Status: Error");     break;
+		case SQS_DISABLED: strcpy(szStatus, "Status: Disabled");  break;
+		default:           strcpy(szStatus, "Status: ...");        break;
+		}
+		SetDlgItemText(hDlg, IDC_SQLITE_STATUS, szStatus);
+		break;
+	}
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDC_SQLITE_BROWSE:
+		{
+			char szFile[260];
+			GetDlgItemText(hDlg, IDC_SQLITE_PATH, szFile, sizeof(szFile));
+			OPENFILENAME ofn = {0};
+			ofn.lStructSize = sizeof(OPENFILENAME);
+			ofn.hwndOwner   = hDlg;
+			ofn.lpstrFilter = "SQLite database (*.db)\0*.db\0All files (*.*)\0*.*\0";
+			ofn.lpstrFile   = szFile;
+			ofn.nMaxFile    = sizeof(szFile);
+			ofn.lpstrDefExt = "db";
+			ofn.Flags       = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOTESTFILECREATE;
+			if (GetSaveFileName(&ofn))
+				SetDlgItemText(hDlg, IDC_SQLITE_PATH, szFile);
+			break;
+		}
+		case IDC_SQLITE_TEST:
+		{
+			char path[260], table[64];
+			GetDlgItemText(hDlg, IDC_SQLITE_PATH,  path,  sizeof(path));
+			GetDlgItemText(hDlg, IDC_SQLITE_TABLE, table, sizeof(table));
+			char szResult[640];
+			HCURSOR hOld = SetCursor(LoadCursor(NULL, IDC_WAIT));
+			BOOL bOk = SqliteTestConnection(path, table, szResult, sizeof(szResult));
+			SetCursor(hOld);
+			MessageBox(hDlg, szResult, "SQLite Test", MB_OK | (bOk ? MB_ICONINFORMATION : MB_ICONWARNING));
+			break;
+		}
+		case IDOK:
+		{
+			char szBuf[16];
+			SqliteSetStatusWnd(NULL);
+			Profile.sqlite_enabled     = IsDlgButtonChecked(hDlg, IDC_SQLITE_ENABLED) ? true : false;
+			Profile.sqlite_logToFile   = IsDlgButtonChecked(hDlg, IDC_SQLITE_LOG)      ? 1 : 0;
+			Profile.sqlite_lowWrite    = IsDlgButtonChecked(hDlg, IDC_SQLITE_LOWWRITE) ? 1 : 0;
+			Profile.sqlite_purgeEnabled= IsDlgButtonChecked(hDlg, IDC_SQLITE_PURGE_EN) ? 1 : 0;
+			GetDlgItemText(hDlg, IDC_SQLITE_PATH,  Profile.sqlite_path,  sizeof(Profile.sqlite_path)  - 1);
+			GetDlgItemText(hDlg, IDC_SQLITE_TABLE, Profile.sqlite_table, sizeof(Profile.sqlite_table) - 1);
+			GetDlgItemText(hDlg, IDC_SQLITE_PURGE_DAYS, szBuf, sizeof(szBuf) - 1);
+			Profile.sqlite_purgeDays = atoi(szBuf);
+			if (Profile.sqlite_purgeDays <= 0) Profile.sqlite_purgeDays = 30;
+			GetDlgItemText(hDlg, IDC_SQLITE_MAXSIZE, szBuf, sizeof(szBuf) - 1);
+			Profile.sqlite_maxSizeMB = atoi(szBuf);
+			if (Profile.sqlite_maxSizeMB < 0) Profile.sqlite_maxSizeMB = 0;
+			Profile.sqlite_fields =
+				(IsDlgButtonChecked(hDlg, IDC_SQLITE_FIELD_MODE)    ? SQF_MODE     : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_SQLITE_FIELD_TYPE)    ? SQF_MSG_TYPE : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_SQLITE_FIELD_BITRATE) ? SQF_BITRATE  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_SQLITE_FIELD_MESSAGE) ? SQF_MESSAGE  : 0) |
+				(IsDlgButtonChecked(hDlg, IDC_SQLITE_FIELD_LABEL)   ? SQF_LABEL    : 0);
+			SqliteInit();
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+		}
+		case IDCANCEL:
+			SqliteSetStatusWnd(NULL);
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of SqliteDlgProc
 
 
 BOOL FAR PASCAL MonStatDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -11000,11 +11120,23 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->mysql_schema      = (INT)  GetPrivateProfileInt("MySQL", TEXT("Schema"),    MYSQL_SCHEMA_OPTIMIZED, lpszIniPathName);
 	MysqlInit();
 
+	// FIX [SqliteFeed]: SQLite output feed settings
+	pProfile->sqlite_enabled     = (bool) GetPrivateProfileInt("SQLite", TEXT("Enabled"),   0, lpszIniPathName);
+	GetPrivateProfileString("SQLite", TEXT("Path"),  "",             pProfile->sqlite_path,  sizeof(pProfile->sqlite_path),  lpszIniPathName);
+	GetPrivateProfileString("SQLite", TEXT("Table"), "alarmeringen", pProfile->sqlite_table, sizeof(pProfile->sqlite_table), lpszIniPathName);
+	pProfile->sqlite_fields       = (INT) GetPrivateProfileInt("SQLite", TEXT("Fields"),       0x1F, lpszIniPathName);
+	pProfile->sqlite_logToFile    = (INT) GetPrivateProfileInt("SQLite", TEXT("LogToFile"),    0,    lpszIniPathName);
+	pProfile->sqlite_lowWrite     = (INT) GetPrivateProfileInt("SQLite", TEXT("LowWrite"),     0,    lpszIniPathName);
+	pProfile->sqlite_purgeEnabled = (INT) GetPrivateProfileInt("SQLite", TEXT("PurgeEnabled"), 0,    lpszIniPathName);
+	pProfile->sqlite_purgeDays    = (INT) GetPrivateProfileInt("SQLite", TEXT("PurgeDays"),    30,   lpszIniPathName);
+	pProfile->sqlite_maxSizeMB    = (INT) GetPrivateProfileInt("SQLite", TEXT("MaxSizeMB"),    0,    lpszIniPathName);
+	SqliteInit();
+
 	// FIX [RxQualAlert]: RX quality e-mail alert settings
 	pProfile->bRxQualAlertEnabled = (bool) GetPrivateProfileInt("RxQualAlert", "Enabled",   0,  lpszIniPathName);
 	GetPrivateProfileString("RxQualAlert", "MailTo",    "", pProfile->szRxQualMailTo, sizeof(pProfile->szRxQualMailTo), lpszIniPathName);
-	pProfile->nRxQualThreshold = (INT) GetPrivateProfileInt("RxQualAlert", "Threshold", 25,  lpszIniPathName);
-	pProfile->nRxQualRecover   = (INT) GetPrivateProfileInt("RxQualAlert", "Recover",   35,  lpszIniPathName);
+	pProfile->nRxQualThreshold = (INT) GetPrivateProfileInt("RxQualAlert", "Threshold", 80,  lpszIniPathName);
+	pProfile->nRxQualRecover   = (INT) GetPrivateProfileInt("RxQualAlert", "Recover",   90,  lpszIniPathName);
 	pProfile->nRxQualMinutes   = (INT) GetPrivateProfileInt("RxQualAlert", "Minutes",   15,  lpszIniPathName);
 	pProfile->nRxQualCooldown  = (INT) GetPrivateProfileInt("RxQualAlert", "Cooldown",  120, lpszIniPathName);
 	RxQualMonitor_Reset();
@@ -11557,6 +11689,18 @@ void WriteSettings()
 		fprintf(pFile, "Fields=%i\n",    Profile.mysql_fields);
 		fprintf(pFile, "LogToFile=%i\n", Profile.mysql_logToFile);
 		fprintf(pFile, "Schema=%i\n",   Profile.mysql_schema);
+
+		// FIX [SqliteFeed]
+		fprintf(pFile, "\n[SQLite]\n");
+		fprintf(pFile, "Enabled=%i\n",      Profile.sqlite_enabled ? 1 : 0);
+		fprintf(pFile, "Path=%s\n",         Profile.sqlite_path);
+		fprintf(pFile, "Table=%s\n",        Profile.sqlite_table);
+		fprintf(pFile, "Fields=%i\n",       Profile.sqlite_fields);
+		fprintf(pFile, "LogToFile=%i\n",    Profile.sqlite_logToFile);
+		fprintf(pFile, "LowWrite=%i\n",     Profile.sqlite_lowWrite);
+		fprintf(pFile, "PurgeEnabled=%i\n", Profile.sqlite_purgeEnabled);
+		fprintf(pFile, "PurgeDays=%i\n",    Profile.sqlite_purgeDays);
+		fprintf(pFile, "MaxSizeMB=%i\n",    Profile.sqlite_maxSizeMB);
 
 		// FIX [RxQualAlert]
 		fprintf(pFile, "\n[RxQualAlert]\n");

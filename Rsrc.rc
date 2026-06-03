@@ -106,6 +106,7 @@ BEGIN
         MENUITEM "Telnet &Server...\tCtrl-N",   IDM_TELNETSERVER
         MENUITEM "RX &Quality Alert...",        IDM_RXQUAL_ALERT
         MENUITEM "&MySQL...",                   IDM_MYSQL
+        MENUITEM "SQ&Lite...",                  IDM_SQLITE
         MENUITEM SEPARATOR
         MENUITEM "Live &Debug Log (FLEX)",      IDM_DEBUGLOG
     END
@@ -1021,6 +1022,41 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,208,228,44,14
 END
 
+SQLITE_DLGBOX DIALOGEX 10, 10, 260, 258
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "SQLite Settings"
+FONT 8, "Verdana", 0, 0, 0x0
+BEGIN
+    CONTROL         "Enable SQLite feed",IDC_SQLITE_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,120,10
+    LTEXT           "Database file",IDC_STATIC,8,26,46,8
+    EDITTEXT        IDC_SQLITE_PATH,56,24,154,13,ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...",IDC_SQLITE_BROWSE,214,24,38,13
+    LTEXT           "(leave empty for pdw.db next to PDW.exe)",IDC_STATIC,56,39,196,8
+    LTEXT           "Table",IDC_STATIC,8,52,20,8
+    EDITTEXT        IDC_SQLITE_TABLE,32,50,120,13,ES_AUTOHSCROLL
+    GROUPBOX        "Columns to store (ontvangen and capcode are always stored)",IDC_STATIC,8,68,244,49
+    CONTROL         "mode",IDC_SQLITE_FIELD_MODE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,80,110,10
+    CONTROL         "msg_type",IDC_SQLITE_FIELD_TYPE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,80,110,10
+    CONTROL         "bitrate",IDC_SQLITE_FIELD_BITRATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,93,110,10
+    CONTROL         "message",IDC_SQLITE_FIELD_MESSAGE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,93,110,10
+    CONTROL         "label",IDC_SQLITE_FIELD_LABEL,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,106,110,10
+    GROUPBOX        "Maintenance",IDC_STATIC,8,120,244,54
+    CONTROL         "Auto-delete records older than",IDC_SQLITE_PURGE_EN,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,132,140,10
+    EDITTEXT        IDC_SQLITE_PURGE_DAYS,156,131,28,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "days",IDC_STATIC,188,133,20,8
+    LTEXT           "Max database size",IDC_STATIC,14,150,64,8
+    EDITTEXT        IDC_SQLITE_MAXSIZE,80,148,32,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "MB (0 = unlimited)",IDC_STATIC,116,150,80,8
+    CONTROL         "Reduce SSD/NVMe writes (faster, risk of data loss on crash)",IDC_SQLITE_LOWWRITE,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,180,244,10
+    CONTROL         "Log to file (pdw_sqlite.log)",IDC_SQLITE_LOG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,194,160,10
+    LTEXT           "",IDC_SQLITE_STATUS,8,210,244,8
+    PUSHBUTTON      "Test / create",IDC_SQLITE_TEST,8,238,80,14
+    DEFPUSHBUTTON   "OK",IDOK,148,238,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,208,238,44,14
+END
+
 MAIL_DLGBOX DIALOGEX 0, 0, 357, 380
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "SMTP / email settings"
@@ -1299,6 +1335,10 @@ BEGIN
     END
 
     MQTT_DLGBOX, DIALOG
+    BEGIN
+    END
+
+    SQLITE_DLGBOX, DIALOG
     BEGIN
     END
 

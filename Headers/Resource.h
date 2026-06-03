@@ -572,8 +572,28 @@
 #define IDC_MYSQL_SCHEMA          1424
 #define IDC_MYSQL_TEST            1425   // FIX [ConnTest]: "Test connection" button
 
-// FIX [LogManager]: write-buffering controls in the logfile dialog
-#define IDC_LOG_BUFFER_EN         1430   // checkbox  "Reduce disk writes (buffer)"
-#define IDC_LOG_FLUSH_MS          1431   // edit       flush interval in ms
-#define IDC_LOG_BUFFER_SLOTS      1432   // edit       ring-buffer slot count
-#define IDC_LOG_ISO_DATETIME      1433   // checkbox  "ISO date format in log content"
+// FIX [SqliteFeed]: SQLite output feed dialog
+#define SQLITE_DLGBOX             137
+#define IDM_SQLITE                246
+#define IDC_SQLITE_ENABLED        1430
+#define IDC_SQLITE_PATH           1431
+#define IDC_SQLITE_BROWSE         1432
+#define IDC_SQLITE_TABLE          1433
+#define IDC_SQLITE_FIELD_MODE     1434
+#define IDC_SQLITE_FIELD_TYPE     1435
+#define IDC_SQLITE_FIELD_BITRATE  1436
+#define IDC_SQLITE_FIELD_MESSAGE  1437
+#define IDC_SQLITE_FIELD_LABEL    1438
+#define IDC_SQLITE_LOWWRITE       1439
+#define IDC_SQLITE_PURGE_EN       1440
+#define IDC_SQLITE_PURGE_DAYS     1441
+#define IDC_SQLITE_MAXSIZE        1442
+#define IDC_SQLITE_LOG            1443
+#define IDC_SQLITE_STATUS         1444
+#define IDC_SQLITE_TEST           1445
+
+// FIX [LogManager]: write-buffering controls in the logfile dialog (1500+ to avoid SQLite collision)
+#define IDC_LOG_BUFFER_EN         1500   // checkbox  "Reduce disk writes (buffer)"
+#define IDC_LOG_FLUSH_MS          1501   // edit       flush interval in ms
+#define IDC_LOG_BUFFER_SLOTS      1502   // edit       ring-buffer slot count
+#define IDC_LOG_ISO_DATETIME      1503   // checkbox  "ISO date format in log content"
