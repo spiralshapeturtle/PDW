@@ -25,7 +25,7 @@ If you already know PDW, here is what you get over the original 3.2 release:
 | **Windows 11 toast notifications** | Modern native notifications instead of the obsolete tray balloon API |
 | **High-DPI support** | Crisp display on 4K/HiDPI monitors |
 | **x64 build** | 64-bit binary for modern systems |
-| **Central log manager** | All log output through one path; uniform timestamps; write buffering reduces SSD wear on busy networks — configure flush interval and buffer size in the Logfile dialog |
+| **Central log manager** | All log output through one path; uniform timestamps; write buffering reduces SSD write amplification on busy POCSAG/FLEX networks — configure flush interval and buffer size in the Logfile dialog |
 | **ISO timestamps in logs** | Optional `YYYY-MM-DD HH:MM:SS` format inside monitor/filter log lines (sortable); all log files now date-rotate daily |
 
 ---

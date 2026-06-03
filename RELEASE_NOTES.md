@@ -21,9 +21,9 @@ the Logfile dialog.
 
 **Write buffering (NVMe protection) — for busy networks:**
 
-PDW runs 24/7 on hardware ranging from NAS boxes to laptops. On networks with high message
-throughput, frequent small writes cause unnecessary write amplification on SSDs. The new buffer
-option coalesces writes into timed batches instead of writing once per message.
+PDW runs 24/7 on PCs and laptops with SSDs. On networks with high message throughput, frequent
+small writes cause unnecessary write amplification on the drive. The new buffer option coalesces
+writes into timed batches instead of writing once per message.
 
 Enable via **File → Open/Close Logfile → "Reduce disk writes (buffer)"**.
 
