@@ -7,6 +7,7 @@
 #endif
 
 #include <windows.h>
+#include <new>
 #include "headers\pdw.h"
 #include "headers\initapp.h"
 #include "headers\resource.h"
@@ -769,9 +770,14 @@ void Remove_MissedGroupcall(int groupbit)
 	GetGroupcallLogPath(szFile, sizeof(szFile));
 	EnsureGroupcallLogHeader(szFile);
 
-	// Accumulate full line into buffer, then write via LogManager.
-	char lmBuf[2048];
-	int  lmPos = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+	// Accumulate full MISSED line. Worst case: MAXIMUM_GROUPSIZE (1000) members ×
+	// 8 bytes each + ~80-byte header = ~8080 bytes.  WriteLineTo caps at LM_LINE_MAX
+	// (1024), so we write directly to avoid silently dropping member capcodes.
+	// Missed-groupcall events are rare; per-call fopen/fwrite/fclose is acceptable.
+	const int kMissedBufSize = MAXIMUM_GROUPSIZE * 8 + 128;
+	char *lmBuf = new (std::nothrow) char[kMissedBufSize];
+	if (!lmBuf) return;   // out-of-memory — skip log, don't crash
+	int  lmPos = _snprintf_s(lmBuf, kMissedBufSize, _TRUNCATE,
 	                          " %s %s  MISSED   group %i frame %03i  members:",
 	                          szCurrentDate, szCurrentTime,
 	                          groupbit + 2029568, GroupFrame[groupbit]);
@@ -780,14 +786,17 @@ void Remove_MissedGroupcall(int groupbit)
 	{
 		int n;
 		if (aGroupCodes[groupbit][nCapcode] == 9999999)
-			n = _snprintf_s(lmBuf + lmPos, sizeof(lmBuf) - lmPos, _TRUNCATE, " ???????");
+			n = _snprintf_s(lmBuf + lmPos, kMissedBufSize - lmPos, _TRUNCATE, " ???????");
 		else
-			n = _snprintf_s(lmBuf + lmPos, sizeof(lmBuf) - lmPos, _TRUNCATE,
+			n = _snprintf_s(lmBuf + lmPos, kMissedBufSize - lmPos, _TRUNCATE,
 			                " %07i", aGroupCodes[groupbit][nCapcode]);
 		if (n > 0) lmPos += n;
 	}
-	if (lmPos < (int)sizeof(lmBuf) - 2) { lmBuf[lmPos++] = '\n'; lmBuf[lmPos] = '\0'; }
-	LogManager::Get().WriteLineTo(szFile, lmBuf, lmPos);
+	if (lmPos < kMissedBufSize - 2) { lmBuf[lmPos++] = '\n'; lmBuf[lmPos] = '\0'; }
+	// Write directly — bypasses LM_LINE_MAX cap so no members are silently dropped.
+	FILE *fp2 = fopen(szFile, "a");
+	if (fp2) { fwrite(lmBuf, 1, lmPos, fp2); fclose(fp2); }
+	delete[] lmBuf;
 	memset(aGroupCodes[groupbit], 0, sizeof(int) * MAXIMUM_GROUPSIZE);
 
 	strcpy(szWindowText[5], "MISSED GROUPCALL!");
@@ -1657,9 +1666,11 @@ void ShowMessage()
 							break;
 						}
 					}
-					if (!pSepFilterFiles[iSepfile]) pSepFilterFiles[iSepfile] = LM_FILE_OPEN; // FIX [LogManager]: sentinel
+					// Guard against iSepfile reaching MAX_SEPFILES (all slots occupied — OOB write).
+					if (iSepfile < MAX_SEPFILES && !pSepFilterFiles[iSepfile])
+						pSepFilterFiles[iSepfile] = LM_FILE_OPEN; // FIX [LogManager]: sentinel
 
-					if (pSepFilterFiles[iSepfile])		// PH: Write current message to separate filterfile
+					if (iSepfile < MAX_SEPFILES && pSepFilterFiles[iSepfile]) // PH: Write current message to separate filterfile
 					{
 						if (Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING)
 						{

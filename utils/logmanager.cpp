@@ -93,9 +93,18 @@ void LogManager::Reconfigure(const char* path, uint32_t enableMask, int monthNum
         CloseHandle(m_hThread); m_hThread = nullptr;
         if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }
     }
-    delete[] m_buf;   m_buf   = nullptr;
-    delete[] m_drain; m_drain = nullptr;
-    m_slots = m_head = m_tail = m_count = 0;
+    // Null m_buf under m_cs BEFORE deleting so concurrent Emit() calls see nullptr
+    // under the lock and fall back to direct-write rather than accessing freed memory.
+    Entry* oldBuf   = nullptr;
+    Entry* oldDrain = nullptr;
+    EnterCriticalSection(&m_cs);
+    oldBuf   = m_buf;   m_buf   = nullptr;
+    oldDrain = m_drain; m_drain = nullptr;
+    m_slots  = m_head = m_tail = m_count = 0;
+    m_bufEnabled = false;
+    LeaveCriticalSection(&m_cs);
+    delete[] oldBuf;
+    delete[] oldDrain;
 
     // Apply new settings.
     strncpy_s(m_path, sizeof(m_path), path ? path : "", _TRUNCATE);
@@ -119,7 +128,6 @@ void LogManager::Reconfigure(const char* path, uint32_t enableMask, int monthNum
 void LogManager::Shutdown()
 {
     if (!m_initialized) return;
-    m_initialized = false;
 
     if (m_hThread) {
         m_stop = true;
@@ -129,11 +137,33 @@ void LogManager::Shutdown()
     }
     if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }
 
-    // Final flush (worker has stopped; safe to call from this thread).
-    if (m_buf && m_count > 0) DrainAll();
+    // Null m_buf under m_cs before deleting — same pattern as Reconfigure.
+    // Any decoder thread that sneaks past the m_initialized check will find
+    // m_buf==nullptr under the lock and fall back to a direct write, not freed memory.
+    Entry* oldBuf   = nullptr;
+    Entry* oldDrain = nullptr;
+    int    finalCount = 0;
+    EnterCriticalSection(&m_cs);
+    // Snapshot remaining ring entries into m_drain for the final flush below.
+    if (m_drain && m_buf && m_count > 0) {
+        finalCount = m_count;
+        int head = m_head;
+        for (int i = 0; i < finalCount; i++)
+            m_drain[i] = m_buf[(head + i) % m_slots];
+    }
+    oldBuf   = m_buf;   m_buf   = nullptr;
+    oldDrain = m_drain; m_drain = nullptr;
+    m_slots  = m_head = m_tail = m_count = 0;
+    m_bufEnabled  = false;
+    m_initialized = false;  // last — decoder threads now see both null buf and false initialized
+    LeaveCriticalSection(&m_cs);
 
-    delete[] m_buf;   m_buf   = nullptr;
-    delete[] m_drain; m_drain = nullptr;
+    // Flush snapshot to disk outside the lock.
+    if (oldDrain && finalCount > 0)
+        WriteEntries(oldDrain, finalCount);
+
+    delete[] oldBuf;
+    delete[] oldDrain;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +316,15 @@ void LogManager::Emit(const char* path, const char* line, int len)
     }
 
     EnterCriticalSection(&m_cs);
+
+    // Re-check m_buf under the lock: Shutdown/Reconfigure may have nulled it
+    // between the unlocked check above and this point.
+    if (!m_buf || m_slots == 0) {
+        LeaveCriticalSection(&m_cs);
+        FILE* f = fopen(path, "a");
+        if (f) { fwrite(line, 1, len, f); fclose(f); }
+        return;
+    }
 
     if (m_count >= m_slots) {
         // Ring buffer full — drop the oldest entry (oldest = head).

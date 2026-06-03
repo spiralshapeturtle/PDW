@@ -2032,9 +2032,13 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		KillTimer(ghWnd, SECOND_TIMER);
 		KillTimer(ghWnd, RXQUAL_TIMER);	// FIX [RxQualAlert]
 
-		if (pLogFile)    fclose(pLogFile);
-		if (pFilterFile) fclose(pFilterFile);
-		if (pStatFile)   fclose(pStatFile);
+		// FIX [LogManager]: pLogFile/pFilterFile hold LM_FILE_OPEN sentinel (0x1) when
+		// LogManager is active — never pass sentinel to fclose; mirror the guard in Misc.cpp.
+		if (pLogFile    && pLogFile    != (FILE*)0x1) fclose(pLogFile);
+		if (pFilterFile && pFilterFile != (FILE*)0x1) fclose(pFilterFile);
+		pLogFile    = NULL;
+		pFilterFile = NULL;
+		if (pStatFile) fclose(pStatFile);
 
 		if (Profile.minimize_flg)	// Make sure PDW doesn't open minimized next time.
 		{
