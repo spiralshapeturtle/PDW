@@ -38,6 +38,7 @@
 #include "..\headers\pdw.h"
 #include "sqlite_feed.h"
 #include "sqlite\sqlite3.h"
+#include "logmanager.h"
 
 extern TCHAR szPath[];          /* PDW exe-directory — uit Initapp.cpp */
 
@@ -134,54 +135,18 @@ static BOOL          g_bTxnOpen = FALSE;
 // Logbestand
 // ---------------------------------------------------------------------------
 
-static CRITICAL_SECTION g_logCs;
-static BOOL             g_logCsInit  = FALSE;
-
-// FIX [LogRotate]: cap het feed-log op ~5 MB (1 vorige generatie .1), net als de MySQL-feed.
-#define SQLITE_LOG_MAX_BYTES (5 * 1024 * 1024)
-static void RotateLogIfLarge(const char *path)
-{
-    WIN32_FILE_ATTRIBUTE_DATA fad;
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return;
-    ULONGLONG sz = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
-    if (sz < SQLITE_LOG_MAX_BYTES) return;
-    char bak[MAX_PATH];
-    _snprintf(bak, sizeof(bak) - 1, "%s.1", path);
-    bak[sizeof(bak) - 1] = '\0';
-    MoveFileExA(path, bak, MOVEFILE_REPLACE_EXISTING);
-}
-
+// Log via LogManager (daily rotation, write buffering, uniform timestamp).
 static void WriteLog(const char *fmt, ...)
 {
-    if (!g_bLogToFile || !g_logCsInit) return;
+    if (!g_bLogToFile) return;
 
     char line[1024];
     va_list ap;
     va_start(ap, fmt);
-    _vsnprintf(line, sizeof(line) - 1, fmt, ap);
-    line[sizeof(line) - 1] = '\0';
+    _vsnprintf_s(line, sizeof(line), _TRUNCATE, fmt, ap);
     va_end(ap);
 
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    char ts[32];
-    sprintf(ts, "%04d-%02d-%02d %02d:%02d:%02d ",
-            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-
-    const char *logDir = (Profile.LogfilePath[0]) ? Profile.LogfilePath : (const char *)szPath;
-    char szFile[MAX_PATH];
-    _snprintf(szFile, sizeof(szFile) - 1, "%s\\%02d%02d%02d_pdw_sqlite.log",
-              logDir, st.wYear % 100, st.wMonth, st.wDay);
-    szFile[sizeof(szFile) - 1] = '\0';
-
-    EnterCriticalSection(&g_logCs);
-    RotateLogIfLarge(szFile);
-    FILE *fp = fopen(szFile, "a");
-    if (fp) {
-        fprintf(fp, "%s%s\n", ts, line);
-        fclose(fp);
-    }
-    LeaveCriticalSection(&g_logCs);
+    PDW_SQLITELOG("%s", line);
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +535,7 @@ static DWORD WINAPI SqliteWorker(LPVOID)
                 bErrorPosted = TRUE;
                 break;
             }
+            WriteLog("INSERT OK  capcode=%s", job.szCapcode);
             didWork = TRUE;
         }
 
@@ -604,7 +570,6 @@ static DWORD WINAPI SqliteWorker(LPVOID)
 void SqliteInit(void)
 {
     if (!g_bCsInit)    { InitializeCriticalSection(&g_cs);    g_bCsInit    = TRUE; }
-    if (!g_logCsInit)  { InitializeCriticalSection(&g_logCs);  g_logCsInit  = TRUE; }
 
     SqliteStop();
 
@@ -820,7 +785,6 @@ void SqliteDestroy(void)
 {
     SqliteStop();
     if (g_bCsInit)   { DeleteCriticalSection(&g_cs);    g_bCsInit   = FALSE; }
-    if (g_logCsInit) { DeleteCriticalSection(&g_logCs);  g_logCsInit = FALSE; }
 }
 
 static void ApplyPragmas(sqlite3 *db, BOOL lowWrite); /* forward — gedefinieerd in de worker-sectie */
