@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
 #define PDW_VERSION_MINOR  5
-#define PDW_VERSION_PATCH  7
-#define PDW_VERSION_STR    "3.5.7"
+#define PDW_VERSION_PATCH  8
+#define PDW_VERSION_STR    "3.5.8"
 
 #define IDC_STATIC             -1
 
@@ -571,3 +571,23 @@
 #define IDC_MYSQL_LOG             1423
 #define IDC_MYSQL_SCHEMA          1424
 #define IDC_MYSQL_TEST            1425   // FIX [ConnTest]: "Test connection" button
+
+// FIX [SqliteFeed]: SQLite output feed dialog
+#define SQLITE_DLGBOX             137
+#define IDM_SQLITE                246
+#define IDC_SQLITE_ENABLED        1430
+#define IDC_SQLITE_PATH           1431
+#define IDC_SQLITE_BROWSE         1432
+#define IDC_SQLITE_TABLE          1433
+#define IDC_SQLITE_FIELD_MODE     1434
+#define IDC_SQLITE_FIELD_TYPE     1435
+#define IDC_SQLITE_FIELD_BITRATE  1436
+#define IDC_SQLITE_FIELD_MESSAGE  1437
+#define IDC_SQLITE_FIELD_LABEL    1438
+#define IDC_SQLITE_LOWWRITE       1439
+#define IDC_SQLITE_PURGE_EN       1440
+#define IDC_SQLITE_PURGE_DAYS     1441
+#define IDC_SQLITE_MAXSIZE        1442
+#define IDC_SQLITE_LOG            1443
+#define IDC_SQLITE_STATUS         1444
+#define IDC_SQLITE_TEST           1445

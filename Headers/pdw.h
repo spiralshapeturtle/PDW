@@ -198,8 +198,8 @@ typedef struct
 	// FIX [RxQualAlert]: low-quality e-mail alert
 	bool bRxQualAlertEnabled;
 	char szRxQualMailTo[512];		// semicolon-separated recipient list
-	int  nRxQualThreshold;			// alert when quality drops below this (default 25)
-	int  nRxQualRecover;			// reset alert when quality rises above this (default 35)
+	int  nRxQualThreshold;			// alert when quality drops below this (default 80)
+	int  nRxQualRecover;			// reset alert when quality rises above this (default 90)
 	int  nRxQualMinutes;			// minutes below threshold before alerting (default 15)
 	int  nRxQualCooldown;			// minutes to suppress repeated alerts (default 120)
 
@@ -301,6 +301,17 @@ typedef struct
 	int  mysql_fields;                // bitmask MYF_*, default 0x1F (all on)
 	int  mysql_logToFile;             // 0=off, 1=write pdw_mysql.log
 	int  mysql_schema;                // MYSQL_SCHEMA_* (0=Classic, 1=Extended, 2=Optimized)
+
+	// FIX [SqliteFeed]: SQLite output feed — amalgamation, geen externe DLL. See utils/sqlite_feed.{h,cpp}.
+	bool sqlite_enabled;
+	char sqlite_path   [260];         // db-bestand; leeg -> <exedir>\pdw.db
+	char sqlite_table  [64];          // default "alarmeringen"
+	int  sqlite_fields;               // bitmask SQF_*, default 0x1F (all on)
+	int  sqlite_logToFile;            // 0=off, 1=write pdw_sqlite.log
+	int  sqlite_lowWrite;             // 0=durable (best practice), 1=reduce NVMe writes (dataloss risk)
+	int  sqlite_purgeEnabled;         // 0=off, 1=auto-delete rows older than purgeDays
+	int  sqlite_purgeDays;            // default 30
+	int  sqlite_maxSizeMB;            // 0=off, else cap db file size (deletes oldest rows)
 } PROFILE, *PPROFILE;
 
 extern PROFILE Profile;     // profile information
@@ -493,6 +504,7 @@ BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL MysqlDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL FAR PASCAL SqliteDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam); // FIX [SqliteFeed]
 BOOL FAR PASCAL DisplayOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL NEAR SetTitle(HWND hWnd, TCHAR *cTitle);
 

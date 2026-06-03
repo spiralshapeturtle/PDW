@@ -208,6 +208,16 @@
     <ClCompile Include="utils\webhook.cpp" />
     <ClCompile Include="utils\mqtt.cpp" />
     <ClCompile Include="utils\mysql.cpp" />
+    <ClCompile Include="utils\sqlite_feed.cpp" />
+    <ClCompile Include="utils\sqlite\sqlite3.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>SQLITE_THREADSAFE=2;SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DQS=0;SQLITE_DEFAULT_MEMSTATUS=0;SQLITE_OMIT_DEPRECATED;SQLITE_DEFAULT_WAL_SYNCHRONOUS=1;SQLITE_LIKE_DOESNT_MATCH_BLOBS;SQLITE_OMIT_SHARED_CACHE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
     <ClCompile Include="utils\telnet_server.cpp" />
     <ClCompile Include="utils\rxq.cpp" />
     <ClCompile Include="utils\debuglog.cpp" />
@@ -216,6 +226,9 @@
     <ClCompile Include="RxQualMonitor.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="utils\sqlite_feed.h" />
+    <ClInclude Include="utils\sqlite\sqlite3.h" />
+    <ClInclude Include="utils\sqlite\sqlite3ext.h" />
     <ClInclude Include="headers\acars.h" />
     <ClInclude Include="headers\decode.h" />
     <ClInclude Include="headers\ermes.h" />
