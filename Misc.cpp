@@ -1314,11 +1314,28 @@ void ShowMessage()
 
 							if (Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING)
 							{
-								sprintf(szLogFileLine, "%s %s  %s  %s\n",
-															Current_MSG[MSG_TIME],
-															Current_MSG[MSG_DATE],
-															iConvertingGroupcall? temp : Current_MSG[MSG_TYPE],
-															Current_MSG[MSG_MESSAGE]);
+								if (Profile.logISO8601)
+								{
+									// FIX [LogManager]: ISO timestamp instead of separate time+date columns.
+									SYSTEMTIME ist; GetLocalTime(&ist);
+									char isoBuf[22];
+									_snprintf_s(isoBuf, sizeof(isoBuf), _TRUNCATE,
+									            "%04d-%02d-%02d %02d:%02d:%02d",
+									            ist.wYear, ist.wMonth, ist.wDay,
+									            ist.wHour, ist.wMinute, ist.wSecond);
+									sprintf(szLogFileLine, "%s  %s  %s\n",
+												isoBuf,
+												iConvertingGroupcall? temp : Current_MSG[MSG_TYPE],
+												Current_MSG[MSG_MESSAGE]);
+								}
+								else
+								{
+									sprintf(szLogFileLine, "%s %s  %s  %s\n",
+												Current_MSG[MSG_TIME],
+												Current_MSG[MSG_DATE],
+												iConvertingGroupcall? temp : Current_MSG[MSG_TYPE],
+												Current_MSG[MSG_MESSAGE]);
+								}
 							}
 							continue;
 						}
@@ -1496,8 +1513,8 @@ void ShowMessage()
 
 			if (Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING)
 			{
-				// FlexGroupMode writes szLogFileLine directly (decoder-formatted group header).
-				// ISO timestamp does not apply here — the group header has its own format.
+				// FlexGroupMode writes szLogFileLine directly; it was already built with
+				// the correct (legacy or ISO) timestamp at the group-header sprintf above.
 				if (isdigit(szLogFileLine[0]) && !bLogged[MONITOR] && !bCombine[MONITOR])
 				{
 					char lmBuf[LM_LINE_MAX];
