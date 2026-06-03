@@ -36,3 +36,5 @@ pdw_web/
 # RC editor backup files
 *.backup-ascii
 *.rc.bak
+CLAUDE.md
+

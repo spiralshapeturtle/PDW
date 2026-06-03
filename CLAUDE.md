@@ -9,6 +9,8 @@
 - Elke wijziging markeren: `// FIX [...]: omschrijving`
 - Nooit functionele decoderlogica wijzigen zonder expliciete opdracht
 - Bestaande naamgeving en opmaakstijl bewaren
+- Na elke inhoudelijke wijziging **README.md**, **docs/manual.md** en **RELEASE_NOTES.md** bijwerken. `TECHNICAL_FIXES.md` is optioneel en laag prioriteit — onderhoud alleen als het duidelijk meerwaarde heeft.
+- De ingebouwde Telnet-server is een **custom/interne feature** en niet bedoeld voor algemeen gebruik. Noem `p2kflexMonitor` en `CS FlexDecoder` (of `p2kflexDecoder`) **niet** in gebruikersdocumentatie (README, manual, release notes). Beschrijf het alleen als een eigen uitbreiding met een intern wire-formaat.
 - **GEEN niet-ASCII tekens in runtime-strings** (MessageBox, dialoog-teksten, `WriteLog`, RC-dialogen, log-output). De bronbestanden zijn UTF-8 maar de Win32 ANSI-API's (MessageBoxA, SetDlgItemText, fprintf) tonen UTF-8 multibyte als mojibake (`—` -> `â€"`, `»` -> `Â»`). Gebruik altijd pure ASCII: `-` i.p.v. `—`/`–`, `>>`/`<<` i.p.v. `»`/`«`, `'` i.p.v. `'`/`'`, `"` i.p.v. `"`/`"`. Niet-ASCII mag wél in code-commentaar (compiler negeert het). Dit kostte herhaaldelijk correcties — zie FIX `[SqliteFeed]` "OK â€"".
 
 ## Architectuur in één zin
