@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
 #define PDW_VERSION_MINOR  5
-#define PDW_VERSION_PATCH  7
-#define PDW_VERSION_STR    "3.5.7"
+#define PDW_VERSION_PATCH  8
+#define PDW_VERSION_STR    "3.5.8"
 
 #define IDC_STATIC             -1
 
@@ -571,3 +571,9 @@
 #define IDC_MYSQL_LOG             1423
 #define IDC_MYSQL_SCHEMA          1424
 #define IDC_MYSQL_TEST            1425   // FIX [ConnTest]: "Test connection" button
+
+// FIX [LogManager]: write-buffering controls in the logfile dialog
+#define IDC_LOG_BUFFER_EN         1430   // checkbox  "Reduce disk writes (buffer)"
+#define IDC_LOG_FLUSH_MS          1431   // edit       flush interval in ms
+#define IDC_LOG_BUFFER_SLOTS      1432   // edit       ring-buffer slot count
+#define IDC_LOG_ISO_DATETIME      1433   // checkbox  "ISO date format in log content"

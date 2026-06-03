@@ -33,6 +33,7 @@
 #include "..\headers\initapp.h"
 #include "telnet_server.h"
 #include "rxq.h"
+#include "logmanager.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -157,9 +158,7 @@ static HWND             g_tsStatusWnd        = NULL;
 ** moving the original code block. */
 static void TsLog(const char *fmt, ...);
 
-/* Log file — own critical section to avoid lock-inversion against g_tsCs */
-static CRITICAL_SECTION g_tsLogCs;
-static BOOL             g_tsLogCsInit        = FALSE;
+/* Log file writes are handled by LogManager (LC_TELNET / LC_WIRE). */
 
 /* In-memory event ring for the Ctrl-N "Recent activity" listbox. Drained via
 ** TelnetServerGetEvents() with a periodic timer in the dialog. Sized so a
@@ -201,52 +200,36 @@ static void TsLogEvent(const char *fmt, ...)
     }
 }
 
-/* Wire-log: every wire-line that goes out can optionally be appended to a
-** disk file in CS FlexDecoder format. Separate from g_tsLogToFile (which is
-** for lifecycle events). Uses g_tsLogCs to serialize. */
-/* FIX [WireLogRotate]: maandafkortingen voor de niet-numerieke datumvorm,
-** identiek aan debuglog.cpp zodat beide PDW-logs dezelfde naamgeving delen. */
-static const char *kWireMonthAbbr[12] = {
-    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
-};
-
+/* Wire-log: every outgoing wire-line is optionally buffered via LogManager (LC_WIRE).
+** WriteRaw does NOT prepend a timestamp, so we build the full line here:
+**   "YYYY-MM-DD HH:MM:SS  <wire content>\n"
+** Two spaces after the timestamp (matches the original layout, minus ms).
+** <WD> heartbeat lines are suppressed (not useful in disk logs). */
 static void TsWriteWireLog(const char *line, int len)
 {
-    if (!Profile.telnetServerWireLog || !g_tsLogCsInit) return;
+    if (!Profile.telnetServerWireLog) return;
     if (!line || len <= 0) return;
-    if (len >= 4 && memcmp(line, "<WD>", 4) == 0) return; // FIX [WireLogWD]: <WD> niet naar disk, wel over de lijn
+    if (len >= 4 && memcmp(line, "<WD>", 4) == 0) return; // FIX [WireLogWD]
 
     SYSTEMTIME st; GetLocalTime(&st);
 
-    // FIX [WireLogRotate]: dagelijks geroteerde bestandsnaam met de standaard PDW-
-    // datumnotatie (zelfde als de live debug log, debuglog.cpp). Voorheen schreef dit
-    // naar één oneindig groeiend pdw_flexdecoder.log; nu één bestand per dag zodat een
-    // vergelijk-script per dag op bestandsnaam kan koppelen aan de p2kflexDecoder-logs.
-    const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
-    char path[MAX_PATH];
-    if (Profile.MonthNumber) {
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%02d%02d_telnet_traffic.log",
-                    root, st.wYear % 100, st.wMonth, st.wDay);
-    } else {
-        const char *mon = (st.wMonth >= 1 && st.wMonth <= 12) ? kWireMonthAbbr[st.wMonth - 1] : "???";
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%s%02d_telnet_traffic.log",
-                    root, st.wYear % 100, mon, st.wDay);
-    }
+    // Strip trailing CR/LF from wire content.
+    int wlen = (len < 1020) ? len : 1019;
+    while (wlen > 0 && (line[wlen-1] == '\r' || line[wlen-1] == '\n')) wlen--;
 
-    EnterCriticalSection(&g_tsLogCs);
-    FILE *fp = NULL;
-    if (fopen_s(&fp, path, "a") == 0 && fp) {
-        fprintf(fp, "%04d-%02d-%02d %02d:%02d:%02d.%03d  ",
-                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-        /* line already ends with \r; strip and append \n for log readability. */
-        int writeLen = len;
-        while (writeLen > 0 && (line[writeLen-1] == '\r' || line[writeLen-1] == '\n')) writeLen--;
-        fwrite(line, 1, writeLen, fp);
-        fputc('\n', fp);
-        fclose(fp);
-    }
-    LeaveCriticalSection(&g_tsLogCs);
+    char full[1024];
+    int pos = _snprintf_s(full, sizeof(full), _TRUNCATE,
+                          "%04d-%02d-%02d %02d:%02d:%02d.%03d  ",
+                          st.wYear, st.wMonth, st.wDay,
+                          st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    if (pos < 0) pos = 0;
+    int copy = ((pos + wlen) < (int)sizeof(full) - 2) ? wlen : (int)sizeof(full) - pos - 2;
+    memcpy(full + pos, line, copy);
+    pos += copy;
+    full[pos++] = '\n';
+    full[pos]   = '\0';
+
+    LogManager::Get().WriteRaw(LC_WIRE, full, pos);
 }
 
 /* ---------------------------------------------------------------------------
@@ -257,31 +240,14 @@ static ULONGLONG NowMs(void) { return GetTickCount64(); }
 
 static void TsLog(const char *fmt, ...)
 {
-    if (!g_tsLogToFile || !g_tsLogCsInit) return;
+    if (!g_tsLogToFile) return;
 
-    char path[MAX_PATH];
-    SYSTEMTIME st; GetLocalTime(&st);
-    if (Profile.LogfilePath[0]) {
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%02d%02d_telnet_server.log",
-                    Profile.LogfilePath, st.wYear % 100, st.wMonth, st.wDay);
-    } else {
-        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%02d%02d%02d_telnet_server.log",
-                    szPath, st.wYear % 100, st.wMonth, st.wDay);
-    }
+    char msg[256];
+    va_list ap; va_start(ap, fmt);
+    _vsnprintf_s(msg, sizeof(msg), _TRUNCATE, fmt, ap);
+    va_end(ap);
 
-    EnterCriticalSection(&g_tsLogCs);
-    FILE *fp = NULL;
-    if (fopen_s(&fp, path, "a") == 0 && fp) {
-        SYSTEMTIME st; GetLocalTime(&st);
-        fprintf(fp, "%04d-%02d-%02d %02d:%02d:%02d.%03d  ",
-                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-        va_list ap; va_start(ap, fmt);
-        vfprintf(fp, fmt, ap);
-        va_end(ap);
-        fputc('\n', fp);
-        fclose(fp);
-    }
-    LeaveCriticalSection(&g_tsLogCs);
+    PDW_TSLOG("%s", msg);
 }
 
 static void PostStatus(int state)
@@ -1311,8 +1277,6 @@ void TelnetServerInit(void)
 {
     if (!g_tsCsInit) {
         InitializeCriticalSection(&g_tsCs);
-        InitializeCriticalSection(&g_tsLogCs);
-        g_tsLogCsInit = TRUE;
         g_tsCsInit    = TRUE;
         for (int i = 0; i < TS_MAX_CLIENTS; i++) {
             g_tsClients[i].sock = INVALID_SOCKET;
@@ -1445,10 +1409,6 @@ void TelnetServerDestroy(void)
     if (g_tsCsInit) {
         DeleteCriticalSection(&g_tsCs);
         g_tsCsInit = FALSE;
-    }
-    if (g_tsLogCsInit) {
-        DeleteCriticalSection(&g_tsLogCs);
-        g_tsLogCsInit = FALSE;
     }
     if (g_tsWsaStarted) {
         WSACleanup();

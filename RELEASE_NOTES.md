@@ -1,138 +1,129 @@
-# PDW 3.5.6 — Release Notes
+# PDW 3.5.8 — Release Notes
 
-## New Features
+## New in 3.5.8
+
+### Central Log Manager with Write Buffering
+
+All log output — decoded messages, system events, and feed activity — now flows through a single
+central log manager. The most visible user-facing change is a new **Write buffering** option in
+the Logfile dialog.
+
+**What changed:**
+
+- Every log file (monitor, filter, separate filter files, debug, telnet, MQTT, webhook, MySQL,
+  SMTP, blocked messages, missed group calls) is written through one consistent path
+- All log files are now **date-stamped** with a `YYMMDD_` prefix and rotate automatically at
+  midnight — including `mysql.log` which previously grew without bound
+- Timestamp format in system/process logs is now uniform: `YYYY-MM-DD HH:MM:SS.mmm`
+- **ISO date format option** in the Logfile dialog: enables `YYYY-MM-DD HH:MM:SS` timestamps
+  inside monitor and filter log lines (the filename format on disk is unchanged). When enabled,
+  the Time and Date column checkboxes are automatically grayed out.
+
+**Write buffering (NVMe protection) — for busy networks:**
+
+PDW runs 24/7 on hardware ranging from NAS boxes to laptops. On networks with high message
+throughput, frequent small writes cause unnecessary write amplification on SSDs. The new buffer
+option coalesces writes into timed batches instead of writing once per message.
+
+Enable via **File → Open/Close Logfile → "Reduce disk writes (buffer)"**.
+
+| Setting | Effect |
+|---------|--------|
+| Flush interval | How often the buffer is written to disk (default 500 ms) |
+| Buffer slots | Maximum entries held before an early flush (default 512) |
+
+- Recommended for **busy POCSAG/FLEX networks** where blocked-message logs can fill quickly
+- Default 500 ms / 512 slots handles peaks of ~250 messages/second without dropping entries
+- For minimum writes on very active networks: 2000 ms / 1024 slots
+- Maximum potential log loss on hard crash equals the flush interval
+
+---
+
+## New in 3.5.7
+
+### SQLite Output Feed
+PDW can now write decoded messages to a local SQLite database file. No server, no installer,
+no external libraries required. Configure via **Options → SQLite…**.
+
+- Single file — easy to back up, copy, or open with any SQLite browser
+- Same column layout as the MySQL Optimized schema; column names are identical
+- `capcode` stored as text to preserve leading zeros in long POCSAG pager addresses
+- **LowWrite mode**: reduces disk writes on SSDs by batching commits every ~15 s.
+  Trade-off: up to 15 seconds of messages may be lost on a hard crash or power failure.
+- **Auto-maintenance** (off by default): automatically delete rows older than N days
+  and/or keep the file under a maximum size. Runs once per hour; never deletes without
+  explicit configuration.
+- Connection test button; optional activity log (`YYMMDD_pdw_sqlite.log`)
+
+---
+
+## New in 3.5.6
 
 ### MySQL Output Feed
-PDW can now write decoded messages directly to a MySQL database. Zero external DLL
-dependencies — the MySQL wire protocol (v10) is implemented natively using only Win32 and
-CryptAPI (advapi32.dll, always present on Windows). Authentication uses
-`mysql_native_password`. Configure via **Options → MySQL…**.
+PDW can write decoded messages to a MySQL or MariaDB database. No external DLLs or MySQL
+client libraries required. Configure via **Options → MySQL…**.
 
 - Three schema modes:
-  - **Classic** — compatible with existing `meld2mysql.exe` tooling (capcode / melding / label)
-  - **Extended** — all eight PDW text fields stored as strings
-  - **Optimized** — type-correct columns (timestamps, integers, label colour) — *recommended for
-    new deployments*; see `README.md` for full column reference and example queries.
-- Worker thread with a 64-slot ring buffer and exponential-backoff reconnect (1 s → 2 s → 4 s →
-  30 s cap).
-- Connection test button in the settings dialog.
-- Group-call subscriber rows are accumulated and flushed as a single row when the group capcode
-  arrives, matching MQTT/Webhook behaviour.
+  - **Classic** — minimal: capcode, message, label
+  - **Extended** — all fields stored as text columns
+  - **Optimized** — typed columns with indexes; recommended for new installations.
+    See `README.md` for the full column reference and example queries.
+- Automatic reconnect on connection loss
+- Connection test button
+- FLEX group calls stored with the full list of paged addresses
+- Optional activity log (`pdw_mysql.log`)
 
 ### RX Quality Alert
-PDW can now send an e-mail when telnet RX quality drops below a configurable threshold for a
+PDW sends an e-mail when the RX quality indicator stays below a threshold for a
 sustained period. Configure via **Options → RX Quality Alert…**.
 
-- **Threshold** (default 25 %): quality level that starts the timer.
-- **Recovery** (default 35 %): quality level that cancels a pending alert.
-- **Minimum duration** (default 15 min): consecutive minutes below threshold required before
-  the mail is sent.
-- **Cooldown** (default 120 min): silence window after each alert to prevent flooding.
-- Uses the existing SMTP profile — no extra mail account needed.
-- Independent recipient list, separate from normal message recipients.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Threshold | 80 % | Quality below this level starts the timer |
+| Recovery | 90 % | Quality above this level cancels a pending alert |
+| Minimum duration | 15 min | How long below threshold before sending |
+| Cooldown | 120 min | Minimum time between repeated alerts |
+
+Uses the existing SMTP settings — no separate mail account needed. Supports an independent
+recipient list, separate from normal filter-based alerts.
 
 ---
 
-## Improvements
+## Improvements in 3.5.6
 
-### SMTP Hardening
+### SMTP reliability
+- Crash on rapid Test-button clicks fixed
+- Long messages and split Subject/Body content no longer truncated
+- Multiple recipients handled correctly throughout
 
-**Crash fix — heap corruption on rapid Test-button clicks**
-Each `MailInit()` call performed a stop + start of the mail worker. If the worker was inside a
-blocking TLS read or connect, the 3-second join timed out and the old thread was abandoned.
-The next `MailInit()` then started a *second* worker sharing the same SSL context, socket, and
-mail queue, causing heap corruption (0xc0000374 in ntdll). PDW now uses a single long-lived
-worker that is never abandoned; `MailInit()` only updates configuration, and shutdown blocks
-until the worker fully exits.
+### Telnet RX Quality
+- RX quality score corrected for POCSAG channels — sync and idle words now count
+  toward the quality track, giving a stable reading between messages
+- FLEX cycle-info error threshold aligned with the BCH(31,21) specification
 
-Additional hardening in the same area:
+### Output feed stability
+- MQTT, Webhook, and Telnet workers now shut down cleanly on application exit
+  and on settings changes
+- New **Test connection** button in **Options → MQTT…**
+- Raw feed mode added to MQTT, Webhook, and Telnet
 
-| Fix | Detail |
-|---|---|
-| Queue buffer | Increased to `MAX_STR_LEN + 256` (was 1024) — long FLEX messages and the Subject/Body split separator are no longer silently truncated in the ring slot. |
-| Recipient pipeline | Unified to 512 bytes end-to-end (queue override slot → RCPT TO → To: header). Alert-recipient lists are no longer clipped. |
-| RFC 5321 line folding | Outbound body text is now folded at ≤ 998 octets per line, satisfying strict server limits. Folding prefers whitespace around column 900; tokens longer than 990 bytes are hard-broken. |
-| Queue overflow | Producer checks for a full ring before writing and drops the oldest slot, preventing silent data loss when the server is slow. |
-| Worker mutation | The worker no longer reads or writes `Profile.bMailSplitConfig`. Split mode is detected by separator presence in the queued string. |
-| Header isolation | From/MAIL FROM are formatted from a local copy — the worker no longer writes back into `Profile.szMailFrom`. |
-| Charset guard | The charset-index is clamped before the lookup array, eliminating a potential wild `strcpy` on the alert / split path. |
+### Log files
+All log files use date-stamped filenames (`YYMMDD_<type>.log`):
 
-### Telnet RX Quality Parity
-The telnet `<RXQ:NN>` value is now computed on the same basis as p2kflexDecoder:
+| Feed | Log file |
+|------|----------|
+| SMTP | `YYMMDD_mail.log` |
+| MQTT | `YYMMDD_mqtt.log` |
+| Webhook | `YYMMDD_webhook.log` |
+| Telnet events | `YYMMDD_telnet_server.log` |
+| Telnet wire | `YYMMDD_telnet_traffic.log` |
+| SQLite | `YYMMDD_pdw_sqlite.log` |
+| MySQL | `pdw_mysql.log` |
 
-- **POCSAG sync and idle words** are credited to the quality track, keeping the score stable
-  between messages on a busy channel (previously only message words grew the denominator, making
-  each error weigh far more than in p2kflexDecoder).
-- **POCSAG address and capcode penalties** for uncorrectable words are applied correctly.
-- **FLEX EMA update** is gated to valid-BIW frames — prevents extra jitter on frames with
-  corrupted block-information words.
-- **FLEX cycle-info acceptance** threshold raised to `cer < 3` (was `cer < 2`), matching
-  p2kflexDecoder and the BCH(31,21) two-error-correction spec. Reduces false 99/999 cycle
-  sentinels on both audio and RS232 input paths.
-
-### Worker Stability (MQTT / Webhook / Telnet)
-
-**Shutdown/reconfigure race fix**
-All three workers (MQTT, Webhook, Telnet) previously joined with a 5-second timeout that could
-expire while the worker was still active. `CloseHandle` and `DeleteCriticalSection` then ran
-against a live thread, causing crashes on exit and the possibility of a second worker being
-launched on the same shared state during a reconfigure. All joins are now `INFINITE`; the
-workers themselves are bounded:
-
-- MQTT — Paho connect/waitForCompletion timeouts (5 s each) plus a 200 ms event wait.
-- Webhook — WinHTTP request timeouts set to 10 s each (DNS, connect, send, receive). The
-  library default left DNS resolution unbounded.
-- Telnet — listen-socket close unblocks the 1-second `select()`, so the worker returns within
-  ~1 s.
-
-**MQTT connection test button**
-A new **Test connection** button in **Options → MQTT…** verifies broker reachability with the
-settings currently typed in the dialog, without affecting the running worker. Friendly error
-messages are shown for common CONNACK refusal codes.
-
-### FLEX Decode Improvements
-
-**BIW buffer fix (`FIX [FlexTimeMutate]`)**
-FLEX date and time BIW words were being shifted in-place inside the shared `frame[]` array. The
-shifted (and now meaningless) values were later read back by `showblock()` for checksum
-verification, producing spurious 100-bit RXQ penalties. This manifested as a characteristic
-quality dip visible on the telnet feed immediately after a PDW restart. Both the time (case 2)
-and date (case 1) BIW paths now work on a local copy.
-
-**Decode guard (`FIX [DecodeGuard]`)**
-The main decode tick is wrapped in a Win32 SEH `__try/__except` block. A malformed or
-truncated frame that raises an access violation is logged to the debug channel and skipped
-instead of propagating out of `DispatchMessage` and silently killing the process.
-
-### Daily-Rotating Log Files
-All PDW log files now use date-stamped filenames (`YYMMDD_<type>.log`). Files over 5 MB are
-rotated to `<name>.1` (one backup generation retained). Affected logs:
-
-| Log | Old name | New name pattern |
-|---|---|---|
-| MQTT | `pdw_mqtt.log` | `YYMMDD_mqtt.log` |
-| Webhook | `pdw_webhook.log` | `YYMMDD_webhook.log` |
-| Telnet events | `pdw_telnet_server.log` | `YYMMDD_telnet_server.log` |
-| Telnet wire | `pdw_flexdecoder.log` | `YYMMDD_telnet_traffic.log` |
-| Missed group-calls | `missed-groupcalls.log` | `YYMMDD_missed_groupcalls.log` |
-
-`<WD>` (watchdog heartbeat) lines are suppressed from the telnet wire log — they are sent over
-the wire but not written to disk.
-
----
-
-## Bug Fixes
-
-- **Missed-groupcall session summary** — the summary line is now suppressed when both miss
-  counters are zero, preventing a meaningless `0/0` entry from being appended on every clean
-  PDW shutdown.
-- **Filter dialog capcode field (High-DPI)** — when switching between POCSAG (narrow) and
-  other types (wide), the old bounding rectangle was not invalidated, leaving a white artefact.
-  The resize path now calls `InvalidateRect` + `UpdateWindow` on the old rect, and uses the
-  DPI-scaled `Scale()` helper for widths instead of hard-coded pixel values.
-- **Telnet graceful-shutdown `<RS232:0>` suppression** — `TelnetServerBeginShutdown()` is
-  called at the start of `WM_DESTROY` so the telnet feed does not emit a `<RS232:0>` on clean
-  exit (which would put a remote slave into exponential-backoff reconnect). The TCP close from
-  `TelnetServerDestroy()` already signals session end.
-- **Telnet wire log `<WD>` not written to disk** — `<WD>` heartbeat lines were being appended
-  to the wire log on every watchdog interval; they are now filtered at the write path.
+### Bug fixes
+- Filter dialog capcode field no longer leaves a visual artefact when switching
+  message type on a HiDPI display
+- Telnet feed no longer sends a spurious `<RS232:0>` on clean PDW exit
+- `<WD>` heartbeat lines suppressed from the telnet wire log (sent over the wire
+  but not written to disk)
+- Missed group-call summary no longer written when both counters are zero

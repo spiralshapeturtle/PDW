@@ -37,6 +37,7 @@
 
 #include "..\headers\pdw.h"
 #include "mysql.h"
+#include "logmanager.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -154,8 +155,6 @@ static HWND             g_hStatusWnd = NULL;   /* protected by g_cs */
 // Log file
 // ---------------------------------------------------------------------------
 
-static CRITICAL_SECTION g_logCs;
-static BOOL             g_logCsInit  = FALSE;
 static BOOL             g_bLogToFile = FALSE;
 
 // ---------------------------------------------------------------------------
@@ -166,57 +165,20 @@ static SOCKET g_sock     = INVALID_SOCKET;
 static BOOL   g_bWsaInit = FALSE;
 
 // ===========================================================================
-// Log file
+// Log file  (written via LogManager; date-stamped {YYMMDD}_mysql.log, daily rotation)
 // ===========================================================================
-
-// FIX [LogRotate]: cap each feed log by keeping one previous generation (.1). A feed that keeps
-// failing (e.g. a MySQL 8 user still on caching_sha2_password) logs every backoff; without a cap
-// that file grows without bound and eventually fills the disk on a long-running install. Rotating
-// at ~5 MB bounds total disk use to ~10 MB per log and needs no config from the (non-technical)
-// user. Called under g_logCs.
-#define MYSQL_LOG_MAX_BYTES  (5 * 1024 * 1024)
-static void RotateLogIfLarge(const char *path)
-{
-    WIN32_FILE_ATTRIBUTE_DATA fad;
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return;
-    ULONGLONG sz = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
-    if (sz < MYSQL_LOG_MAX_BYTES) return;
-    char bak[MAX_PATH];
-    _snprintf(bak, sizeof(bak) - 1, "%s.1", path);
-    bak[sizeof(bak) - 1] = '\0';
-    MoveFileExA(path, bak, MOVEFILE_REPLACE_EXISTING);
-}
 
 static void WriteLog(const char *fmt, ...)
 {
-    if (!g_bLogToFile || !g_logCsInit) return;
+    if (!g_bLogToFile) return;
 
     char line[1024];
     va_list ap;
     va_start(ap, fmt);
-    _vsnprintf(line, sizeof(line) - 1, fmt, ap);
-    line[sizeof(line) - 1] = '\0';
+    _vsnprintf_s(line, sizeof(line), _TRUNCATE, fmt, ap);
     va_end(ap);
 
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    char ts[32];
-    sprintf(ts, "%04d-%02d-%02d %02d:%02d:%02d ",
-            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-
-    const char *logDir = (Profile.LogfilePath[0]) ? Profile.LogfilePath : (const char *)szPath;
-    char szFile[MAX_PATH];
-    _snprintf(szFile, sizeof(szFile) - 1, "%s\\pdw_mysql.log", logDir);   // FIX [L2]: bounded path
-    szFile[sizeof(szFile) - 1] = '\0';
-
-    EnterCriticalSection(&g_logCs);
-    RotateLogIfLarge(szFile);   // FIX [LogRotate]
-    FILE *fp = fopen(szFile, "a");
-    if (fp) {
-        fprintf(fp, "%s%s\n", ts, line);
-        fclose(fp);
-    }
-    LeaveCriticalSection(&g_logCs);
+    PDW_MYSQLLOG("%s", line);
 }
 
 // ===========================================================================
@@ -1316,11 +1278,6 @@ void MysqlInit(void)
         InitializeCriticalSection(&g_cs);
         g_bCsInit = TRUE;
     }
-    if (!g_logCsInit) {
-        InitializeCriticalSection(&g_logCs);
-        g_logCsInit = TRUE;
-    }
-
     MysqlStop();
 
     if (!Profile.mysql_enabled || !Profile.mysql_host[0] || !Profile.mysql_database[0]) {
@@ -1455,10 +1412,6 @@ void MysqlDestroy(void)
     if (g_bCsInit) {
         DeleteCriticalSection(&g_cs);
         g_bCsInit = FALSE;
-    }
-    if (g_logCsInit) {
-        DeleteCriticalSection(&g_logCs);
-        g_logCsInit = FALSE;
     }
     if (g_bWsaInit) {
         WSACleanup();

@@ -10,6 +10,7 @@
 #include "smtp_int.h"
 #include "smtp.h"
 #include "..\utils\debug.h"
+#include "logmanager.h"
 
 #include "openssl\ssl.h"
 #include "openssl\err.h"
@@ -652,23 +653,6 @@ char *DecodeBase64(char *szIn, char *szOut)
 	}	
 }
 
-// FIX [LogRotate]: cap pdw_smtp_error.log by keeping one previous generation (.1). With error
-// logging enabled, every failed send appends here; without a cap a server outage could grow the
-// file without bound and fill the disk. Rotating at ~5 MB bounds total disk use to ~10 MB. SMTP
-// logging is single-threaded (worker thread only), so no extra lock is needed.
-#define SMTP_LOG_MAX_BYTES  (5 * 1024 * 1024)
-static void RotateLogIfLarge(const char *path)
-{
-	WIN32_FILE_ATTRIBUTE_DATA fad;
-	if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) return;
-	ULONGLONG sz = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
-	if (sz < SMTP_LOG_MAX_BYTES) return;
-	char bak[MAX_PATH];
-	_snprintf(bak, sizeof(bak) - 1, "%s.1", path);
-	bak[sizeof(bak) - 1] = '\0';
-	MoveFileExA(path, bak, MOVEFILE_REPLACE_EXISTING);
-}
-
 void AddResponse(char *buf)
 {
 // #ifdef _DEBUG
@@ -693,26 +677,8 @@ void AddResponse(char *buf)
 	}
 
 	// FIX [SmtpLog]: log all SMTP responses to disk if checkbox enabled
-	if (Profile.bMailLogErrors) {
-		char szLog[MAX_PATH];
-		const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
-		if (root && root[0]) {
-			SYSTEMTIME st; GetLocalTime(&st);
-			_snprintf(szLog, sizeof(szLog) - 1, "%s\\%02d%02d%02d_mail.log",
-					  root, st.wYear % 100, st.wMonth, st.wDay);
-			szLog[sizeof(szLog) - 1] = '\0';
-
-			RotateLogIfLarge(szLog);   // FIX [LogRotate]
-			FILE *f = fopen(szLog, "a");
-			if (f) {
-				SYSTEMTIME st;
-				GetLocalTime(&st);
-				fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d | %s\n",
-					st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, buf);
-				fclose(f);
-			}
-		}
-	}
+	if (Profile.bMailLogErrors)
+		PDW_SMTPLOG("%s", buf);
 // #endif
 }
 
@@ -1885,25 +1851,7 @@ void LogSmtpError(int errCode)
 
 	// Optionally log to disk if checkbox enabled
 	if (!Profile.bMailLogErrors) return;
-
-	char szLog[MAX_PATH];
-	const char *root = (Profile.LogfilePath[0]) ? Profile.LogfilePath : szPath;
-	if (!root || !root[0]) return;
-
-	SYSTEMTIME st; GetLocalTime(&st);
-	_snprintf(szLog, sizeof(szLog) - 1, "%s\\%02d%02d%02d_mail.log",
-			  root, st.wYear % 100, st.wMonth, st.wDay);
-	szLog[sizeof(szLog) - 1] = '\0';
-
-	RotateLogIfLarge(szLog);   // FIX [LogRotate]
-	FILE *f = fopen(szLog, "a");
-	if (f) {
-		SYSTEMTIME st;
-		GetLocalTime(&st);
-		fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d | %s\n",
-			st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, msg);
-		fclose(f);
-	}
+	PDW_SMTPLOG("%s", msg);
 }
 
 // FIX [SmtpLog]: getter for last SMTP error (for Setup dialog)

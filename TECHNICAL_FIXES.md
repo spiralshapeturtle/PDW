@@ -10,6 +10,7 @@ For the feature overview and user-facing changelog see [README.md](README.md).
 
 | Tag | File(s) | Summary |
 |-----|---------|---------|
+| `[LogManager]` | `utils/logmanager.cpp/.h`, `Misc.cpp`, `PDW.cpp`, all feed utils | Central log sink: ring-buffer write batching, uniform timestamps, daily rotation for all logs |
 | `[MysqlUtf8]` | `utils/mysql.cpp` | Sanitize message/label to valid UTF-8 before INSERT |
 | `[MySQLFeed]` | `utils/mysql.cpp/.h` | Native MySQL wire-protocol feed, no external DLLs |
 | `[RxQualAlert]` | `RxQualMonitor.cpp/.h` | E-mail alert when RXQ drops below threshold |
@@ -23,6 +24,7 @@ For the feature overview and user-facing changelog see [README.md](README.md).
 | `[DpiScale]` | `PDW.cpp` `Gfx.cpp` | High-DPI manifest + runtime `Scale()` helper |
 | `[RS232Flap]` | `utils/rs232.cpp` | Debounce for short disconnects on unstable COM links |
 | `[TrayBalloon]` | `PDW.cpp` | Replace legacy tray balloon with `IUserNotification` |
+| `[SqliteFeed]` | `utils/sqlite_feed.cpp/.h` `utils/sqlite/sqlite3.c` | SQLite output feed, amalgamation, no external DLLs |
 
 ---
 
@@ -172,3 +174,32 @@ Rather than shipping `libmysqlclient.dll` (which requires a MySQL installation),
 Only `mysql_native_password` is supported (not `caching_sha2_password`). Most MySQL 5.7 / 8.0 and MariaDB servers can be configured to use it per-account.
 
 The database is auto-created if it does not exist: PDW connects to the `mysql` system database first and issues `CREATE DATABASE IF NOT EXISTS`.
+
+---
+
+## `[SqliteFeed]`: SQLite amalgamation output feed
+
+**Files:** `utils/sqlite_feed.cpp/.h`, `utils/sqlite/sqlite3.c`
+
+Rather than linking a system SQLite DLL, PDW compiles the official SQLite amalgamation (`sqlite3.c`) directly into the binary. The amalgamation is a single-file, self-contained C translation unit. Per-file compile flags in the vcxproj set `SQLITE_THREADSAFE=2` (serialized mode disabled — the worker thread is the sole owner of the `sqlite3*` connection, so no internal mutex overhead is needed).
+
+**Why no SQL-escaping is needed**
+
+The MySQL feed interpolates values into SQL strings and relies on a sanitize pass to prevent malformed UTF-8. The SQLite feed uses `sqlite3_prepare_v2()` once at startup and `sqlite3_bind_text()` / `sqlite3_bind_int()` per row. Bound parameters are never interpreted as SQL, eliminating the entire class of injection/encoding problems.
+
+**WAL and durability settings**
+
+| Mode | `synchronous` | Commit cadence | `wal_autocheckpoint` |
+|------|--------------|----------------|----------------------|
+| Normal (default) | `NORMAL` | Every message | 1000 pages |
+| LowWrite | `OFF` | ~15 s | 10000 pages |
+
+`synchronous=NORMAL` means WAL frames are flushed to the OS page cache on commit but not necessarily to disk (no `fsync`). This is safe against application crashes; only an OS crash or power failure can lose the last unflushed frame. `synchronous=OFF` goes further — the OS may not even flush to the page cache. The trade-off is documented in the UI ("dataloss risk on power failure").
+
+**Maintenance design**
+
+Purge and size-cap run inside the worker thread, outside any open transaction, once per hour (`SQLITE_MAINT_INTERVAL_MS = 3600000`). Both are off by default (`sqlite_purgeEnabled = 0`, `sqlite_maxSizeMB = 0`) so PDW never silently deletes rows. After a size-cap deletion, `PRAGMA incremental_vacuum` reclaims the freed pages and `PRAGMA wal_checkpoint(TRUNCATE)` shrinks the WAL file.
+
+**Relationship to the MySQL feed**
+
+The two feeds share an identical threading model (ring buffer → worker), identical job struct layout, and identical group-call accumulation logic (`SqliteGroupAccumulate` / `SqliteFlushGroup` mirror `MysqlGroupAccumulate` / `MysqlFlushGroup`). The schema is a 1-to-1 mapping of the MySQL Optimized schema with two differences: `capcode` is `TEXT` instead of `CHAR(9)` (SQLite has no fixed-length CHAR), and there is no `FULLTEXT` index (SQLite's FTS5 requires a virtual table; queries use `LIKE` instead).
