@@ -20,7 +20,7 @@ If you already know PDW, here is what you get over the original 3.2 release:
 | **SQLite output** | Same as MySQL but a single local file — no server, no install, works on any machine |
 | **RX Quality Alerts** | Get an e-mail when signal quality drops below a threshold for too long |
 | **SMTP hardening** | STARTTLS (port 587) + implicit TLS (port 465) + RFC-compliant EHLO + reliable worker thread |
-| **Telnet server** (port 8024) | Drop-in replacement for CS FlexDecoder — compatible wire-format streams to p2kflexMonitor or any Telnet client without extra software |
+| **Telnet server** (port 8024) | Streams decoded messages in a structured wire-format to any Telnet client — custom internal feature, not intended for general use |
 | **FLEX fragment reassembly** | Multi-frame FLEX messages are reassembled into a single, correct string |
 | **Windows 11 toast notifications** | Modern native notifications instead of the obsolete tray balloon API |
 | **High-DPI support** | Crisp display on 4K/HiDPI monitors |
@@ -71,33 +71,6 @@ Sends a formatted e-mail for any matched filter. The SMTP client is fully self-c
 
 ---
 
-### Telnet server
-
-PDW includes a built-in **Telnet server on port 8024** that streams every decoded message in the wire-format used by CS FlexDecoder. Clients built for CS FlexDecoder — such as p2kflexMonitor — connect without any reconfiguration.
-
-**Wire-format messages:**
-
-| Prefix | Meaning |
-|--------|---------|
-| `CC/FFF -ALPHA- capcode message` | FLEX alpha (CC=cycle, FFF=frame) |
-| `-ALPHA- capcode-N message` | POCSAG alpha (N=function) |
-| `<TX_START>` / `<TX_STOP>` | Transmission boundaries |
-| `<RXQ:NN>` | RX quality percentage (0–100) |
-| `<WD>` | Watchdog heartbeat (every 20 s by default) |
-| `<RS232:0>` / `<RS232:1>` | Serial data lost / recovered |
-| `<AUDIO:0>` / `<AUDIO:1>` | Audio signal lost / recovered |
-| `<BUFFER_START>` / `<BUFFER_STOP>` | Reconnection replay window |
-
-**Configuration options:**
-
-- Bind address (default `0.0.0.0`)
-- Max simultaneous clients (default 25)
-- Watchdog interval
-- Reconnect backlog window (default 60 s)
-- Event log (`YYMMDD_telnet_server.log`) and wire-format log (`YYMMDD_telnet_traffic.log`)
-
----
-
 ### MQTT output
 
 Publishes every decoded page to an MQTT broker. Static-linked Paho library — no external DLLs required.
@@ -115,7 +88,7 @@ Publishes every decoded page to an MQTT broker. Static-linked Paho library — n
 | `mode` | FLEX / REFLEX / POCSAG / … |
 | `type` | ALPHA / NUMERIC / TONE |
 | `bitrate` | 1600 / 3200 / 6400 (FLEX) |
-| `subscribers` | JSON array of `{capcode, label}` for group calls |
+| `subscribers` | JSON array of `{address, label}` for group calls |
 
 **Two JSON formats:**
 
@@ -169,7 +142,7 @@ Persists all decoded messages to a MySQL or MariaDB database. No external DLLs o
 
 #### Classic
 ```sql
-CREATE TABLE `alarmeringen` (
+CREATE TABLE `messages` (
     `id`        INT(11)    NOT NULL AUTO_INCREMENT,
     `timestamp` TIMESTAMP  NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `capcode`   VARCHAR(10) NOT NULL DEFAULT '',
@@ -181,7 +154,7 @@ CREATE TABLE `alarmeringen` (
 
 #### Extended
 ```sql
-CREATE TABLE `alarmeringen` (
+CREATE TABLE `messages` (
     `id`        INT(11)    NOT NULL AUTO_INCREMENT,
     `timestamp` TIMESTAMP  NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `address`   VARCHAR(20) NOT NULL DEFAULT '',
@@ -198,10 +171,10 @@ CREATE TABLE `alarmeringen` (
 
 #### Optimized *(recommended for new installations)*
 ```sql
-CREATE TABLE `alarmeringen` (
+CREATE TABLE `messages` (
     `id`          BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
-    `ontvangen`   DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    `capcode`     CHAR(9)           NOT NULL DEFAULT '',
+    `received`   DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `address`     CHAR(9)           NOT NULL DEFAULT '',
     `mode`        VARCHAR(15)       NOT NULL DEFAULT '',
     `msg_type`    VARCHAR(10)       NOT NULL DEFAULT '',
     `bitrate`     SMALLINT UNSIGNED NOT NULL DEFAULT 0,
@@ -211,8 +184,8 @@ CREATE TABLE `alarmeringen` (
     `match_type`  TINYINT UNSIGNED  NOT NULL DEFAULT 0,
     `label_color` VARCHAR(7)        NOT NULL DEFAULT '',
     PRIMARY KEY (`id`),
-    INDEX `idx_capcode`   (`capcode`),
-    INDEX `idx_ontvangen` (`ontvangen`),
+    INDEX `idx_address`   (`address`),
+    INDEX `idx_received` (`received`),
     INDEX `idx_match`     (`match_type`),
     INDEX `idx_label`     (`label`(64)),
     FULLTEXT `ft_message` (`message`, `label`)
@@ -234,8 +207,8 @@ CREATE TABLE `alarmeringen` (
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | BIGINT | Monotonic auto-increment. Use for live polling: `WHERE id > :since` |
-| `ontvangen` | DATETIME | Message time in PDW machine's local timezone (no UTC offset stored) |
-| `capcode` | CHAR(9) | Pager address stored as a zero-padded string. Leading zeros are preserved for long POCSAG addresses. FLEX group capcodes are `2029568`–`2029583` |
+| `received` | DATETIME | Message time in PDW machine's local timezone (no UTC offset stored) |
+| `address` | CHAR(9) | Pager address stored as a zero-padded string. Leading zeros are preserved for long POCSAG addresses. FLEX group capcodes are `2029568`–`2029583` |
 | `mode` | VARCHAR | Protocol + rate, e.g. `FLEX-1600`, `POCSAG-1200`. Protocol = part before `-` |
 | `msg_type` | VARCHAR | `ALPHA` / `NUMERIC` / `TONE` / `GROUP` / `TRANSP` |
 | `bitrate` | SMALLINT | 512 / 1200 / 2400 (POCSAG) or 1600 / 3200 / 6400 (FLEX) |
@@ -245,7 +218,7 @@ CREATE TABLE `alarmeringen` (
 | `match_type` | TINYINT | `0` = no match · `1` = filtered · `2` = monitor-only |
 | `label_color` | VARCHAR(7) | `#RRGGBB` of the label; empty when none |
 
-`ontvangen`, `capcode`, and `match_type` are always written. `mode`, `msg_type`, `bitrate`, `message`, and `label` are written only when enabled in the PDW field-bitmask setting. `subscribers` and `label_color` are written only when non-empty.
+`received`, `address`, and `match_type` are always written. `mode`, `msg_type`, `bitrate`, `message`, and `label` are written only when enabled in the PDW field-bitmask setting. `subscribers` and `label_color` are written only when non-empty.
 
 **Group calls (`subscribers`):**
 
@@ -253,32 +226,32 @@ FLEX group calls store the individual paged addresses as a JSON array:
 
 ```json
 [
-  {"capcode": "1234567", "label": "Ambulance 1", "color": "#1565c0"},
-  {"capcode": "1234568", "label": "Ambulance 2"}
+  {"address": "1234567", "label": "Ambulance 1", "color": "#1565c0"},
+  {"address": "1234568", "label": "Ambulance 2"}
 ]
 ```
 
-`capcode` inside `subscribers` is a string (same as the main `capcode` column). `color` is optional — older rows may not have it; fall back to a neutral colour chip in your UI. Detect a group call with: `capcode BETWEEN '2029568' AND '2029583'` or `subscribers <> ''`.
+`address` inside `subscribers` is a string (same as the main `address` column). `color` is optional — older rows may not have it; fall back to a neutral colour chip in your UI. Detect a group call with: `address BETWEEN '2029568' AND '2029583'` or `subscribers <> ''`.
 
 **Common queries:**
 
 ```sql
 -- Latest 100, newest first
-SELECT * FROM alarmeringen ORDER BY id DESC LIMIT 100;
+SELECT * FROM messages ORDER BY id DESC LIMIT 100;
 
 -- Live polling (only newer than the last seen id)
-SELECT * FROM alarmeringen WHERE id > :since ORDER BY id DESC LIMIT 50;
+SELECT * FROM messages WHERE id > :since ORDER BY id DESC LIMIT 50;
 
--- One capcode (capcode is CHAR(9) -- pass as string, e.g. '1234567' or '012345678')
-SELECT * FROM alarmeringen WHERE capcode = :cc ORDER BY id DESC;
+-- One address (address is CHAR(9) -- pass as string, e.g. '1234567' or '012345678')
+SELECT * FROM messages WHERE address = :cc ORDER BY id DESC;
 -- Also as a group member (indexless LIKE):
---   WHERE capcode = :cc OR subscribers LIKE CONCAT('%"capcode":"', :cc, '"%')
+--   WHERE address = :cc OR subscribers LIKE CONCAT('%"address":"', :cc, '"%')
 
 -- Only matched/filtered messages
-SELECT * FROM alarmeringen WHERE match_type >= 1;
+SELECT * FROM messages WHERE match_type >= 1;
 
 -- Full-text search across message and label
-SELECT * FROM alarmeringen
+SELECT * FROM messages
 WHERE MATCH(message, label) AGAINST (:q IN BOOLEAN MODE)
 ORDER BY id DESC LIMIT 50;
 ```
@@ -289,14 +262,14 @@ ORDER BY id DESC LIMIT 50;
 $pdo = new PDO('mysql:host=HOST;port=3306;dbname=DB;charset=utf8mb4',
                'USER', 'PASS', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 
-$rows = $pdo->query('SELECT * FROM alarmeringen ORDER BY id DESC LIMIT 100')
+$rows = $pdo->query('SELECT * FROM messages ORDER BY id DESC LIMIT 100')
             ->fetchAll(PDO::FETCH_ASSOC);
 
 foreach ($rows as $r) {
     $subs    = $r['subscribers'] !== '' ? (json_decode($r['subscribers'], true) ?: []) : [];
     $isGroup = $subs !== [];
     // render $r['message'] (replace 0xBB byte with newline),
-    // $r['label'] / $r['label_color'], and for groups each $subs[i] capcode/label/color
+    // $r['label'] / $r['label_color'], and for groups each $subs[i] address/label/color
 }
 ```
 
@@ -306,15 +279,15 @@ foreach ($rows as $r) {
 
 Persists all decoded messages to a local SQLite database file. No server, no installer, no external DLLs — everything is compiled into PDW. The database is a single file you can copy, backup, or open with any SQLite tool.
 
-`capcode` is stored as text to preserve leading zeros in long POCSAG pager addresses.
+`address` is stored as text to preserve leading zeros in long POCSAG pager addresses.
 
 **Schema:**
 
 ```sql
-CREATE TABLE IF NOT EXISTS "alarmeringen" (
+CREATE TABLE IF NOT EXISTS "messages" (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ontvangen   TEXT    NOT NULL DEFAULT '',   -- 'YYYY-MM-DD HH:MM:SS'
-    capcode     TEXT    NOT NULL DEFAULT '',   -- leading zeros preserved
+    received    TEXT    NOT NULL DEFAULT '',   -- 'YYYY-MM-DD HH:MM:SS'
+    address     TEXT    NOT NULL DEFAULT '',   -- leading zeros preserved
     mode        TEXT    NOT NULL DEFAULT '',
     msg_type    TEXT    NOT NULL DEFAULT '',
     bitrate     INTEGER NOT NULL DEFAULT 0,
@@ -324,10 +297,10 @@ CREATE TABLE IF NOT EXISTS "alarmeringen" (
     match_type  INTEGER NOT NULL DEFAULT 0,
     label_color TEXT    NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_alarmeringen_capcode   ON alarmeringen(capcode);
-CREATE INDEX IF NOT EXISTS idx_alarmeringen_ontvangen ON alarmeringen(ontvangen);
-CREATE INDEX IF NOT EXISTS idx_alarmeringen_match     ON alarmeringen(match_type);
-CREATE INDEX IF NOT EXISTS idx_alarmeringen_label     ON alarmeringen(label);
+CREATE INDEX IF NOT EXISTS idx_messages_address   ON messages(address);
+CREATE INDEX IF NOT EXISTS idx_messages_received ON messages(received);
+CREATE INDEX IF NOT EXISTS idx_messages_match     ON messages(match_type);
+CREATE INDEX IF NOT EXISTS idx_messages_label     ON messages(label);
 ```
 
 **Default file path:** `<PDW exe directory>\pdw.db` (configurable).
@@ -357,6 +330,33 @@ Both options are disabled by default — PDW never deletes data without explicit
 - Connection test button in the settings dialog
 - Optional activity log (`YYMMDD_pdw_sqlite.log`)
 - Select which fields to write
+
+---
+
+### Telnet server *(custom internal feature)*
+
+PDW includes a built-in **Telnet server on port 8024** that streams every decoded message in a structured wire-format. This is a custom internal feature; it is not intended for general use or third-party client compatibility.
+
+**Wire-format messages:**
+
+| Prefix | Meaning |
+|--------|---------|
+| `CC/FFF -ALPHA- capcode message` | FLEX alpha (CC=cycle, FFF=frame) |
+| `-ALPHA- capcode-N message` | POCSAG alpha (N=function) |
+| `<TX_START>` / `<TX_STOP>` | Transmission boundaries |
+| `<RXQ:NN>` | RX quality percentage (0–100) |
+| `<WD>` | Watchdog heartbeat (every 20 s by default) |
+| `<RS232:0>` / `<RS232:1>` | Serial data lost / recovered |
+| `<AUDIO:0>` / `<AUDIO:1>` | Audio signal lost / recovered |
+| `<BUFFER_START>` / `<BUFFER_STOP>` | Reconnection replay window |
+
+**Configuration options:**
+
+- Bind address (default `0.0.0.0`)
+- Max simultaneous clients (default 25)
+- Watchdog interval
+- Reconnect backlog window (default 60 s)
+- Event log (`YYMMDD_telnet_server.log`) and wire-format log (`YYMMDD_telnet_traffic.log`)
 
 ---
 

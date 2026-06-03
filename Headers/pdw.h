@@ -297,7 +297,7 @@ typedef struct
 	char mysql_user    [64];
 	char mysql_pass    [64];
 	char mysql_database[64];
-	char mysql_table   [64];          // default "alarmeringen"
+	char mysql_table   [64];          // default "messages"
 	int  mysql_fields;                // bitmask MYF_*, default 0x1F (all on)
 	int  mysql_logToFile;             // 0=off, 1=write pdw_mysql.log
 	int  mysql_schema;                // MYSQL_SCHEMA_* (0=Classic, 1=Extended, 2=Optimized)
@@ -311,7 +311,7 @@ typedef struct
 	// FIX [SqliteFeed]: SQLite output feed — amalgamation, geen externe DLL. See utils/sqlite_feed.{h,cpp}.
 	bool sqlite_enabled;
 	char sqlite_path   [260];         // db-bestand; leeg -> <exedir>\pdw.db
-	char sqlite_table  [64];          // default "alarmeringen"
+	char sqlite_table  [64];          // default "messages"
 	int  sqlite_fields;               // bitmask SQF_*, default 0x1F (all on)
 	int  sqlite_logToFile;            // 0=off, 1=write pdw_sqlite.log
 	int  sqlite_lowWrite;             // 0=durable (best practice), 1=reduce NVMe writes (dataloss risk)

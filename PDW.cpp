@@ -10309,7 +10309,7 @@ BOOL FAR PASCAL MysqlDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemText(hDlg, IDC_MYSQL_USER,           Profile.mysql_user);
 		SetDlgItemText(hDlg, IDC_MYSQL_PASSWORD,       Profile.mysql_pass);
 		SetDlgItemText(hDlg, IDC_MYSQL_DATABASE,       Profile.mysql_database);
-		SetDlgItemText(hDlg, IDC_MYSQL_TABLE,          Profile.mysql_table[0] ? Profile.mysql_table : "alarmeringen");
+		SetDlgItemText(hDlg, IDC_MYSQL_TABLE,          Profile.mysql_table[0] ? Profile.mysql_table : "messages");
 		{
 			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Classic: meld2mysql.exe compatible (capcode/melding/label)");
 			SendDlgItemMessage(hDlg, IDC_MYSQL_SCHEMA, CB_ADDSTRING, 0, (LPARAM)"Extended: all 8 PDW text fields as strings");
@@ -10419,7 +10419,7 @@ BOOL FAR PASCAL SqliteDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 	case WM_INITDIALOG:
 		CheckDlgButton(hDlg, IDC_SQLITE_ENABLED,      Profile.sqlite_enabled ? BST_CHECKED : BST_UNCHECKED);
 		SetDlgItemText(hDlg, IDC_SQLITE_PATH,          Profile.sqlite_path);
-		SetDlgItemText(hDlg, IDC_SQLITE_TABLE,         Profile.sqlite_table[0] ? Profile.sqlite_table : "alarmeringen");
+		SetDlgItemText(hDlg, IDC_SQLITE_TABLE,         Profile.sqlite_table[0] ? Profile.sqlite_table : "messages");
 		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_MODE,    (Profile.sqlite_fields & SQF_MODE)     ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_TYPE,    (Profile.sqlite_fields & SQF_MSG_TYPE) ? BST_CHECKED : BST_UNCHECKED);
 		CheckDlgButton(hDlg, IDC_SQLITE_FIELD_BITRATE, (Profile.sqlite_fields & SQF_BITRATE)  ? BST_CHECKED : BST_UNCHECKED);
@@ -11118,7 +11118,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	GetPrivateProfileString("MySQL", TEXT("User"),     "",              pProfile->mysql_user,     sizeof(pProfile->mysql_user),     lpszIniPathName);
 	GetPrivateProfileString("MySQL", TEXT("Pass"),     "",              pProfile->mysql_pass,     sizeof(pProfile->mysql_pass),     lpszIniPathName);
 	GetPrivateProfileString("MySQL", TEXT("Database"), "",              pProfile->mysql_database, sizeof(pProfile->mysql_database), lpszIniPathName);
-	GetPrivateProfileString("MySQL", TEXT("Table"),    "alarmeringen",  pProfile->mysql_table,    sizeof(pProfile->mysql_table),    lpszIniPathName);
+	GetPrivateProfileString("MySQL", TEXT("Table"),    "messages",  pProfile->mysql_table,    sizeof(pProfile->mysql_table),    lpszIniPathName);
 	pProfile->mysql_fields      = (INT)  GetPrivateProfileInt("MySQL", TEXT("Fields"),    0x1F,                  lpszIniPathName);
 	pProfile->mysql_logToFile   = (INT)  GetPrivateProfileInt("MySQL", TEXT("LogToFile"), 0,                     lpszIniPathName);
 	pProfile->mysql_schema      = (INT)  GetPrivateProfileInt("MySQL", TEXT("Schema"),    MYSQL_SCHEMA_OPTIMIZED, lpszIniPathName);
@@ -11127,7 +11127,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	// FIX [SqliteFeed]: SQLite output feed settings
 	pProfile->sqlite_enabled     = (bool) GetPrivateProfileInt("SQLite", TEXT("Enabled"),   0, lpszIniPathName);
 	GetPrivateProfileString("SQLite", TEXT("Path"),  "",             pProfile->sqlite_path,  sizeof(pProfile->sqlite_path),  lpszIniPathName);
-	GetPrivateProfileString("SQLite", TEXT("Table"), "alarmeringen", pProfile->sqlite_table, sizeof(pProfile->sqlite_table), lpszIniPathName);
+	GetPrivateProfileString("SQLite", TEXT("Table"), "messages", pProfile->sqlite_table, sizeof(pProfile->sqlite_table), lpszIniPathName);
 	pProfile->sqlite_fields       = (INT) GetPrivateProfileInt("SQLite", TEXT("Fields"),       0x1F, lpszIniPathName);
 	pProfile->sqlite_logToFile    = (INT) GetPrivateProfileInt("SQLite", TEXT("LogToFile"),    0,    lpszIniPathName);
 	pProfile->sqlite_lowWrite     = (INT) GetPrivateProfileInt("SQLite", TEXT("LowWrite"),     0,    lpszIniPathName);

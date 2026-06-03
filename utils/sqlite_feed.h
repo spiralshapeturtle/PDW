@@ -8,7 +8,7 @@
 #define SQLITE_FEED_H
 
 // Bitmask for sqlite_fields -- which optional columns are included in the INSERT.
-// ontvangen + capcode are always written; these five are individually switchable.
+// received + address are always written; these five are individually switchable.
 // Same bit positions as MYF_* (utils/mysql.h) for consistency.
 #define SQF_MODE      (1<<0)
 #define SQF_MSG_TYPE  (1<<1)

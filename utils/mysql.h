@@ -5,7 +5,7 @@
 #define MYSQL_H
 
 // Bitmask for mysql_fields — which optional columns to include in INSERT.
-// capcode and ontvangen are always written; these five are individually switchable.
+// address and received are always written; these five are individually switchable.
 #define MYF_MODE      (1<<0)
 #define MYF_MSG_TYPE  (1<<1)
 #define MYF_BITRATE   (1<<2)
@@ -26,7 +26,7 @@
 // Table schema variant — selects CREATE TABLE and INSERT format.
 // Classic  = backward compat with meld2mysql.exe (3 columns: capcode/melding/label)
 // Extended = all 8 PDW text fields as raw strings (address/time/date/mode/type/bitrate/message/label)
-// Optimized= type-correct columns (INT capcode, DATETIME ontvangen, SMALLINT bitrate, FULLTEXT index)
+// Optimized= type-correct columns (address CHAR(9), DATETIME received, SMALLINT bitrate, FULLTEXT index)
 #define MYSQL_SCHEMA_CLASSIC   0
 #define MYSQL_SCHEMA_EXTENDED  1
 #define MYSQL_SCHEMA_OPTIMIZED 2

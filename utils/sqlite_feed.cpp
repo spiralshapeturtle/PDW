@@ -4,9 +4,9 @@
 ** Engine: SQLite amalgamation (utils/sqlite/sqlite3.c) compiled in statically. No DLL,
 ** no install, no runtime dependency on the target machine.
 **
-** Schema: MySQL "Optimized" 1-to-1 (see utils/mysql.cpp BuildInsertOptimized). capcode is TEXT
+** Schema: MySQL "Optimized" 1-to-1 (see utils/mysql.cpp BuildInsertOptimized). address is TEXT
 ** so ASTRID leading zeros are preserved (FIX [MysqlCapcodeChar]). No FULLTEXT -- the website
-** searches with LIKE; plain B-tree indexes on capcode/ontvangen/match_type/label are sufficient.
+** searches with LIKE; plain B-tree indexes on address/received/match_type/label are sufficient.
 **
 ** Safety: all values go through a PREPARED statement with bound parameters -- no
 ** string-escaping needed (unlike MySQL which interpolates values into SQL text).
@@ -58,7 +58,7 @@ extern TCHAR szPath[];          /* PDW exe-directory — uit Initapp.cpp */
 // ---------------------------------------------------------------------------
 
 static char  g_szPath  [MAX_PATH] = "";
-static char  g_szTable [64]       = "alarmeringen";
+static char  g_szTable [64]       = "messages";
 static int   g_iFields            = SQF_ALL;
 static BOOL  g_bLinefeed          = FALSE;   // 0xBB -> '\n' instead of guillemet, mirrors Profile.Linefeed
 static BOOL  g_bLogToFile         = FALSE;
@@ -282,8 +282,8 @@ static int CreateSchema(sqlite3 *db, const char *table, char *err, int errLen)
     _snprintf(sql, sizeof(sql) - 1,
         "CREATE TABLE IF NOT EXISTS \"%s\" ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " ontvangen TEXT NOT NULL DEFAULT '',"      /* 'YYYY-MM-DD HH:MM:SS' */
-        " capcode TEXT NOT NULL DEFAULT '',"         /* CHAR(9)-equivalent: voorloopnullen intact */
+        " received TEXT NOT NULL DEFAULT '',"      /* 'YYYY-MM-DD HH:MM:SS' */
+        " address TEXT NOT NULL DEFAULT '',"         /* CHAR(9)-equivalent: voorloopnullen intact */
         " mode TEXT NOT NULL DEFAULT '',"
         " msg_type TEXT NOT NULL DEFAULT '',"
         " bitrate INTEGER NOT NULL DEFAULT 0,"
@@ -292,8 +292,8 @@ static int CreateSchema(sqlite3 *db, const char *table, char *err, int errLen)
         " subscribers TEXT NOT NULL DEFAULT '',"
         " match_type INTEGER NOT NULL DEFAULT 0,"
         " label_color TEXT NOT NULL DEFAULT '');"
-        "CREATE INDEX IF NOT EXISTS \"idx_%s_capcode\"   ON \"%s\"(capcode);"
-        "CREATE INDEX IF NOT EXISTS \"idx_%s_ontvangen\" ON \"%s\"(ontvangen);"
+        "CREATE INDEX IF NOT EXISTS \"idx_%s_address\"   ON \"%s\"(address);"
+        "CREATE INDEX IF NOT EXISTS \"idx_%s_received\" ON \"%s\"(received);"
         "CREATE INDEX IF NOT EXISTS \"idx_%s_match\"     ON \"%s\"(match_type);"
         "CREATE INDEX IF NOT EXISTS \"idx_%s_label\"     ON \"%s\"(label);",
         table, table, table, table, table, table, table, table, table);
@@ -333,7 +333,7 @@ static int PrepareInsert(sqlite3 *db, const char *table, sqlite3_stmt **stmt)
     char sql[512];
     _snprintf(sql, sizeof(sql) - 1,
         "INSERT INTO \"%s\""
-        "(ontvangen,capcode,mode,msg_type,bitrate,message,label,subscribers,match_type,label_color)"
+        "(received,address,mode,msg_type,bitrate,message,label,subscribers,match_type,label_color)"
         " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10);",
         table);
     sql[sizeof(sql) - 1] = '\0';
@@ -356,7 +356,7 @@ static void TxnCommit(void)
 }
 
 /* Bind one job and execute the INSERT. The field bitmask controls whether the real value or an
-   empty string is bound (ontvangen + capcode always; subscribers/match_type/label_color always --
+   empty string is bound (received + address always; subscribers/match_type/label_color always --
    same as the MySQL Optimized builder). Returns SQLITE_DONE on success. */
 static int InsertJob(const SqliteJob *job)
 {
@@ -408,7 +408,7 @@ static void RunMaintenance(void)
         char sql[256], mod[32];
         _snprintf(mod, sizeof(mod) - 1, "-%d days", g_iPurgeDays);
         _snprintf(sql, sizeof(sql) - 1,
-                  "DELETE FROM \"%s\" WHERE ontvangen < datetime('now','localtime','%s');",
+                  "DELETE FROM \"%s\" WHERE received < datetime('now','localtime','%s');",
                   g_szTable, mod);
         if (sqlite3_exec(g_db, sql, NULL, NULL, NULL) == SQLITE_OK) {
             int n = sqlite3_changes(g_db);
@@ -586,11 +586,11 @@ void SqliteInit(void)
     }
     g_szPath[sizeof(g_szPath) - 1] = '\0';
 
-    strncpy(g_szTable, Profile.sqlite_table[0] ? Profile.sqlite_table : "alarmeringen",
+    strncpy(g_szTable, Profile.sqlite_table[0] ? Profile.sqlite_table : "messages",
             sizeof(g_szTable) - 1);
     g_szTable[sizeof(g_szTable) - 1] = '\0';
     SanitizeIdent(g_szTable);
-    if (!g_szTable[0]) strcpy(g_szTable, "alarmeringen");
+    if (!g_szTable[0]) strcpy(g_szTable, "messages");
 
     g_iFields       = Profile.sqlite_fields;
     g_bLinefeed     = Profile.Linefeed ? TRUE : FALSE;
@@ -698,12 +698,12 @@ void SqliteGroupAccumulate(const char *capcode, const char *label,
         JsonEscapeStr(escColor, sizeof(escColor), labelColor);
         written = _snprintf(ga->szSubscr + ga->sPos,
                             SQLITE_SUBSCRIBERS_LEN - ga->sPos - 2,
-                            "{\"capcode\":\"%s\",\"label\":\"%s\",\"color\":\"%s\"}",
+                            "{\"address\":\"%s\",\"label\":\"%s\",\"color\":\"%s\"}",
                             escCc, escLabel, escColor);
     } else {
         written = _snprintf(ga->szSubscr + ga->sPos,
                             SQLITE_SUBSCRIBERS_LEN - ga->sPos - 2,
-                            "{\"capcode\":\"%s\",\"label\":\"%s\"}",
+                            "{\"address\":\"%s\",\"label\":\"%s\"}",
                             escCc, escLabel);
     }
     if (written > 0) { ga->sPos += written; ga->nSubscr++; }
@@ -805,10 +805,10 @@ BOOL SqliteTestConnection(const char *path, const char *table, char *szMsg, int 
     szP[sizeof(szP) - 1] = '\0';
 
     char szT[64];
-    strncpy(szT, (table && table[0]) ? table : "alarmeringen", sizeof(szT) - 1);
+    strncpy(szT, (table && table[0]) ? table : "messages", sizeof(szT) - 1);
     szT[sizeof(szT) - 1] = '\0';
     SanitizeIdent(szT);
-    if (!szT[0]) strcpy(szT, "alarmeringen");
+    if (!szT[0]) strcpy(szT, "messages");
 
     sqlite3 *db = NULL;
     int rc = sqlite3_open_v2(szP, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);

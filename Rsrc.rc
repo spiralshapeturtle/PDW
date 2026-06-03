@@ -1014,7 +1014,7 @@ BEGIN
     CONTROL         "bitrate",IDC_MYSQL_FIELD_BITRATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,132,110,10
     CONTROL         "message",IDC_MYSQL_FIELD_MESSAGE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,132,110,10
     CONTROL         "label",IDC_MYSQL_FIELD_LABEL,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,146,110,10
-    LTEXT           "(ontvangen and capcode are always stored)",IDC_STATIC,14,160,220,8
+    LTEXT           "(received and capcode are always stored)",IDC_STATIC,14,160,220,8
     CONTROL         "Log to file (pdw_mysql.log)",IDC_MYSQL_LOG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,188,160,10
     LTEXT           "",IDC_MYSQL_STATUS,8,204,244,8
     PUSHBUTTON      "Test connection",IDC_MYSQL_TEST,8,228,80,14
@@ -1034,7 +1034,7 @@ BEGIN
     LTEXT           "(leave empty for pdw.db next to PDW.exe)",IDC_STATIC,56,39,196,8
     LTEXT           "Table",IDC_STATIC,8,52,20,8
     EDITTEXT        IDC_SQLITE_TABLE,32,50,120,13,ES_AUTOHSCROLL
-    GROUPBOX        "Columns to store (ontvangen and capcode are always stored)",IDC_STATIC,8,68,244,49
+    GROUPBOX        "Columns to store (received and capcode are always stored)",IDC_STATIC,8,68,244,49
     CONTROL         "mode",IDC_SQLITE_FIELD_MODE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,80,110,10
     CONTROL         "msg_type",IDC_SQLITE_FIELD_TYPE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,130,80,110,10
     CONTROL         "bitrate",IDC_SQLITE_FIELD_BITRATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,93,110,10

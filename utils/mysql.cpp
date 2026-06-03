@@ -81,7 +81,7 @@ static int   g_iPort           = 3306;
 static char  g_szUser    [64]  = "";
 static char  g_szPass    [64]  = "";
 static char  g_szDatabase[64]  = "";
-static char  g_szTable   [64]  = "alarmeringen";
+static char  g_szTable   [64]  = "messages";
 static int   g_iFields         = MYF_ALL;
 static int   g_iSchema         = MYSQL_SCHEMA_OPTIMIZED;
 static BOOL  g_bLinefeed       = FALSE;   // FIX [MysqlUtf8]: snapshot van Profile.Linefeed — 0xBB -> '\n' i.p.v. « »
@@ -832,8 +832,8 @@ static void BuildCreateTable(char *out, int outLen)
         _snprintf(out, outLen - 1,
             "CREATE TABLE IF NOT EXISTS `%s` ("
             "`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,"
-            "`ontvangen` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-            "`capcode` CHAR(9) NOT NULL DEFAULT '',"
+            "`received` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            "`address` CHAR(9) NOT NULL DEFAULT '',"
             "`mode` VARCHAR(15) NOT NULL DEFAULT '',"
             "`msg_type` VARCHAR(10) NOT NULL DEFAULT '',"
             "`bitrate` SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
@@ -843,8 +843,8 @@ static void BuildCreateTable(char *out, int outLen)
             "`match_type` TINYINT UNSIGNED NOT NULL DEFAULT 0,"
             "`label_color` VARCHAR(7) NOT NULL DEFAULT '',"
             "PRIMARY KEY (`id`),"
-            "INDEX `idx_capcode`   (`capcode`),"
-            "INDEX `idx_ontvangen` (`ontvangen`),"
+            "INDEX `idx_address`   (`address`),"
+            "INDEX `idx_received` (`received`),"
             "INDEX `idx_match`     (`match_type`),"
             "INDEX `idx_label`     (`label`(64)),"
             "FULLTEXT `ft_message` (`message`,`label`)"
@@ -934,7 +934,7 @@ static int BuildInsertOptimized(char *out, int outLen, const MysqlJob *job)
     int vPos = 0;
 
     cPos += _snprintf(colBuf + cPos, (int)sizeof(colBuf) - cPos - 1,
-                      "`ontvangen`, `capcode`");
+                      "`received`, `address`");
     vPos += _snprintf(valBuf + vPos, MYSQL_MAX_QUERY - vPos - 1,
                       "'%s', '%s'", szDateTime, escCap);
 
@@ -1072,12 +1072,12 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
         JsonEscapeStr(escColor, sizeof(escColor), labelColor);
         written = _snprintf(ga->szSubscr + ga->sPos,
                             MYSQL_SUBSCRIBERS_LEN - ga->sPos - 2, /* -2 for final "]" + NUL */
-                            "{\"capcode\":\"%s\",\"label\":\"%s\",\"color\":\"%s\"}",
+                            "{\"address\":\"%s\",\"label\":\"%s\",\"color\":\"%s\"}",
                             escCc, escLabel, escColor);
     } else {
         written = _snprintf(ga->szSubscr + ga->sPos,
                             MYSQL_SUBSCRIBERS_LEN - ga->sPos - 2, /* -2 for final "]" + NUL */
-                            "{\"capcode\":\"%s\",\"label\":\"%s\"}",
+                            "{\"address\":\"%s\",\"label\":\"%s\"}",
                             escCc, escLabel);
     }
     if (written > 0) { ga->sPos += written; ga->nSubscr++; }
@@ -1290,7 +1290,7 @@ void MysqlInit(void)
     strncpy(g_szPass,     Profile.mysql_pass,     sizeof(g_szPass)     - 1);
     strncpy(g_szDatabase, Profile.mysql_database, sizeof(g_szDatabase) - 1);
     strncpy(g_szTable,    Profile.mysql_table[0]  ? Profile.mysql_table
-                                                  : "alarmeringen",
+                                                  : "messages",
                           sizeof(g_szTable) - 1);
     g_szHost    [sizeof(g_szHost)     - 1] = '\0';
     g_szUser    [sizeof(g_szUser)     - 1] = '\0';
@@ -1310,7 +1310,7 @@ void MysqlInit(void)
         for (pSrc = pDst = g_szTable; *pSrc; pSrc++)
             if (*pSrc != '`' && *pSrc != ';' && (unsigned char)*pSrc > ' ') *pDst++ = *pSrc;
         *pDst = '\0';
-        if (!g_szTable[0]) strcpy(g_szTable, "alarmeringen");
+        if (!g_szTable[0]) strcpy(g_szTable, "messages");
         if (!g_szDatabase[0]) { PostStatus(MYS_DISABLED); return; }   /* nothing safe left to use */
     }
     g_iPort      = (Profile.mysql_port > 0) ? Profile.mysql_port : 3306;

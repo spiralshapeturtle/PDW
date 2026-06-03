@@ -371,7 +371,7 @@ Persists all decoded messages to a MySQL or MariaDB database. No external DLLs o
 
 **Classic** — minimal, three columns:
 ```sql
-CREATE TABLE `alarmeringen` (
+CREATE TABLE `messages` (
     `id`        INT(11)     NOT NULL AUTO_INCREMENT,
     `timestamp` TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `capcode`   VARCHAR(10) NOT NULL DEFAULT '',
@@ -383,7 +383,7 @@ CREATE TABLE `alarmeringen` (
 
 **Extended** — all fields as text:
 ```sql
-CREATE TABLE `alarmeringen` (
+CREATE TABLE `messages` (
     `id`        INT(11)     NOT NULL AUTO_INCREMENT,
     `timestamp` TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `address`   VARCHAR(20) NOT NULL DEFAULT '',
@@ -400,10 +400,10 @@ CREATE TABLE `alarmeringen` (
 
 **Optimized** — typed columns with indexes; recommended for new installations:
 ```sql
-CREATE TABLE `alarmeringen` (
+CREATE TABLE `messages` (
     `id`          BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,
-    `ontvangen`   DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    `capcode`     CHAR(9)           NOT NULL DEFAULT '',
+    `received`   DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `address`     CHAR(9)           NOT NULL DEFAULT '',
     `mode`        VARCHAR(15)       NOT NULL DEFAULT '',
     `msg_type`    VARCHAR(10)       NOT NULL DEFAULT '',
     `bitrate`     SMALLINT UNSIGNED NOT NULL DEFAULT 0,
@@ -413,8 +413,8 @@ CREATE TABLE `alarmeringen` (
     `match_type`  TINYINT UNSIGNED  NOT NULL DEFAULT 0,
     `label_color` VARCHAR(7)        NOT NULL DEFAULT '',
     PRIMARY KEY (`id`),
-    INDEX `idx_capcode`   (`capcode`),
-    INDEX `idx_ontvangen` (`ontvangen`),
+    INDEX `idx_address`   (`address`),
+    INDEX `idx_received` (`received`),
     INDEX `idx_match`     (`match_type`),
     INDEX `idx_label`     (`label`(64)),
     FULLTEXT `ft_message` (`message`, `label`)
@@ -426,8 +426,8 @@ CREATE TABLE `alarmeringen` (
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | BIGINT | Monotonic auto-increment. Use for live polling: `WHERE id > :since` |
-| `ontvangen` | DATETIME | Message time in local timezone |
-| `capcode` | CHAR(9) | Zero-padded pager address. Leading zeros are preserved. FLEX group capcodes are `2029568`–`2029583` |
+| `received` | DATETIME | Message time in local timezone |
+| `address` | CHAR(9) | Zero-padded pager address. Leading zeros are preserved. FLEX group capcodes are `2029568`–`2029583` |
 | `mode` | VARCHAR | Protocol + rate, e.g. `FLEX-1600`, `POCSAG-1200` |
 | `msg_type` | VARCHAR | `ALPHA` / `NUMERIC` / `TONE` / `GROUP` |
 | `bitrate` | SMALLINT | 512 / 1200 / 2400 (POCSAG) or 1600 / 3200 / 6400 (FLEX) |
@@ -440,27 +440,27 @@ CREATE TABLE `alarmeringen` (
 **FLEX group calls** store member addresses in `subscribers`:
 ```json
 [
-  {"capcode": "1234567", "label": "Ambulance 1", "color": "#1565c0"},
-  {"capcode": "1234568", "label": "Ambulance 2"}
+  {"address": "1234567", "label": "Ambulance 1", "color": "#1565c0"},
+  {"address": "1234568", "label": "Ambulance 2"}
 ]
 ```
 
 **Useful queries:**
 ```sql
 -- Latest 100 messages
-SELECT * FROM alarmeringen ORDER BY id DESC LIMIT 100;
+SELECT * FROM messages ORDER BY id DESC LIMIT 100;
 
 -- Live polling (newer than the last seen id)
-SELECT * FROM alarmeringen WHERE id > :since ORDER BY id DESC LIMIT 50;
+SELECT * FROM messages WHERE id > :since ORDER BY id DESC LIMIT 50;
 
--- One capcode
-SELECT * FROM alarmeringen WHERE capcode = '1234567' ORDER BY id DESC;
+-- One address
+SELECT * FROM messages WHERE address = '1234567' ORDER BY id DESC;
 
 -- Matched/filtered messages only
-SELECT * FROM alarmeringen WHERE match_type >= 1;
+SELECT * FROM messages WHERE match_type >= 1;
 
 -- Full-text search
-SELECT * FROM alarmeringen
+SELECT * FROM messages
 WHERE MATCH(message, label) AGAINST ('brandweer' IN BOOLEAN MODE)
 ORDER BY id DESC LIMIT 50;
 ```
@@ -484,10 +484,10 @@ Persists all decoded messages to a local SQLite database file. No server, no ins
 
 **Schema:**
 ```sql
-CREATE TABLE IF NOT EXISTS "alarmeringen" (
+CREATE TABLE IF NOT EXISTS "messages" (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ontvangen   TEXT    NOT NULL DEFAULT '',   -- 'YYYY-MM-DD HH:MM:SS'
-    capcode     TEXT    NOT NULL DEFAULT '',   -- leading zeros preserved
+    received    TEXT    NOT NULL DEFAULT '',   -- 'YYYY-MM-DD HH:MM:SS'
+    address     TEXT    NOT NULL DEFAULT '',   -- leading zeros preserved
     mode        TEXT    NOT NULL DEFAULT '',
     msg_type    TEXT    NOT NULL DEFAULT '',
     bitrate     INTEGER NOT NULL DEFAULT 0,
@@ -499,7 +499,7 @@ CREATE TABLE IF NOT EXISTS "alarmeringen" (
 );
 ```
 
-The column names and content are identical to the MySQL Optimized schema; the only differences are that `capcode` is `TEXT` instead of `CHAR(9)` and there is no FULLTEXT index (use `LIKE '%term%'` for text search).
+The column names and content are identical to the MySQL Optimized schema; the only differences are that `address` is `TEXT` instead of `CHAR(9)` and there is no FULLTEXT index (use `LIKE '%term%'` for text search).
 
 **SQLite PRAGMA settings applied automatically:**
 
