@@ -95,6 +95,52 @@ static volatile ULONGLONG g_connectTickMs  = 0;
 // reopen) or "device removed" (long backoff).
 static volatile DWORD g_lastReadError = 0;
 
+// FIX [RxWedgeDiag]: observe-only diagnostic to pinpoint a producer freeze.
+// RxThread/slicer_read/rs232_read stamp g_rxPhase at each stage; a separate
+// low-rate thread (RxDiagThread) logs the current phase + how long it has been
+// held + data-age. If the producer wedges, the log makes the cause conclusive:
+//   phase stuck on READFILE  -> blocked in ReadFile (Moxa TCP tunnel wedged)
+//   phase stuck on TSNOTIFY  -> blocked on g_tsCs (telnet wire-log disk write)
+//   phase stuck on REOPEN    -> blocked in rs232_worker_reopen
+// Everything here is gated behind Profile.bDebugLog and never touches the
+// decode/ring path; it only reads volatiles already maintained by the worker.
+enum { RXP_SLEEP = 0, RXP_READFILE = 1, RXP_PARSE = 2, RXP_TSNOTIFY = 3, RXP_REOPEN = 4 };
+static volatile LONG      g_rxPhase      = RXP_SLEEP;
+static volatile ULONGLONG g_rxPhaseMs    = 0;   // tick when phase last changed
+static volatile DWORD     g_rxLoops      = 0;   // RxThread loop iteration counter
+static volatile HANDLE    g_rxDiagThread = INVALID_HANDLE_VALUE;
+static volatile BOOL      g_rxDiagRun    = FALSE;
+
+static inline void RxSetPhase(LONG p) { g_rxPhase = p; g_rxPhaseMs = GetTickCount64(); }
+
+static DWORD WINAPI RxDiagThread(LPVOID)
+{
+	static const char *kPhase[] = {
+		"SLEEP", "READFILE", "PARSE", "TSNOTIFY(g_tsCs+wirelog)", "REOPEN"
+	};
+	DWORD lastLoops = (DWORD)-1;
+	while (g_rxDiagRun) {
+		// ~2 s cadence, but poll the stop flag every 100 ms so disconnect is snappy.
+		for (int i = 0; i < 20 && g_rxDiagRun; i++) Sleep(100);
+		if (!g_rxDiagRun) break;
+		if (!Profile.bDebugLog) { lastLoops = (DWORD)-1; continue; }
+
+		ULONGLONG now = GetTickCount64();
+		LONG ph = g_rxPhase;
+		const char *name = (ph >= RXP_SLEEP && ph <= RXP_REOPEN) ? kPhase[ph] : "?";
+		DWORD loops = g_rxLoops;
+		// "frozen" = the worker has not advanced its loop counter since last tick.
+		const char *flag = (loops == lastLoops) ? "  <-- NO PROGRESS" : "";
+		lastLoops = loops;
+
+		DebugLog("[RxDiag] phase=%s heldMs=%llu dataAgeMs=%llu loops=%lu err=%lu connAgeMs=%llu%s",
+			name, now - g_rxPhaseMs, now - g_lastDataTickMs,
+			(unsigned long)loops, (unsigned long)g_lastReadError,
+			now - g_connectTickMs, flag);
+	}
+	return 0;
+}
+
 // NOTE [AssertNoOp]: 'assert' is DELIBERATELY redefined to a non-aborting, log-only check. This is
 // intentional for a long-running unattended daemon: a failed assertion logs to the debug channel
 // (DebugView) but must NEVER call abort()/terminate() and kill the process. Standard <assert.h>
@@ -187,7 +233,9 @@ static int rs232_worker_reopen(void)
 	else
 		_snprintf_s(pcComPort, sizeof(pcComPort), _TRUNCATE, "COM%d", g_comPortNumber);
 
-	m_ComPortHandle = CreateFile(pcComPort, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
+	// FIX [ComPortExclusive]: match the main-thread open (RW + share 0) so the
+	// reconnect re-claims exclusive ownership and stays un-hijackable.
+	m_ComPortHandle = CreateFile(pcComPort, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0);
 	if (m_ComPortHandle == INVALID_HANDLE_VALUE) {
 		DebugLog("[rs232_worker_reopen] CreateFile(%s) failed: %08lX", pcComPort, GetLastError());
 		LeaveCriticalSection(&g_handleCs);
@@ -268,6 +316,7 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 			return rc;
 		}
 	}
+
 	/********************************************************************************************
 	* Seek contact with the serial.sys driver. Configure it for overlapped operation, this is   *
 	* done so the receiving thread (later on in this code) can be terminated by the main thread *
@@ -277,7 +326,15 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 	// disconnect-then-reconnect path inside this same function may run
 	// concurrently with a still-draining worker from a previous session.
 	EnterCriticalSection(&g_handleCs);
-	m_ComPortHandle = CreateFile(pcComPort,GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
+	// FIX [ComPortExclusive]: open GENERIC_READ|GENERIC_WRITE with share-mode 0
+	// (was GENERIC_READ only). PDW never writes, but a virtual COM redirector
+	// (Moxa NPort) only enforces exclusive ownership for a read-WRITE open; a
+	// read-only open is treated as shareable, letting a second process (PDW or
+	// any other app) open the same port and split the byte stream so neither
+	// decodes. Matching p2kflexDecoder (GENERIC_READ|GENERIC_WRITE, share 0) makes
+	// the running instance hold the port firmly: any second opener fails at
+	// CreateFile (ERROR_ACCESS_DENIED) instead of hijacking it.
+	m_ComPortHandle = CreateFile(pcComPort, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0);
 	if(m_ComPortHandle == INVALID_HANDLE_VALUE)
 	{
 	    OUTPUTDEBUGMSG((("ERROR: CreateFile() %08lX!\n"), GetLastError()));
@@ -335,6 +392,12 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 	bKeepThreadAlive = TRUE;
 	m_hRxThread = CreateThread(NULL, 0, RxThread, (LPVOID) NULL, CREATE_SUSPENDED, &m_dwThreadId) ;
 	ResumeThread(m_hRxThread);
+
+	/* FIX [RxWedgeDiag]: start observe-only producer-phase diagnostic thread. */
+	if (g_rxDiagThread == INVALID_HANDLE_VALUE || g_rxDiagThread == NULL) {
+		g_rxDiagRun    = TRUE;
+		g_rxDiagThread = CreateThread(NULL, 0, RxDiagThread, NULL, 0, NULL);
+	}
 
 	/* FIX [TelnetRS232]: start RS232/AUDIO watchdog */
 	TelnetServerRS232Enable(1);
@@ -412,6 +475,15 @@ int rs232_disconnect()
 	}
 	m_bConnectedToComport = FALSE;
 	if (gotLock) LeaveCriticalSection(&g_handleCs);
+
+	/* FIX [RxWedgeDiag]: stop observe-only diagnostic thread. */
+	if (g_rxDiagThread != INVALID_HANDLE_VALUE && g_rxDiagThread != NULL) {
+		g_rxDiagRun = FALSE;
+		WaitForSingleObject(g_rxDiagThread, 1000);
+		CloseHandle(g_rxDiagThread);
+		g_rxDiagThread = INVALID_HANDLE_VALUE;
+	}
+
 	/* FIX [TelnetRS232]: stop RS232/AUDIO watchdog, emit <RS232:0> if was active */
 	TelnetServerRS232Enable(0);
 	return(RS232_SUCCESS) ;
@@ -426,6 +498,8 @@ DWORD WINAPI RxThread(LPVOID pCl)
 
 	do
 	{
+		g_rxLoops++;	// FIX [RxWedgeDiag]: liveness counter (read by RxDiagThread)
+
 		int bytesRead = 0;
 		if (bOrgcomPortRS232) {
 			bytesRead = rs232_read();
@@ -433,6 +507,7 @@ DWORD WINAPI RxThread(LPVOID pCl)
 		else {
 			bytesRead = slicer_read();
 		}
+		RxSetPhase(RXP_SLEEP);	// FIX [RxWedgeDiag]: back in the loop body
 
 		// Classify the most recent read result so the watchdog can pick a
 		// matching backoff. ERROR_OPERATION_ABORTED is the normal exit path
@@ -461,6 +536,7 @@ DWORD WINAPI RxThread(LPVOID pCl)
 		         (now - g_connectTickMs)  > RS232_WARMUP_MS) {
 			DebugLog("[RxThread] no data for %llums on COM%d (err=%lu) - reconnecting",
 				now - g_lastDataTickMs, g_comPortNumber, (unsigned long)readErr);
+			RxSetPhase(RXP_REOPEN);	// FIX [RxWedgeDiag]
 			if (rs232_worker_reopen() != RS232_SUCCESS) {
 				// Reopen failed. Distinguish "device physically gone"
 				// (long backoff, don't burn CPU) from "transient hiccup"
@@ -499,7 +575,10 @@ int rs232_read(void)
 		return(0) ;
 	}
 
-	if(!ReadFile(m_ComPortHandle, byData, sizeof(byData), &dwRead, 0))
+	RxSetPhase(RXP_READFILE);	// FIX [RxWedgeDiag]: stuck here == ReadFile wedged
+	BOOL bRead = ReadFile(m_ComPortHandle, byData, sizeof(byData), &dwRead, 0);
+	RxSetPhase(RXP_PARSE);		// FIX [RxWedgeDiag]: ReadFile returned
+	if(!bRead)
 	{
 		DWORD err = GetLastError();
 		g_lastReadError = err;
@@ -550,8 +629,10 @@ int rs232_read(void)
 		}
 	}
 	/* FIX [TelnetRS232]: notify RS232/AUDIO watchdog with raw bytes */
-	if (dwRead > 0)
+	if (dwRead > 0) {
+		RxSetPhase(RXP_TSNOTIFY);	// FIX [RxWedgeDiag]: stuck here == blocked on g_tsCs (telnet wire-log)
 		TelnetServerRS232BytesReceived(byData, (int)dwRead);
+	}
 	return (int)dwRead;
 }
 
@@ -567,7 +648,10 @@ int slicer_read(void)
 		OUTPUTDEBUGMSG((("slicer_read : COMport not open!\n")));
 		return(0);
 	}
-	if(!ReadFile(m_ComPortHandle, byRS232Data, sizeof(byRS232Data), &dwRead, 0))
+	RxSetPhase(RXP_READFILE);	// FIX [RxWedgeDiag]: stuck here == ReadFile wedged
+	BOOL bRead = ReadFile(m_ComPortHandle, byRS232Data, sizeof(byRS232Data), &dwRead, 0);
+	RxSetPhase(RXP_PARSE);		// FIX [RxWedgeDiag]: ReadFile returned
+	if(!bRead)
 	{
 		DWORD err = GetLastError();
 		g_lastReadError = err;
@@ -610,8 +694,10 @@ int slicer_read(void)
 	** transitions to reach the p2kflexDecoder audio threshold.
 	** Use dwRead (raw bytes) not num (complete 3-byte samples): partial reads
 	** (dwRead=1 or 2) still prove the COM link is alive even if num rounds to 0. */
-	if (dwRead > 0)
+	if (dwRead > 0) {
+		RxSetPhase(RXP_TSNOTIFY);	// FIX [RxWedgeDiag]: stuck here == blocked on g_tsCs (telnet wire-log)
 		TelnetServerSlicerActivity((int)dwRead);
+	}
 	return (int)dwRead;
 }
 

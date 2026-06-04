@@ -771,11 +771,16 @@ When running two PDW windows simultaneously (for example one decoding audio and 
 
 COM port numbers 10 and higher are fully supported. Enter the port number directly in the Interface Setup dialog. PDW opens the port using the `\\.\COMn` notation required by Windows for high-numbered ports.
 
+### Exclusive COM port access
+
+PDW opens its COM port for exclusive access. While PDW is running and connected, no other program can open the same port - the running instance keeps sole, uninterrupted ownership of the link. If PDW cannot open a port because another program already holds it, it reports **"Unable to open the selected COM port - it may already be in use by another program."** Close the other program (or choose a different port) and try again. This matters especially for virtual COM ports (such as a Moxa NPort redirector over TCP): without exclusive access a second opener would split the byte stream and stop decoding.
+
 ---
 
 ## 20. Troubleshooting
 
 **No messages are decoded**
+- Make sure no other program is holding the COM port. PDW opens the port exclusively, so if another program had it open first, PDW reports it cannot open the port. See [section 19](#19-com-ports--10).
 - Check that the signal indicator bar (top right) is moving. If not, the audio signal is not reaching PDW. Increase radio volume or check the cable.
 - Make sure the correct input source (Line In / Mic) is selected in the Windows recording mixer.
 - Check that the correct protocol is selected in the Monitor menu.

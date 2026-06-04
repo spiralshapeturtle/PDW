@@ -2,6 +2,29 @@
 
 ## New in 3.5.8
 
+### COM port held exclusively - cannot be hijacked while PDW runs (FIX [ComPortExclusive])
+
+Previously a second program (another PDW instance, a terminal, or anything else) could open the
+same COM port PDW was already using. On virtual COM ports - for example a Moxa NPort redirector
+that tunnels the serial link over TCP - this silently split the incoming byte stream across both
+readers, so neither received a coherent bitstream and decoding stopped in both, with the window
+still responding normally.
+
+PDW now opens the COM port for exclusive read/write access. While PDW is running and connected,
+any other program that tries to open the same port fails - the running instance keeps sole,
+uninterrupted ownership of the link. If PDW itself cannot open a port because another program
+already holds it, it reports **"Unable to open the selected COM port - it may already be in use
+by another program."** This is enforced by Windows at the driver level, so it protects against
+every other program, not just a second PDW.
+
+### Filter window font follows the main window (FIX [FilterFont])
+
+The filter window (Ctrl+F) list now uses the same font and size as the main window
+(configurable via Options -> Font) and scales with the display DPI. Previously the list was
+hardcoded to 11pt MS Sans Serif and did not grow with the configured font size.
+
+
+
 ### Central Log Manager with Write Buffering
 
 All log output — decoded messages, system events, and feed activity — now flows through a single
@@ -51,13 +74,14 @@ after ~64 capcodes, and the subscribers JSON array was cut off mid-object — af
 - Address-list buffers raised from 512 B to 2 KB
 - The MySQL feed was already correctly sized and was not affected
 
-**Fewer MQTT reconnect errors (`rc=-1`) on idle connections**
+**MQTT log no longer reports recovered reconnects as errors**
 
-The MQTT keep-alive interval was lowered from 60 s to 30 s. Out-of-band TCP resets by the broker,
-NAT, or firewall could leave the connection stale, so the next publish hit a dead socket and logged
-`rc=-1` before retrying. The shorter keep-alive detects a dead connection sooner — reconnecting
-cleanly before the next publish — and keeps NAT/firewall mappings warm so resets occur less often.
-No messages were lost previously; the existing retry already recovered them.
+When a broker, NAT, or firewall silently drops an idle TCP connection, the next MQTT publish hits a
+stale socket and fails (`rc=-1`). PDW already retried automatically and the message was delivered on
+the second attempt, but the transient failure was logged as a scary `ERROR` line. This routine
+reconnect is now logged as a quiet `RECONNECT` line instead; a real `ERROR` is only logged when both
+attempts fail (broker genuinely unreachable). No behaviour changed — only the log severity. No
+messages were ever lost; the retry already recovered them.
 
 ---
 

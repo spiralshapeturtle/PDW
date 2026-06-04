@@ -53,7 +53,7 @@ Each filter entry matches on **capcode**, **label**, or **message text** and can
 - Write to a separate log file (up to 3 per filter)
 - Mark as monitor-only or reject
 
-Filter labels support up to 256 characters; COM ports ≥ 10 are supported. Search-while-typing is available in the filter list.
+Filter labels support up to 256 characters; COM ports ≥ 10 are supported. Search-while-typing is available in the filter list. The filter list font follows the main window font setting.
 
 ---
 
@@ -488,6 +488,7 @@ The PDW executable is intentionally large. OpenSSL, Paho MQTT, and all other thi
 - SMTP STARTTLS (port 587) and implicit TLS (port 465)
 - x64 build target added
 - COM port numbers ≥ 10 supported
+- Exclusive COM port access — while PDW runs, no other program can hijack its port (prevents stream-splitting on virtual COM/Moxa redirectors)
 - Filter label length increased to 256 characters
 
 ---

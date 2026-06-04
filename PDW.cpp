@@ -7020,23 +7020,13 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		InitListControl(hDlg);
 
-		font_listview.lfHeight			= -11;
-		font_listview.lfWidth			= 0;
-		font_listview.lfEscapement		= 0;
-		font_listview.lfOrientation		= 0;
-		font_listview.lfWeight			= FW_BOLD;
-		font_listview.lfItalic			= 0;
-		font_listview.lfUnderline		= 0;
-		font_listview.lfStrikeOut		= 0;
-		font_listview.lfCharSet			= OEM_CHARSET;
-		font_listview.lfOutPrecision	= OUT_STROKE_PRECIS;
-		font_listview.lfClipPrecision	= CLIP_DEFAULT_PRECIS;
-		font_listview.lfQuality			= DEFAULT_QUALITY;
-		font_listview.lfPitchAndFamily	= FIXED_PITCH | FF_MODERN;
-		lstrcpy(font_listview.lfFaceName, "MS Sans Serif");
+		// FIX [FilterFont]: volg het hoofdvenster-font (Profile.fontInfo) i.p.v. hardcoded MS Sans Serif 11pt,
+		// zodat de filterlijst meegroeit met de Font-instelling. Schaal de hoogte met DPI net als het hoofdvenster (PDW.cpp ~1041).
+		font_listview = Profile.fontInfo;
+		font_listview.lfHeight = Scale(Profile.fontInfo.lfHeight);	// FIX [DpiScale]: schaal filterlijst-font met DPI
+		font_listview.lfWeight = FW_BOLD;							// filterlijst blijft vet voor leesbaarheid
 
 		if (hf) DeleteObject(hf);
-		font_listview.lfHeight = -Scale(11);	// FIX [DpiScale]: schaal filterlijst-font met DPI
 		hf = CreateFontIndirect(&font_listview);
 		SendDlgItemMessage(hDlg, IDC_FILTERS, WM_SETFONT, (WPARAM) hf, 0);
 
@@ -11904,7 +11894,9 @@ bool LoadDriver(void)	// HWi
 			int nRs232Result = rs232_connect(&slicer_in, &slicer_out);
 			if (nRs232Result != RS232_SUCCESS)
 			{
-				MessageBox(ghWnd,"Unable to open the selected Comport", "PDW Driver", MB_ICONWARNING);
+				// FIX [ComPortExclusive]: the most common failure now is that the port
+				// is already held exclusively by another program (or another instance).
+				MessageBox(ghWnd,"Unable to open the selected COM port.\n\nIt may already be in use by another program, or it is not available.", "COM Port", MB_ICONWARNING);
 				nDriverLoaded = DRIVER_NOT_LOADED;
 				return(false);
 			}
