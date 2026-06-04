@@ -417,12 +417,7 @@ static BOOL ClientConnect(void)
     if (!g_mqttClient && !ClientCreate()) return FALSE;
 
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    // FIX [MqttKeepAlive]: 60 -> 30s. Paho's achtergrond-thread pingt op dit interval; bij 60s
-    // bleef isConnected() te lang stale na een out-of-band TCP-reset (broker/NAT/firewall) zodat
-    // de eerstvolgende publish een dode socket raakte -> rc=-1 + retry. Bij 30s wordt de dode
-    // socket sneller gedetecteerd en reconnect EnsureConnected() schoon VOOR de publish (geen
-    // foutregel), en blijven NAT/firewall-mappings warmer zodat de reset minder vaak optreedt.
-    conn_opts.keepAliveInterval = 30;
+    conn_opts.keepAliveInterval = 60;
     conn_opts.cleansession      = 1;
     conn_opts.connectTimeout    = 5;
 
@@ -491,19 +486,29 @@ static void DoSend(const MqttJob *job)
 
     PostStatus(MHS_SENDING, 0);
 
+    // FIX [MqttReconnLog]: een mislukte 1e poging gevolgd door een geslaagde retry is GEEN fout
+    // maar routine — de broker/NAT/firewall verbreekt de idle TCP-sessie buiten ons om, waarna de
+    // eerstvolgende publish een stale socket raakt (rc=-1). De retry reconnect en slaagt vrijwel
+    // altijd. We weten zeker dat het om reconnect-en-niet-een-nieuw-bericht gaat omdat beide
+    // pogingen binnen DEZELFDE DoSend()-call voor HETZELFDE bericht vallen (een volgend pagingbericht
+    // is een aparte DoSend met eigen SENT-regel). De attempt-teller bepaalt de severity:
+    //   attempt 0 mislukt  -> RECONNECT (rustig, verwacht)
+    //   attempt 1 mislukt  -> ERROR     (beide pogingen falen = echte storing)
     for (int attempt = 0; attempt < 2; attempt++)
     {
+        BOOL bLast = (attempt == 1);
+
         if (attempt > 0)
         {
             PostStatus(MHS_RETRY, attempt);
-            WriteLog("RETRY   reconnecting...");
             ClientDestroy();
             Sleep(1000);
         }
 
         if (!EnsureConnected())
         {
-            WriteLog("ERROR   connect failed: %s:%d", g_szBroker, g_iPort);
+            if (bLast) WriteLog("ERROR     connect failed: %s:%d", g_szBroker, g_iPort);
+            else       WriteLog("RECONNECT connect failed - retrying: %s:%d", g_szBroker, g_iPort);
             continue;
         }
 
@@ -516,12 +521,13 @@ static void DoSend(const MqttJob *job)
         {
             if (g_iQos > 0)
                 MQTTClient_waitForCompletion(g_mqttClient, token, 5000);
-            WriteLog("SENT    %s (%d bytes)", szTopic, bodyLen);
+            WriteLog("SENT      %s (%d bytes)", szTopic, bodyLen);
             PostStatus(MHS_OK, 0);
             return;
         }
 
-        WriteLog("ERROR   publish rc=%d topic=%s", rc, szTopic);
+        if (bLast) WriteLog("ERROR     publish failed rc=%d topic=%s (after reconnect)", rc, szTopic);
+        else       WriteLog("RECONNECT publish rc=%d (stale connection) - reconnecting", rc);
     }
 
     PostStatus(MHS_ERROR, 0);
