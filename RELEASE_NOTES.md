@@ -1,4 +1,34 @@
-# PDW 3.5.8 — Release Notes
+# PDW 3.5.9 — Release Notes
+
+## New in 3.5.9
+
+### Database: per-capcode match state for group calls (FIX [GroupMatchPerCapcode])
+
+For FLEX group calls the MySQL and SQLite feeds store one group row that lists all member capcodes in
+the `subscribers` JSON. Previously the match state (filtered / monitor-only / no match) was a single
+value taken from the first member, so a group made up mostly of monitor-only codes with one or two
+filtered codes lost that distinction - even though the PDW window shows only the filtered member in
+the filter pane and keeps the rest monitor-only.
+
+Each member in the `subscribers` JSON now carries its own `match_type` field, so a viewer can render
+every capcode in exactly the pane PDW shows it in. The group row's own `match_type` column is set to
+the strongest match across all members purely so the group still surfaces in `WHERE match_type >= 1`
+queries; it no longer dictates how individual members are displayed.
+
+### Stability: log manager shutdown no longer risks a crash on exit (FIX [LogJoinRace])
+
+When log settings were changed at runtime, or when PDW closed, the central log manager waited only
+a bounded time for its background writer thread to finish before freeing its internal buffers. If
+the log folder was on a slow or disconnected network/drive, a write could still be in progress when
+the buffers were released, which could corrupt memory and crash the application. PDW now always
+waits for the writer to finish completely before freeing those buffers, matching the other
+background workers (MQTT, webhook, telnet).
+
+### Stability: cleaner shutdown of the MQTT and webhook senders (FIX [FlushLockRace])
+
+The final flush of queued messages when an output feed stops now reads its job queue with the same
+locking used during normal operation, removing a narrow race with a message arriving at the exact
+moment of shutdown.
 
 ## New in 3.5.8
 

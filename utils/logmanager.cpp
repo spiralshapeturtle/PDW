@@ -89,7 +89,14 @@ void LogManager::Reconfigure(const char* path, uint32_t enableMask, int monthNum
     if (m_hThread) {
         m_stop = true;
         if (m_hEvent) SetEvent(m_hEvent);
-        WaitForSingleObject(m_hThread, 5000);
+        // FIX [LogJoinRace]: join to FULL completion before freeing m_buf/m_drain below.
+        // The old 5 s timeout could expire while the worker was still inside DrainAll/
+        // WriteEntries (fopen/fwrite/fclose can block for minutes on a stalled disk or a
+        // disconnected network log path), after which delete[] m_buf/m_drain freed memory
+        // the worker was still reading/writing -> heap corruption. The worker has no
+        // unbounded wait other than disk I/O, so INFINITE is safe and correct (same
+        // hardening as the mqtt/webhook/telnet workers).
+        WaitForSingleObject(m_hThread, INFINITE);
         CloseHandle(m_hThread); m_hThread = nullptr;
         if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }
     }
@@ -132,7 +139,11 @@ void LogManager::Shutdown()
     if (m_hThread) {
         m_stop = true;
         if (m_hEvent) SetEvent(m_hEvent);
-        WaitForSingleObject(m_hThread, 5000);
+        // FIX [LogJoinRace]: join to FULL completion before freeing the ring buffers below.
+        // A 5 s timeout could return with the worker still live inside DrainAll/WriteEntries
+        // on a stalled disk, after which delete[] m_buf/m_drain ran under a running thread
+        // (use-after-free / heap corruption on exit). INFINITE matches the other feed workers.
+        WaitForSingleObject(m_hThread, INFINITE);
         CloseHandle(m_hThread); m_hThread = nullptr;
     }
     if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }

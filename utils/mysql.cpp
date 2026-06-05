@@ -50,7 +50,13 @@ extern TCHAR szPath[];          /* PDW exe directory — from Initapp.cpp */
 
 #define MYSQL_QUEUE_SIZE         64
 #define MYSQL_RECV_TIMEOUT       10         /* seconds per recv() call */
-#define MYSQL_MAX_QUERY          24576      /* 24 kB — worst-case INSERT */
+// FIX [MysqlQueryLen]: was 24576 (24 kB) — far too small once szSubscribers grew to 32 kB. A large
+// FLEX group call (~170 capcodes) escapes (quotes doubled, etc.) to ~2x its raw size, so the
+// VALUES list alone can approach ~66 kB; the old buffer silently truncated the INSERT mid-literal,
+// producing malformed SQL -> server syntax error -> 3 retries -> the group row was dropped. Size for
+// the true worst case: escaped subscribers (~66 kB) + escaped message (MAX_STR_LEN*2) + columns +
+// keywords, with headroom. The buffer is heap-allocated per INSERT, so 128 kB costs no stack.
+#define MYSQL_MAX_QUERY          131072     /* 128 kB — worst-case INSERT incl. full subscribers JSON */
 #define MYSQL_SUBSCRIBERS_LEN    32768      /* JSON array of group subscribers */
 #define MAX_MYSQL_GROUPBITS      17         /* FLEX groupbits 0-15 + 1 spare */
 
@@ -1015,6 +1021,12 @@ static int BuildInsertOptimized(char *out, int outLen, const MysqlJob *job)
 
 /* Called from ShowMessage() for each subscriber row in a FLEX group call.
    Captures message/time/etc. from the first subscriber; accumulates capcode+label JSON. */
+/* FIX [GroupMatchEscalate]: rang van een match_type voor de groep-rij. De groep moet
+   getoond worden zoals PDW het scherm rendert: elke subscriber wordt los gerouteerd, dus
+   zit er ook maar EEN filtered lid in de groep dan staat de groep in het filterpaneel.
+   Prioriteit: filtered (1) > monitor-only (2) > geen match (0). */
+static int MysqlMatchTypeRank(int mt) { return (mt == 1) ? 2 : (mt == 2) ? 1 : 0; }
+
 void MysqlGroupAccumulate(const char *capcode, const char *label,
                           const char *message,
                           const char *szTime, const char *szDate,
@@ -1054,9 +1066,17 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
         /* Subsequent subscriber: append comma separator (rolled back below if entry overflows). */
         if (ga->sPos < MYSQL_SUBSCRIBERS_LEN - 2)
             ga->szSubscr[ga->sPos++] = ',';
+        /* FIX [GroupMatchPerCapcode]: de groep-rij-kolom match_type is enkel voor
+           queryability (sterkste match over alle leden, zodat een groep met een
+           filtered lid in `WHERE match_type>=1` opduikt). De WEERGAVE per lid wordt
+           NIET hierdoor bepaald maar door de per-subscriber match_type in de JSON
+           hieronder -- zo toont de website precies wat het PDW-window toont: enkel
+           het filtered lid in het filterpaneel, de rest monitor-only. */
+        if (MysqlMatchTypeRank(matchType) > MysqlMatchTypeRank(ga->iMatchType))
+            ga->iMatchType = matchType;
     }
 
-    /* Append {"capcode":"0123456","label":"escaped"[,"color":"#RRGGBB"]} entry,
+    /* Append {"address":"0123456","label":"escaped","match_type":N[,"color":"#RRGGBB"]} entry,
        leave room for closing "]" */
     char escLabel[FILTER_LABEL_LEN * 2 + 4];
     JsonEscapeStr(escLabel, sizeof(escLabel), label ? label : "");
@@ -1066,19 +1086,22 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
     JsonEscapeStr(escCc, sizeof(escCc), capcode ? capcode : "");
     int written;
     /* FIX [WebGroupColor]: kleur per abonnee meeschrijven zodat de website de
-       capcode-labels onder een groepsbericht in hun eigen kleur kan tonen. */
+       capcode-labels onder een groepsbericht in hun eigen kleur kan tonen.
+       FIX [GroupMatchPerCapcode]: per-subscriber match_type meeschrijven (0=geen,
+       1=filtered, 2=monitor-only) zodat de website elk lid in het juiste paneel
+       toont, identiek aan het PDW-window. */
     if (labelColor && labelColor[0]) {
         char escColor[16];
         JsonEscapeStr(escColor, sizeof(escColor), labelColor);
         written = _snprintf(ga->szSubscr + ga->sPos,
                             MYSQL_SUBSCRIBERS_LEN - ga->sPos - 2, /* -2 for final "]" + NUL */
-                            "{\"address\":\"%s\",\"label\":\"%s\",\"color\":\"%s\"}",
-                            escCc, escLabel, escColor);
+                            "{\"address\":\"%s\",\"label\":\"%s\",\"match_type\":%d,\"color\":\"%s\"}",
+                            escCc, escLabel, matchType, escColor);
     } else {
         written = _snprintf(ga->szSubscr + ga->sPos,
                             MYSQL_SUBSCRIBERS_LEN - ga->sPos - 2, /* -2 for final "]" + NUL */
-                            "{\"address\":\"%s\",\"label\":\"%s\"}",
-                            escCc, escLabel);
+                            "{\"address\":\"%s\",\"label\":\"%s\",\"match_type\":%d}",
+                            escCc, escLabel, matchType);
     }
     if (written > 0) { ga->sPos += written; ga->nSubscr++; }
     else             { ga->sPos = sPosBack; } /* roll back comma — entry didn't fit, skip silently */
@@ -1159,6 +1182,12 @@ static DWORD WINAPI MysqlWorker(LPVOID)
     ULONGLONG nextConnectMs = 0;
     int       jobAttempts   = 0;    // FIX [MysqlRequeue]: consecutive rejections of the head row
 
+    // FIX [MysqlQueryLen]: one heap buffer for the worker's lifetime, reused for every INSERT.
+    // A MYSQL_MAX_QUERY (128 kB) array on the thread stack — per iteration, in two places — risked
+    // a stack overflow; a single reused heap buffer is both safe and cheaper than malloc-per-row.
+    char *sql = (char *)malloc(MYSQL_MAX_QUERY);
+    if (!sql) { PostStatus(MYS_ERROR); return 0; }
+
     while (g_bRunning) {
         WaitForSingleObject(g_hEvent, 200);
         if (!g_bRunning) break;
@@ -1195,8 +1224,7 @@ static DWORD WINAPI MysqlWorker(LPVOID)
 
             if (!bHaveJob) break;
 
-            char sql[MYSQL_MAX_QUERY];
-            int  sqlLen = BuildInsert(sql, sizeof(sql), &job);
+            int  sqlLen = BuildInsert(sql, MYSQL_MAX_QUERY, &job);
             if (sqlLen <= 0) {
                 /* Un-buildable row (e.g. allocation failure) — drop it so we don't spin forever. */
                 EnterCriticalSection(&g_cs);
@@ -1247,19 +1275,33 @@ static DWORD WINAPI MysqlWorker(LPVOID)
         }
     }
 
-    /* Flush remaining jobs on clean shutdown. */
-    while (!QueueEmpty()) {
-        MysqlJob job = g_queue[g_qHead];
-        g_qHead = (g_qHead + 1) % MYSQL_QUEUE_SIZE;
+    /* Flush remaining jobs on clean shutdown.
+       FIX [MysqlFlushLock]: dequeue under g_cs, mirroring the main loop. g_bRunning is already
+       FALSE here, but a producer that passed its unlocked g_bRunning check just before shutdown can
+       still be inside EnterCriticalSection writing g_qTail/g_queue while we drain — reading the ring
+       unlocked was a data race on shared state. */
+    for (;;) {
+        MysqlJob job;
+        BOOL bHaveJob = FALSE;
+        EnterCriticalSection(&g_cs);
+        if (!QueueEmpty()) {
+            job     = g_queue[g_qHead];
+            g_qHead = (g_qHead + 1) % MYSQL_QUEUE_SIZE;
+            bHaveJob = TRUE;
+        }
+        LeaveCriticalSection(&g_cs);
+        if (!bHaveJob) break;
+
         if (g_sock != INVALID_SOCKET) {
-            char sql[MYSQL_MAX_QUERY];
-            int  sqlLen = BuildInsert(sql, sizeof(sql), &job);
+            int sqlLen = BuildInsert(sql, MYSQL_MAX_QUERY, &job);
             if (sqlLen > 0) {
                 SendQuery(g_sock, sql, sqlLen);
                 ReadQueryResult(g_sock, NULL, 0);
             }
         }
     }
+
+    free(sql);
 
     if (g_sock != INVALID_SOCKET) {
         closesocket(g_sock);

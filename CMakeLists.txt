@@ -7,8 +7,8 @@ project( PDW )
 
 # Project version number
 set( PDW_VERSION_MAJOR 3 )
-set( PDW_VERSION_MINOR 4 )
-set( PDW_VERSION_MICRO 4 )
+set( PDW_VERSION_MINOR 5 )
+set( PDW_VERSION_MICRO 9 )
 
 # Set base variables
 set( PDW_GFXS )
@@ -58,6 +58,16 @@ set( PDW_SRCS
         printer.cpp
         sigind.cpp
         sound_in.cpp
+        RxQualAlertDlg.cpp
+        RxQualMonitor.cpp
+)
+
+# SQLite amalgamation: same per-file compile flags the VS project uses (see pdw_vs2017.vcxproj).
+# THREADSAFE=2 = the SQLite feed worker owns the connection, so no internal db mutexing is needed.
+set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils/sqlite/sqlite3.c
+        PROPERTIES COMPILE_DEFINITIONS
+        "SQLITE_THREADSAFE=2;SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DQS=0;SQLITE_DEFAULT_MEMSTATUS=0;SQLITE_OMIT_DEPRECATED;SQLITE_DEFAULT_WAL_SYNCHRONOUS=1;SQLITE_LIKE_DOESNT_MATCH_BLOBS;SQLITE_OMIT_SHARED_CACHE"
 )
 
 # Create executable
@@ -77,5 +87,6 @@ target_link_libraries( PDW
         libcrypto_static.lib
         legacy_stdio_definitions.lib
         Crypt32.lib
+        Advapi32.lib
         User32.lib
 )

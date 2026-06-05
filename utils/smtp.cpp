@@ -924,7 +924,27 @@ static SOCKET smtpConnect(char *smtp_server,int port)
 	return(sfd);
 }
 
-// read SMTP response. returns 0 on success, -1 on failure 
+// FIX [SmtpSslMultiline]: TRUE once 'buf' holds a COMPLETE SMTP reply — i.e. its last fully
+// received line (one terminated by '\n') has a space at index 3 (final line) rather than '-'
+// (continuation line). Lines shorter than 4 chars are treated as final. A trailing partial line
+// that has not yet seen its '\n' is ignored, so the caller keeps reading until the terminator
+// arrives. Mirrors the buf[3] continuation check the plaintext path uses per line.
+static BOOL SmtpReplyComplete(const char *buf)
+{
+	const char *p = buf;
+	BOOL complete = FALSE;
+	while (*p) {
+		const char *eol = strchr(p, '\n');
+		if (!eol) break;                              // incomplete trailing line — need more data
+		int linelen = (int)(eol - p);
+		if (linelen > 0 && p[linelen - 1] == '\r') linelen--;
+		complete = (linelen < 4) ? TRUE : (p[3] == ' ');
+		p = eol + 1;
+	}
+	return complete;
+}
+
+// read SMTP response. returns 0 on success, -1 on failure
 static int smtpResponse(int sfd)
 {
 	int n, err ;
@@ -932,8 +952,26 @@ static int smtpResponse(int sfd)
 
 	memset(buf,0,sizeof(buf));
 
-	if (m_ssl != NULL)
-		err = receiveData_SSL(m_ssl,buf);     // SSL-pad drained de hele reply al
+	if (m_ssl != NULL) {
+		// FIX [SmtpSslMultiline]: receiveData_SSL() returns as soon as SSL_pending()==0, which can
+		// fall between TLS records / TCP segments in the MIDDLE of a multi-line reply (e.g. the EHLO
+		// capability list). Reading only the first fragment left the remainder in the stream to be
+		// mis-read as the NEXT command's reply, desynchronising the SMTP session and failing the send.
+		// Accumulate fragments until SmtpReplyComplete() sees the terminating line.
+		int total = 0;
+		buf[0] = '\0';
+		for (;;) {
+			char chunk[MY_BUFF_SIZE];
+			chunk[0] = '\0';
+			int rc = receiveData_SSL(m_ssl, chunk);
+			int clen = (int)strlen(chunk);
+			if (clen > MY_BUFF_SIZE - 1 - total) clen = MY_BUFF_SIZE - 1 - total;
+			if (clen > 0) { memcpy(buf + total, chunk, clen); total += clen; buf[total] = '\0'; }
+			if (rc != CSMTP_NO_ERROR)       break;    // timeout / closed / TLS error — use what we have
+			if (SmtpReplyComplete(buf))     break;    // full reply received
+			if (total >= MY_BUFF_SIZE - 1)  break;    // buffer full — stop, don't spin
+		}
+	}
 	else {
 		// FIX [SmtpStartTls]: lees de volledige (mogelijk multiline) SMTP-reply.
 		// EHLO antwoordt met meerdere "250-..." regels en sluit af met "250 ..." (spatie

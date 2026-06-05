@@ -653,6 +653,10 @@ void SqliteNotify(const char *capcode, const char *message, const char *label,
     }
 }
 
+/* FIX [GroupMatchEscalate]: zie mysql.cpp — groep-rij volgt de schermweergave; een filtered
+   lid (1) wint van monitor-only (2) wint van geen match (0). */
+static int SqliteMatchTypeRank(int mt) { return (mt == 1) ? 2 : (mt == 2) ? 1 : 0; }
+
 void SqliteGroupAccumulate(const char *capcode, const char *label,
                            const char *message,
                            const char *szTime, const char *szDate,
@@ -685,6 +689,10 @@ void SqliteGroupAccumulate(const char *capcode, const char *label,
     } else {
         if (ga->sPos < SQLITE_SUBSCRIBERS_LEN - 2)
             ga->szSubscr[ga->sPos++] = ',';
+        /* FIX [GroupMatchPerCapcode]: groep-kolom match_type enkel voor queryability;
+           weergave per lid via per-subscriber match_type in de JSON hieronder. */
+        if (SqliteMatchTypeRank(matchType) > SqliteMatchTypeRank(ga->iMatchType))
+            ga->iMatchType = matchType;
     }
 
     char escLabel[FILTER_LABEL_LEN * 2 + 4];
@@ -693,18 +701,20 @@ void SqliteGroupAccumulate(const char *capcode, const char *label,
     char escCc[32];
     JsonEscapeStr(escCc, sizeof(escCc), capcode ? capcode : "");
     int written;
+    /* FIX [GroupMatchPerCapcode]: per-subscriber match_type meeschrijven zodat de
+       website elk lid in het juiste paneel toont, identiek aan het PDW-window. */
     if (labelColor && labelColor[0]) {
         char escColor[16];
         JsonEscapeStr(escColor, sizeof(escColor), labelColor);
         written = _snprintf(ga->szSubscr + ga->sPos,
                             SQLITE_SUBSCRIBERS_LEN - ga->sPos - 2,
-                            "{\"address\":\"%s\",\"label\":\"%s\",\"color\":\"%s\"}",
-                            escCc, escLabel, escColor);
+                            "{\"address\":\"%s\",\"label\":\"%s\",\"match_type\":%d,\"color\":\"%s\"}",
+                            escCc, escLabel, matchType, escColor);
     } else {
         written = _snprintf(ga->szSubscr + ga->sPos,
                             SQLITE_SUBSCRIBERS_LEN - ga->sPos - 2,
-                            "{\"address\":\"%s\",\"label\":\"%s\"}",
-                            escCc, escLabel);
+                            "{\"address\":\"%s\",\"label\":\"%s\",\"match_type\":%d}",
+                            escCc, escLabel, matchType);
     }
     if (written > 0) { ga->sPos += written; ga->nSubscr++; }
     else             { ga->sPos = sPosBack; }

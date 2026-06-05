@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 3.5.8** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 3.5.9** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -60,7 +60,7 @@
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (3.5.8) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. The main additions over the original release are listed in [section 21](#21-changelog).
+This version (3.5.9) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. The main additions over the original release are listed in [section 21](#21-changelog).
 
 ---
 
@@ -434,16 +434,22 @@ CREATE TABLE `messages` (
 | `message` | TEXT | Decoded text. `>>` (byte 0xBB) marks a line break — render as newline |
 | `label` | VARCHAR | Filter label; empty when no rule matched |
 | `subscribers` | TEXT | JSON array of group members (see below); empty for non-group messages |
-| `match_type` | TINYINT | `0` = no match, `1` = filtered, `2` = monitor-only |
+| `match_type` | TINYINT | `0` = no match, `1` = filtered, `2` = monitor-only. For a group call this is the strongest match across all members (so the group surfaces in `match_type >= 1` queries); per-member display state lives in the `subscribers` JSON |
 | `label_color` | VARCHAR(7) | `#RRGGBB`; empty when none |
 
-**FLEX group calls** store member addresses in `subscribers`:
+**FLEX group calls** store member addresses in `subscribers`. Each member carries its own
+`match_type` (`0` = no match, `1` = filtered, `2` = monitor-only) so a viewer can render every
+capcode in the correct pane exactly as the PDW window does - a single filtered member appears as
+filtered while the rest stay monitor-only:
 ```json
 [
-  {"address": "1234567", "label": "Ambulance 1", "color": "#1565c0"},
-  {"address": "1234568", "label": "Ambulance 2"}
+  {"address": "1234567", "label": "Ambulance 1", "match_type": 1, "color": "#1565c0"},
+  {"address": "1234568", "label": "Ambulance 2", "match_type": 2}
 ]
 ```
+The group row's own `match_type` column is set to the strongest match across all members purely so
+the group still surfaces in `WHERE match_type >= 1` queries; per-member display is driven by the
+`match_type` inside each `subscribers` entry, not by that column.
 
 **Useful queries:**
 ```sql
@@ -822,6 +828,11 @@ PDW opens its COM port for exclusive access. While PDW is running and connected,
 ---
 
 ## 21. Changelog
+
+### v3.5.9
+- **Database** — FLEX group-call subscribers now carry a per-member `match_type` in the `subscribers` JSON, so a viewer can render each capcode in its correct pane (filtered / monitor-only) exactly as the PDW window does (FIX [GroupMatchPerCapcode])
+- **Stability** — log manager now waits for its background writer to finish before freeing buffers on shutdown/reconfigure, preventing a possible crash when logging to a slow or disconnected drive (FIX [LogJoinRace])
+- **Stability** — MQTT and webhook senders flush their queue under the normal lock on shutdown, closing a narrow shutdown race (FIX [FlushLockRace])
 
 ### v3.5.8
 - **Central Log Manager** — all log output flows through one consistent path; uniform `YYYY-MM-DD HH:MM:SS.mmm` timestamps; daily rotation for every log type

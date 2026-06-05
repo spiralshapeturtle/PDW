@@ -1,6 +1,6 @@
 # PDW — Paging Decoder for Windows
 
-**Version 3.5.8** | Windows 7–11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.5.9** | Windows 7–11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -215,19 +215,21 @@ CREATE TABLE `messages` (
 | `message` | TEXT | Up to ~5120 bytes. `>>` (byte `0xBB`) marks a line break — render as newline |
 | `label` | VARCHAR | Filter label assigned to this capcode; empty when no rule matched |
 | `subscribers` | TEXT | JSON array of group members (see below); empty for non-group messages |
-| `match_type` | TINYINT | `0` = no match · `1` = filtered · `2` = monitor-only |
+| `match_type` | TINYINT | `0` = no match · `1` = filtered · `2` = monitor-only. For a group call: the strongest match across all members (so the group surfaces in `match_type >= 1` queries); per-member display state lives in the `subscribers` JSON |
 | `label_color` | VARCHAR(7) | `#RRGGBB` of the label; empty when none |
 
 `received`, `address`, and `match_type` are always written. `mode`, `msg_type`, `bitrate`, `message`, and `label` are written only when enabled in the PDW field-bitmask setting. `subscribers` and `label_color` are written only when non-empty.
 
 **Group calls (`subscribers`):**
 
-FLEX group calls store the individual paged addresses as a JSON array:
+FLEX group calls store the individual paged addresses as a JSON array. Each member carries its own
+`match_type` (`0`/`1`/`2`) so a viewer can render each capcode in its correct pane just like the PDW
+window - only the filtered member shows as filtered, the rest stay monitor-only:
 
 ```json
 [
-  {"address": "1234567", "label": "Ambulance 1", "color": "#1565c0"},
-  {"address": "1234568", "label": "Ambulance 2"}
+  {"address": "1234567", "label": "Ambulance 1", "match_type": 1, "color": "#1565c0"},
+  {"address": "1234568", "label": "Ambulance 2", "match_type": 2}
 ]
 ```
 
@@ -458,6 +460,10 @@ The PDW executable is intentionally large. OpenSSL, Paho MQTT, and all other thi
 ---
 
 ## Changelog highlights
+
+### v3.5.9 (June 2026)
+- **Per-capcode match state in group calls** — each member in the `subscribers` JSON now carries its own `match_type` (filtered / monitor-only / no match), so a viewer renders every capcode in the same pane the PDW window does
+- Shutdown hardening for the log manager, MQTT and webhook senders
 
 ### v3.5.7 (June 2026)
 - **SQLite output feed** — single local file, no DLL, LowWrite mode, optional auto-purge

@@ -582,10 +582,23 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
     }
 
     // Flush on exit
-    while (!QueueEmpty())
+    // FIX [FlushLockRace]: dequeue under g_cs, same as the main loop. g_bRunning is already
+    // FALSE here, but a producer that passed its unlocked g_bRunning check just before shutdown
+    // can still be inside EnterCriticalSection writing g_qTail/g_queue while we drain — reading
+    // the ring unlocked was a data race on shared state.
+    for (;;)
     {
-        MqttJob job = g_queue[g_qHead];
-        g_qHead = (g_qHead + 1) % MQTT_QUEUE_SIZE;
+        MqttJob job;
+        BOOL bHaveJob = FALSE;
+        EnterCriticalSection(&g_cs);
+        if (!QueueEmpty())
+        {
+            job = g_queue[g_qHead];
+            g_qHead = (g_qHead + 1) % MQTT_QUEUE_SIZE;
+            bHaveJob = TRUE;
+        }
+        LeaveCriticalSection(&g_cs);
+        if (!bHaveJob) break;
         DoSend(&job);
     }
 

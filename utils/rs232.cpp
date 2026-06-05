@@ -151,14 +151,17 @@ static DWORD WINAPI RxDiagThread(LPVOID)
 // Factored out of rs232_connect so the worker-thread self-reconnect path
 // can use it too. Always sets timeouts (previously only set when in raw
 // RS232 mode — slicer mode could block indefinitely on ReadFile).
-static int rs232_apply_dcb_and_timeouts(void)
+// FIX [ComPortReopenLock]: operate on a caller-supplied handle (was the global m_ComPortHandle)
+// so the worker-reconnect path can configure a freshly-opened port BEFORE publishing it into
+// m_ComPortHandle under the lock — keeping every blocking-prone serial call out of g_handleCs.
+static int rs232_apply_dcb_and_timeouts(HANDLE h)
 {
 	DCB m_comDCB = {};
 	COMMTIMEOUTS ComTimeOuts = {};
 
-	if (m_ComPortHandle == INVALID_HANDLE_VALUE) return RS232_NO_DUT;
+	if (h == INVALID_HANDLE_VALUE) return RS232_NO_DUT;
 
-	if (!GetCommState(m_ComPortHandle, &m_comDCB)) {
+	if (!GetCommState(h, &m_comDCB)) {
 		DebugLog("[rs232_apply_dcb] GetCommState failed: %08lX", GetLastError());
 		return RS232_NO_DUT;
 	}
@@ -182,22 +185,22 @@ static int rs232_apply_dcb_and_timeouts(void)
 	m_comDCB.fErrorChar      = FALSE;
 	m_comDCB.fNull           = FALSE;
 	m_comDCB.fAbortOnError   = FALSE;
-	if (!SetCommState(m_ComPortHandle, &m_comDCB)) {
+	if (!SetCommState(h, &m_comDCB)) {
 		DebugLog("[rs232_apply_dcb] SetCommState failed: %08lX", GetLastError());
 		return RS232_NO_DUT;
 	}
-	if (!SetCommMask(m_ComPortHandle, bOrgcomPortRS232 ? 0 : EV_CTS | EV_DSR | EV_RLSD)) {
+	if (!SetCommMask(h, bOrgcomPortRS232 ? 0 : EV_CTS | EV_DSR | EV_RLSD)) {
 		DebugLog("[rs232_apply_dcb] SetCommMask failed: %08lX", GetLastError());
 		return RS232_NO_DUT;
 	}
-	if (!PurgeComm(m_ComPortHandle, PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR)) {
+	if (!PurgeComm(h, PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR)) {
 		DebugLog("[rs232_apply_dcb] PurgeComm failed: %08lX", GetLastError());
 		return RS232_NO_DUT;
 	}
 	ComTimeOuts.ReadIntervalTimeout        = MAXDWORD;
 	ComTimeOuts.ReadTotalTimeoutMultiplier = MAXDWORD;
 	ComTimeOuts.ReadTotalTimeoutConstant   = 100;	// 100 ms — same value used previously for raw RS232
-	if (!SetCommTimeouts(m_ComPortHandle, &ComTimeOuts)) {
+	if (!SetCommTimeouts(h, &ComTimeOuts)) {
 		DebugLog("[rs232_apply_dcb] SetCommTimeouts failed: %08lX", GetLastError());
 		return RS232_NO_DUT;
 	}
@@ -212,42 +215,56 @@ static int rs232_worker_reopen(void)
 {
 	char pcComPort[32];
 
-	// All handle transitions are serialized; rs232_disconnect on the main thread
-	// must not run between our CloseHandle and CreateFile, or one of us will
-	// double-close a stale handle.
+	// FIX [ComPortReopenLock]: close the stale handle under the lock (CloseHandle is fast and
+	// non-blocking), then drop the lock BEFORE the blocking CreateFile. Previously the whole
+	// close+open sequence ran inside g_handleCs; CreateFile on a network-redirected COM port
+	// (Moxa NPort) can block for a long time, so if rs232_disconnect's 2 s TerminateThread
+	// fallback fired while we were stuck in CreateFile, the worker was killed while still owning
+	// g_handleCs. A Windows CRITICAL_SECTION has no abandoned-owner recovery, so the next
+	// rs232_connect()'s EnterCriticalSection deadlocked the UI thread permanently. With the open
+	// outside the lock, a TerminateThread during CreateFile leaves no lock held.
 	EnterCriticalSection(&g_handleCs);
-
-	// If the main thread requested shutdown while we were waking up, abort
-	// before we burn another CreateFile on a port that's about to be closed.
 	if (!bKeepThreadAlive) {
 		LeaveCriticalSection(&g_handleCs);
 		return RS232_NO_CONNECTION;
 	}
-
 	if (m_ComPortHandle != INVALID_HANDLE_VALUE) {
+		// Must close first: the port is held exclusively (share-mode 0), so a second open of the
+		// same port would fail with ERROR_ACCESS_DENIED while this handle is still alive.
 		CloseHandle(m_ComPortHandle);
 		m_ComPortHandle = INVALID_HANDLE_VALUE;
 	}
-	if (g_comPortNumber > 9)
-		_snprintf_s(pcComPort, sizeof(pcComPort), _TRUNCATE, R"(\\.\COM%d)", g_comPortNumber);
-	else
-		_snprintf_s(pcComPort, sizeof(pcComPort), _TRUNCATE, "COM%d", g_comPortNumber);
+	int portNum = g_comPortNumber;
+	LeaveCriticalSection(&g_handleCs);
 
-	// FIX [ComPortExclusive]: match the main-thread open (RW + share 0) so the
-	// reconnect re-claims exclusive ownership and stays un-hijackable.
-	m_ComPortHandle = CreateFile(pcComPort, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0);
-	if (m_ComPortHandle == INVALID_HANDLE_VALUE) {
+	if (portNum > 9)
+		_snprintf_s(pcComPort, sizeof(pcComPort), _TRUNCATE, R"(\\.\COM%d)", portNum);
+	else
+		_snprintf_s(pcComPort, sizeof(pcComPort), _TRUNCATE, "COM%d", portNum);
+
+	// FIX [ComPortExclusive]: match the main-thread open (RW + share 0) so the reconnect re-claims
+	// exclusive ownership and stays un-hijackable. Opened OUTSIDE g_handleCs (see above) and
+	// configured on the local handle, so the lock is only re-taken to publish the result.
+	HANDLE hNew = CreateFile(pcComPort, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0);
+	if (hNew == INVALID_HANDLE_VALUE) {
 		DebugLog("[rs232_worker_reopen] CreateFile(%s) failed: %08lX", pcComPort, GetLastError());
-		LeaveCriticalSection(&g_handleCs);
 		return RS232_NO_DUT;
 	}
-	int rc = rs232_apply_dcb_and_timeouts();
+	int rc = rs232_apply_dcb_and_timeouts(hNew);
 	if (rc != RS232_SUCCESS) {
-		CloseHandle(m_ComPortHandle);
-		m_ComPortHandle = INVALID_HANDLE_VALUE;
-		LeaveCriticalSection(&g_handleCs);
+		CloseHandle(hNew);
 		return rc;
 	}
+
+	// Publish the freshly-opened, fully-configured handle under the lock.
+	EnterCriticalSection(&g_handleCs);
+	if (!bKeepThreadAlive) {
+		// Shutdown was requested while we were opening — discard the fresh handle.
+		LeaveCriticalSection(&g_handleCs);
+		CloseHandle(hNew);
+		return RS232_NO_CONNECTION;
+	}
+	m_ComPortHandle = hNew;
 	// Reset both timers so the stall watchdog skips the Moxa TCP warmup.
 	g_connectTickMs  = GetTickCount64();
 	g_lastDataTickMs = g_connectTickMs;
@@ -373,7 +390,7 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 		}
 	}
 	// Apply DCB + read timeouts (shared with worker self-reconnect path).
-	rc = rs232_apply_dcb_and_timeouts();
+	rc = rs232_apply_dcb_and_timeouts(m_ComPortHandle);
 	if (rc != RS232_SUCCESS) {
 		CloseHandle(m_ComPortHandle);
 		m_ComPortHandle = INVALID_HANDLE_VALUE;

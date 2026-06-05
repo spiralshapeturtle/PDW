@@ -15,6 +15,11 @@ release/
 build/
 bin/
 build-fix/
+# CMake / out-of-source build directories (build, build-fix, build-cmake-check, build-x86, ...)
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
 obj/
 *.log
 *.sln
@@ -36,5 +41,9 @@ pdw_web/
 # RC editor backup files
 *.backup-ascii
 *.rc.bak
+
+# Working-copy backup files (CLAUDE.md change-workflow: <file>.bak before each edit)
+*.bak
+
 CLAUDE.md
 
