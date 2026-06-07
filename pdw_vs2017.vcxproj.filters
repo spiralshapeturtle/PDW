@@ -87,6 +87,12 @@
     <ClCompile Include="utils\webhook.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="utils\telegram.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="utils\pushover.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="utils\mqtt.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -393,6 +399,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utils\webhook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\telegram.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\pushover.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utils\telnet_server.h">

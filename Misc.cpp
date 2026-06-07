@@ -21,6 +21,8 @@
 #include "utils\debuglog.h"
 #include "utils\smtp.h"
 #include "utils\webhook.h"
+#include "utils\telegram.h"	// FIX [Telegram]
+#include "utils\pushover.h"	// FIX [Pushover]
 #include "utils\mqtt.h"
 #include "utils\telnet_server.h"
 #include "utils\mysql.h"
@@ -588,6 +590,8 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 
 			iConvertingGroupcall=0;		// PH: Reset for next groupmessage
 			WebhookFlushGroup(groupbit);
+			if (Profile.telegramEnabled) TelegramFlushGroup(groupbit); // FIX [TgGroupBatch]
+			if (Profile.pushoverEnabled) PushoverFlushGroup(groupbit); // FIX [PoGroupBatch]
 			MqttFlushGroup(groupbit);
 			if (Profile.mysql_enabled) MysqlFlushGroup(groupbit); // FIX [MySQLFeed]: flush group row with accumulated subscribers
 			if (Profile.sqlite_enabled) SqliteFlushGroup(groupbit); // FIX [SqliteFeed]
@@ -1768,6 +1772,66 @@ void ShowMessage()
 			              Current_MSG[MSG_BITRATE],
 			              iConvertingGroupcall > 0,
 			              iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+		}
+	}
+
+	// FIX [Telegram] / FIX [TgSendModes]: per-message Telegram notify. SendIn mirrors the SMTP
+	// mode model exactly: 0=All, 1=Filtered only, 2=Filtered+Monitor, 3=Selected filters only.
+	// The per-capcode checkbox (filters[iMatch].telegram) is ONLY consulted in mode 3 ("Selected
+	// filters only") - so a user can send just a handful of capcodes. In modes 0/1/2 the checkbox
+	// is irrelevant, matching how SMTP's "Selected filters only" works.
+	// FIX [TgGroupBatch]: for FLEX group calls TelegramNotify accumulates per groupbit; one
+	// message is emitted by TelegramFlushGroup() from ConvertGroupcall (see groupcall handler).
+	if (Profile.telegramEnabled)
+	{
+		bool bPerFilterTg = (iMatch >= 0) ? (Profile.filters[iMatch].telegram != 0) : false;
+		bool bTgSend;
+		switch (Profile.telegramSendIn)
+		{
+		case 1:  bTgSend = bMATCH && !bMONITOR_ONLY; break;        // filtered only
+		case 2:  bTgSend = bMATCH; break;                          // filtered + monitor-only
+		case 3:  bTgSend = bMATCH && bPerFilterTg; break;          // selected filters only (checkbox)
+		case 0:  default: bTgSend = true; break;                   // all messages
+		}
+		if (bTgSend)
+		{
+			TelegramNotify(Current_MSG[MSG_CAPCODE],
+			               iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			               szCurrentLabel[0],
+			               Current_MSG[MSG_TIME],
+			               Current_MSG[MSG_DATE],
+			               Current_MSG[MSG_MODE],
+			               Current_MSG[MSG_TYPE],
+			               Current_MSG[MSG_BITRATE],
+			               iConvertingGroupcall > 0,
+			               iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+		}
+	}
+
+	// FIX [Pushover] / FIX [PoSendModes]: same SMTP-style mode model and group batching as Telegram.
+	if (Profile.pushoverEnabled)
+	{
+		bool bPerFilterPo = (iMatch >= 0) ? (Profile.filters[iMatch].pushover != 0) : false;
+		bool bPoSend;
+		switch (Profile.pushoverSendIn)
+		{
+		case 1:  bPoSend = bMATCH && !bMONITOR_ONLY; break;        // filtered only
+		case 2:  bPoSend = bMATCH; break;                          // filtered + monitor-only
+		case 3:  bPoSend = bMATCH && bPerFilterPo; break;          // selected filters only (checkbox)
+		case 0:  default: bPoSend = true; break;                   // all messages
+		}
+		if (bPoSend)
+		{
+			PushoverNotify(Current_MSG[MSG_CAPCODE],
+			               iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
+			               szCurrentLabel[0],
+			               Current_MSG[MSG_TIME],
+			               Current_MSG[MSG_DATE],
+			               Current_MSG[MSG_MODE],
+			               Current_MSG[MSG_TYPE],
+			               Current_MSG[MSG_BITRATE],
+			               iConvertingGroupcall > 0,
+			               iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
 		}
 	}
 

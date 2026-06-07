@@ -797,8 +797,6 @@ void SqliteDestroy(void)
     if (g_bCsInit)   { DeleteCriticalSection(&g_cs);    g_bCsInit   = FALSE; }
 }
 
-static void ApplyPragmas(sqlite3 *db, BOOL lowWrite); /* forward — gedefinieerd in de worker-sectie */
-
 // FIX [ConnTest]: synchronous test for the Setup dialog. Opens (or creates) the db file with its
 // OWN connection, creates/checks the schema and closes. Never touches the worker globals.
 BOOL SqliteTestConnection(const char *path, const char *table, char *szMsg, int msgLen)

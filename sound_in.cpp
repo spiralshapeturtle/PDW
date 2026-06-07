@@ -126,9 +126,15 @@ BOOL Start_Capturing(void)
 	my_wave_format.wBitsPerSample	= 8;
 	my_wave_format.cbSize			= 0;
 
-	// Open audio device meeting our requirements
-	waveOutOpen(&hWaveOut, WAVE_MAPPER, &my_wave_format,
-			(DWORD_PTR)Callback_Function, 0, CALLBACK_FUNCTION);
+	// Open audio device meeting our requirements.
+	// FIX [WaveOutCheck]: return value was silently discarded — if waveOutOpen fails,
+	// hWaveOut is indeterminate and Stop_Capturing's waveOutReset/waveOutClose can
+	// receive a bad handle. NULL-guard keeps Stop_Capturing safe on the error path.
+	if (waveOutOpen(&hWaveOut, WAVE_MAPPER, &my_wave_format,
+			(DWORD_PTR)Callback_Function, 0, CALLBACK_FUNCTION) != MMSYSERR_NOERROR)
+	{
+		hWaveOut = NULL;   // explicit NULL so Stop_Capturing's guard skips close
+	}
 
 	result = waveInOpen(&hWaveIn, Profile.audioDevice, &my_wave_format,
 			(DWORD_PTR)Callback_Function, 0, CALLBACK_FUNCTION);
@@ -173,6 +179,10 @@ BOOL Start_Capturing(void)
 		{
 			waveInClose(hWaveIn);
 			free_audio_buffers();
+			// FIX [WaveOutLeak]: close hWaveOut on this error path too — waveOutOpen() above
+			// succeeded, but only hWaveIn was being closed here, leaking the output handle per
+			// failed start (the caller is not guaranteed to call Stop_Capturing after FALSE).
+			if (hWaveOut != NULL) { waveOutClose(hWaveOut); hWaveOut = NULL; }
 			return(FALSE);
 		}
 
@@ -194,10 +204,12 @@ BOOL Start_Capturing(void)
 		{
 			waveInClose(hWaveIn);
 			free_audio_buffers();
+			// FIX [WaveOutLeak]: close hWaveOut on this error path too (see above).
+			if (hWaveOut != NULL) { waveOutClose(hWaveOut); hWaveOut = NULL; }
 			return FALSE;
 		}
 	}
-    
+
 	last_buff_processed = -1;
 
 	Reset_ATB(); // Reset all variables used by Audio_To_Bits().
@@ -208,6 +220,13 @@ BOOL Start_Capturing(void)
 		bCapturing = true;
 		return(TRUE);     // OK!
 	}
+	// FIX [WaveInStartLeak]: waveInStart failed — clean up fully instead of leaking the open
+	// hWaveIn handle, the 10 prepared/allocated buffers, and hWaveOut. A transiently busy device
+	// (another app grabbed it) would otherwise leak handles+memory on every auto-retry.
+	waveInReset(hWaveIn);
+	waveInClose(hWaveIn);
+	free_audio_buffers();
+	if (hWaveOut != NULL) { waveOutClose(hWaveOut); hWaveOut = NULL; }
 	return(FALSE);
 }
 
@@ -220,15 +239,20 @@ BOOL Stop_Capturing(void)
 	bCapturing = false;
 
 	// FIX [C2]: hWaveOut werd nooit gesloten — handle lek per start/stop cyclus
-	waveOutReset(hWaveOut);
-	waveOutClose(hWaveOut);
-	hWaveOut = NULL;  // FIX [L1]: hWaveOut op NULL zodat herhaalde Stop_Capturing geen stale handle gebruikt
+	// FIX [WaveOutCheck]: guard on NULL so a failed waveOutOpen (handle left NULL) does
+	// not pass an invalid handle to waveOutReset/waveOutClose.
+	if (hWaveOut != NULL) {
+		waveOutReset(hWaveOut);
+		waveOutClose(hWaveOut);
+		hWaveOut = NULL;  // FIX [L1]: hWaveOut op NULL zodat herhaalde Stop_Capturing geen stale handle gebruikt
+	}
 
 	// Reset the audio connection... takes waiting buffers out of input queue
 	waveInReset(hWaveIn);
 
 	// Close audio connection
-	if (!(waveInClose(hWaveIn)))
+	// FIX [AudioCaptureError]: was if(!(waveInClose(...))) — MMSYSERR_NOERROR==0, so !0==true caused early return, leaking buffers
+	if (waveInClose(hWaveIn) != MMSYSERR_NOERROR)
 	{
 		return(FALSE);
 	}
@@ -327,7 +351,9 @@ void Process_ReadyBuffers(HWND hwnd)
 		if (waveInAddBuffer(hWaveIn, &WaveHeader[last_buff_processed],
 		                    (UINT)sizeof(WaveHeader[last_buff_processed])) != MMSYSERR_NOERROR)
 		{
-			bCapturing = false;
+			// FIX [AudioCaptureError]: silent bCapturing=false left hWaveIn and buffers leaked;
+			// post to main thread so it can alert the user and call Stop_Capturing() cleanly.
+			PostMessage(ghWnd, WM_AUDIO_CAPTURE_ERROR, 0, 0);
 		}
 	}
 	InterlockedExchangeAdd(&buffers_ready, -(LONG)old_buffs_ready);

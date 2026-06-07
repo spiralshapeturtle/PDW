@@ -103,6 +103,8 @@ BEGIN
         MENUITEM "&SMTP/Email...\tCtrl-M",      IDM_MAIL
         MENUITEM "&Webhook...\tCtrl-W",         IDM_WEBHOOK
         MENUITEM "MQ&TT...\tCtrl-Q",            IDM_MQTT
+        MENUITEM "Te&legram...",                IDM_TELEGRAM
+        MENUITEM "&Pushover...",                IDM_PUSHOVER
         MENUITEM "Telnet &Server...\tCtrl-N",   IDM_TELNETSERVER
         MENUITEM "RX &Quality Alert...",        IDM_RXQUAL_ALERT
         MENUITEM "&MySQL...",                   IDM_MYSQL
@@ -197,7 +199,7 @@ END
 
 ABOUTDLGBOX DIALOGEX 10, 10, 282, 156
 STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "4"
+CAPTION "About PDW"
 FONT 8, "Verdana", 0, 0, 0x0
 BEGIN
     GROUPBOX        "",IDC_STATIC,0,0,75,114,NOT WS_VISIBLE
@@ -449,7 +451,7 @@ END
 
 COLORSDLGBOX DIALOGEX 10, 10, 311, 140
 STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION " "
+CAPTION "POCSAG/FLEX Colors"
 FONT 8, "Verdana", 0, 0, 0x0
 BEGIN
     GROUPBOX        "",IDC_STATIC,4,2,181,43
@@ -648,12 +650,12 @@ BEGIN
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,156,220,147,10
 END
 
-FILTEREDITDLGBOX DIALOGEX 10, 10, 239, 276
+FILTEREDITDLGBOX DIALOGEX 10, 10, 239, 292
 STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 CAPTION "PDW Add/Edit Filter"
 FONT 8, "Verdana", 0, 0, 0x1
 BEGIN
-    GROUPBOX        "",IDC_STATIC,5,4,228,126
+    GROUPBOX        "",IDC_STATIC,5,4,228,142
     CONTROL         " NOTE : a grayed box means 'Don't change'",IDC_DONTCHANGE,
                     "Static",SS_LEFTNOWORDWRAP | NOT WS_VISIBLE | WS_BORDER | WS_GROUP,62,4,146,11
     CONTROL         "Reject",IDC_FILTERREJECT,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,10,5,33,8
@@ -676,24 +678,26 @@ BEGIN
     CONTROL         "Monitor Only",IDC_FILTER_MONITOR_ONLY,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,132,100,53,8
     CONTROL         "Enable filter command file",IDC_FILTERCMD,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,10,116,98,8
     CONTROL         "Send e-mail (disabled)",IDC_FILTERSMTP,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,132,116,94,8
-    GROUPBOX        "Hitcounter",IDC_HITCOUNTER_BOX,5,136,228,29,BS_NOTIFY
-    LTEXT           "Number of hits: 0",IDC_FILTERHITS,10,149,87,8
-    LTEXT           "",IDC_FILTERLASTHIT,99,149,96,8
-    PUSHBUTTON      "Reset",IDC_FILTERRESET,200,146,26,13,WS_DISABLED
-    GROUPBOX        "",IDC_SEPFILTERBOX,5,172,228,65
-    CONTROL         "Enable separate filter file",IDC_SEPFILTERFILEEN,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,10,173,94,8
-    PUSHBUTTON      "Browse",IDC_SEPFILTERFILEBROWSE1,10,186,30,13,WS_DISABLED
-    EDITTEXT        IDC_SEPFILTERFILE1,46,186,180,13,ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
-    PUSHBUTTON      "Browse",IDC_SEPFILTERFILEBROWSE2,10,202,30,13,NOT WS_VISIBLE
-    EDITTEXT        IDC_SEPFILTERFILE2,46,202,180,13,ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
-    PUSHBUTTON      "Browse",IDC_SEPFILTERFILEBROWSE3,10,218,30,13,NOT WS_VISIBLE
-    EDITTEXT        IDC_SEPFILTERFILE3,46,218,180,13,ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
-    PUSHBUTTON      "OK",IDOK,6,243,40,14
-    PUSHBUTTON      "-",IDC_FILTER_PREVIOUS,63,243,20,14
-    PUSHBUTTON      "Apply",IDC_FILTER_APPLY,99,243,40,14
-    PUSHBUTTON      "+",IDC_FILTER_NEXT,156,243,20,14
-    PUSHBUTTON      "Cancel",IDCANCEL,193,243,40,14
-    LTEXT           "",IDC_FILTEREDITHELP,0,264,239,12,SS_CENTERIMAGE,WS_EX_CLIENTEDGE
+    CONTROL         "Send Telegram (disabled)",IDC_FILTERTELEGRAM,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,10,130,110,8
+    CONTROL         "Send Pushover (disabled)",IDC_FILTERPUSHOVER,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,132,130,94,8
+    GROUPBOX        "Hitcounter",IDC_HITCOUNTER_BOX,5,152,228,29,BS_NOTIFY
+    LTEXT           "Number of hits: 0",IDC_FILTERHITS,10,165,87,8
+    LTEXT           "",IDC_FILTERLASTHIT,99,165,96,8
+    PUSHBUTTON      "Reset",IDC_FILTERRESET,200,162,26,13,WS_DISABLED
+    GROUPBOX        "",IDC_SEPFILTERBOX,5,188,228,65
+    CONTROL         "Enable separate filter file",IDC_SEPFILTERFILEEN,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,10,189,94,8
+    PUSHBUTTON      "Browse",IDC_SEPFILTERFILEBROWSE1,10,202,30,13,WS_DISABLED
+    EDITTEXT        IDC_SEPFILTERFILE1,46,202,180,13,ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
+    PUSHBUTTON      "Browse",IDC_SEPFILTERFILEBROWSE2,10,218,30,13,NOT WS_VISIBLE
+    EDITTEXT        IDC_SEPFILTERFILE2,46,218,180,13,ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
+    PUSHBUTTON      "Browse",IDC_SEPFILTERFILEBROWSE3,10,234,30,13,NOT WS_VISIBLE
+    EDITTEXT        IDC_SEPFILTERFILE3,46,234,180,13,ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
+    PUSHBUTTON      "OK",IDOK,6,259,40,14
+    PUSHBUTTON      "-",IDC_FILTER_PREVIOUS,63,259,20,14
+    PUSHBUTTON      "Apply",IDC_FILTER_APPLY,99,259,40,14
+    PUSHBUTTON      "+",IDC_FILTER_NEXT,156,259,20,14
+    PUSHBUTTON      "Cancel",IDCANCEL,193,259,40,14
+    LTEXT           "",IDC_FILTEREDITHELP,0,280,239,12,SS_CENTERIMAGE,WS_EX_CLIENTEDGE
 END
 
 MONSTATDLGBOX DIALOG 10, 10, 271, 231
@@ -837,7 +841,7 @@ BEGIN
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,14,150,10
     LTEXT           "Remaps poorly visible colors to higher-legibility variants. filter.ini is not modified.",IDC_STATIC,22,26,224,16
     CONTROL         "Softer background",IDC_DISPLAY_LIGHTER_BG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,46,120,10
-    LTEXT           "Changes the message list background from pure black to dark navy (#1A1A2E).",IDC_STATIC,22,58,224,16
+    LTEXT           "Changes the message list background from pure black to neutral charcoal (#18181B).",IDC_STATIC,22,58,224,16
     PUSHBUTTON      "OK",IDOK,84,85,44,14
     PUSHBUTTON      "Cancel",IDCANCEL,132,85,44,14
 END
@@ -875,6 +879,73 @@ BEGIN
     LTEXT           "Status: Idle",IDC_WEBHOOK_STATUS,8,210,244,8
     DEFPUSHBUTTON   "OK",IDOK,148,224,44,14
     PUSHBUTTON      "Cancel",IDCANCEL,208,224,44,14
+END
+
+TELEGRAM_DLGBOX DIALOG 10, 10, 264, 286
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Telegram Settings"
+FONT 8, "Verdana"
+BEGIN
+    CONTROL         "Enable Telegram output",IDC_TG_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,120,10
+    LTEXT           "Bot token",IDC_STATIC,8,26,40,8
+    EDITTEXT        IDC_TG_TOKEN,52,24,204,13,ES_AUTOHSCROLL | ES_PASSWORD
+    LTEXT           "Chat IDs",IDC_STATIC,8,44,40,8
+    EDITTEXT        IDC_TG_CHATIDS,52,42,148,13,ES_AUTOHSCROLL
+    PUSHBUTTON      "Discover...",IDC_TG_DISCOVER,204,42,52,13
+    LTEXT           "Numeric chat_id's, ';'-separated. Send /start to the bot first, then Discover.",IDC_STATIC,8,58,248,8
+    LTEXT           "Title",IDC_STATIC,8,76,40,8
+    EDITTEXT        IDC_TG_TITLE,52,74,204,13,ES_AUTOHSCROLL
+    LTEXT           "Optional, shown above the body (blank line between). Empty = body only.",IDC_STATIC,52,90,204,8
+    LTEXT           "Body",IDC_STATIC,8,104,40,8
+    EDITTEXT        IDC_TG_BODY,52,102,204,13,ES_AUTOHSCROLL
+    LTEXT           "Placeholders: {message} {label} {capcode} {time} {date} {mode} {type} {bitrate}.  \\n = new line,  <b>..</b> = bold.",IDC_STATIC,8,118,248,16
+    LTEXT           "Thread ID",IDC_STATIC,8,140,40,8
+    EDITTEXT        IDC_TG_THREADID,52,138,40,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "(supergroup topic, 0 = none)",IDC_STATIC,98,140,140,8
+    CONTROL         "Silent (no notification sound)",IDC_TG_SILENT,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,156,140,10
+    CONTROL         "Disable link preview",IDC_TG_NOPREVIEW,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,150,156,106,10
+    CONTROL         "Split messages over 4096 chars (off = truncate)",IDC_TG_SPLIT,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,170,248,10
+    CONTROL         "Log to file (pdw_telegram.log)",IDC_TG_LOG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,184,160,10
+    LTEXT           "Send notifications for:",IDC_STATIC,8,202,80,8
+    COMBOBOX        IDC_TG_SEND_IN,92,200,164,62,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "'Selected filters only' uses the per-capcode Telegram box (Ctrl-F).",IDC_STATIC,8,218,248,8
+    PUSHBUTTON      "Test",IDC_TG_TEST,8,238,44,14
+    LTEXT           "Status: Idle",IDC_TG_STATUS,60,241,196,8
+    DEFPUSHBUTTON   "OK",IDOK,152,264,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,212,264,44,14
+END
+
+PUSHOVER_DLGBOX DIALOG 10, 10, 264, 256
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Pushover Settings"
+FONT 8, "Verdana"
+BEGIN
+    CONTROL         "Enable Pushover output",IDC_PO_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,120,10
+    LTEXT           "App token",IDC_STATIC,8,26,44,8
+    EDITTEXT        IDC_PO_APPTOKEN,56,24,200,13,ES_AUTOHSCROLL | ES_PASSWORD
+    LTEXT           "User/Group key",IDC_STATIC,8,44,46,8
+    EDITTEXT        IDC_PO_USERKEY,56,42,200,13,ES_AUTOHSCROLL | ES_PASSWORD
+    LTEXT           "Title",IDC_STATIC,8,62,44,8
+    EDITTEXT        IDC_PO_TITLE,56,60,200,13,ES_AUTOHSCROLL
+    LTEXT           "Optional, shown above the body. Empty = body only.",IDC_STATIC,56,76,200,8
+    LTEXT           "Body",IDC_STATIC,8,90,44,8
+    EDITTEXT        IDC_PO_BODY,56,88,200,13,ES_AUTOHSCROLL
+    LTEXT           "Placeholders: {message} {label} {capcode} {time} {date} {mode} {type} {bitrate}.  \\n = new line,  <b>..</b> = bold (needs HTML).",IDC_STATIC,8,104,248,16
+    LTEXT           "Priority",IDC_STATIC,8,126,44,8
+    COMBOBOX        IDC_PO_PRIORITY,56,124,140,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Sound",IDC_STATIC,8,144,44,8
+    EDITTEXT        IDC_PO_SOUND,56,142,80,13,ES_AUTOHSCROLL
+    LTEXT           "Device",IDC_STATIC,148,144,28,8
+    EDITTEXT        IDC_PO_DEVICE,178,142,78,13,ES_AUTOHSCROLL
+    CONTROL         "HTML formatting (html=1)",IDC_PO_HTML,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,160,120,10
+    CONTROL         "Log to file (pdw_pushover.log)",IDC_PO_LOG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,138,160,118,10
+    LTEXT           "Send notifications for:",IDC_STATIC,8,178,80,8
+    COMBOBOX        IDC_PO_SEND_IN,92,176,164,62,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "'Selected filters only' uses the per-capcode Pushover box (Ctrl-F).",IDC_STATIC,8,194,248,8
+    PUSHBUTTON      "Test",IDC_PO_TEST,8,214,44,14
+    LTEXT           "Status: Idle",IDC_PO_STATUS,60,217,196,8
+    DEFPUSHBUTTON   "OK",IDOK,152,236,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,212,236,44,14
 END
 
 TELNETSERVER_DLGBOX DIALOG 10, 10, 340, 305
@@ -1163,8 +1234,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 3,5,0,0
- PRODUCTVERSION 3,5,0,0
+ FILEVERSION 3,6,1,0
+ PRODUCTVERSION 3,6,1,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -1182,11 +1253,11 @@ BEGIN
             VALUE "Comments", "Supports Windows XP - WIN11"
             VALUE "CompanyName", "WitWarez"
             VALUE "FileDescription", "PDW"
-            VALUE "FileVersion", "3.5.0"
+            VALUE "FileVersion", "3.6.1"
             VALUE "InternalName", "PDW"
-            VALUE "OriginalFilename", "PDW3_5.exe"
+            VALUE "OriginalFilename", "PDW3_6.exe"
             VALUE "ProductName", "PDW"
-            VALUE "ProductVersion", "3.5.0"
+            VALUE "ProductVersion", "3.6.1"
         END
     END
     BLOCK "VarFileInfo"

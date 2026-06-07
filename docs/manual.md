@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 3.5.9** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 3.6.1** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -30,6 +30,8 @@
     - 10.1 [SMTP e-mail alerts](#101-smtp-e-mail-alerts)
     - 10.2 [Webhook](#102-webhook)
     - 10.3 [MQTT](#103-mqtt)
+    - 10.3a [Telegram](#103a-telegram)
+    - 10.3b [Pushover](#103b-pushover)
     - 10.4 [Telnet server](#104-telnet-server)
     - 10.5 [MySQL output](#105-mysql-output)
     - 10.6 [SQLite output](#106-sqlite-output)
@@ -60,7 +62,7 @@
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (3.5.9) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. The main additions over the original release are listed in [section 21](#21-changelog).
+This version (3.6.1) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. The main additions over the original release are listed in [section 21](#21-changelog).
 
 ---
 
@@ -322,6 +324,142 @@ Publishes every decoded page to an MQTT broker. Uses the static-linked Paho C li
 | `subscribers` | JSON array of `{capcode, label}` for FLEX group calls |
 
 Click **Test connection** in the dialog to verify broker connectivity. Activity logged to `YYMMDD_mqtt.log`.
+
+### 10.3a Telegram
+
+Configure via **Telegram** in the menu. Pushes decoded pages to Telegram chats, groups, and
+supergroups through the Bot API (WinHTTP — no external libraries).
+
+**Setup:**
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the **bot token** into the dialog.
+2. Send `/start` to your bot (for a group: add the bot to the group and post a message). A bot can
+   never message a user first, so this step is required.
+3. Click **Discover...** to read the chat_id back via `getUpdates`, or paste numeric chat_id's
+   manually. 1:1 chats are positive, groups negative, supergroups start with `-100`. Separate
+   multiple chat_id's with `;`.
+
+| Setting | Description |
+|---------|-------------|
+| Bot token | From @BotFather (stored locally, never written to the log) |
+| Chat IDs | Numeric, `;`-separated |
+| Title | Bold first-line template (subject emulation). Empty = no title. Placeholders below |
+| Body | Message-body template (default `{message}`). Placeholders below |
+| Thread ID | Optional `message_thread_id` for supergroup topics (0 = none) |
+| Silent | Deliver without notification sound |
+| Disable link preview | Suppress web page previews |
+| Split long messages | Split over 4096 chars (off = truncate) |
+| Send filter | All / Filtered / Filtered + Monitor / Selected filters only |
+
+Messages are HTML-formatted (`parse_mode=HTML`); if Telegram rejects the markup PDW automatically
+re-sends as plain text. Rate-limit (HTTP 429) responses are honoured with back-off, and supergroup
+migrations update the stored chat_id automatically. **Test** sends a one-off message rendered through
+the **current Title/Body fields** with sample values (a fake page text and three sample labels), so you
+see the exact formatting - bold, line breaks and label stacking - in Telegram before saving. The
+default layout is title-less with Body `<b>{message}</b>\n{label}`.
+
+**Title and Body templates.** A message is built as the **Title** (a bold first line) followed by a
+blank line and the **Body**. Both fields are templates that accept these placeholders:
+
+`{message}` `{label}` `{capcode}` `{time}` `{date}` `{mode}` `{type}` `{bitrate}`
+
+Any other text (including HTML such as `<b>...</b>`) is copied verbatim. Defaults are Title
+`<b>{label}</b>` and Body `{message}`. Examples:
+
+Type `\n` anywhere in a template to force a line break (`\\` for a literal backslash). The Title and
+Body are separate fields and are always joined by a **blank** line. If you want everything in one block
+with no blank line, leave the Title empty and build it all in the Body using `\n`.
+
+**Template cookbook** (group-call labels are already one-per-line, so `{label}` stacks automatically):
+
+| Goal | Title | Body | Result |
+|------|-------|------|--------|
+| **Message as headline, labels below, no blank line (default)** | *(empty)* | `<b>{message}</b>\n{label}` | **bold page text** then each label on its own line |
+| Classic | `<b>{label}</b>` | `{message}` | bold label(s), blank line, page text |
+| Message headline + labels (with blank line) | `<b>{message}</b>` | `{label}` | bold page text, blank line, labels |
+| Compact one-liner header | *(empty)* | `<b>{message}</b>\n{capcode} - {time}` | bold text, then `capcodes - HH:MM:SS` |
+| Everything labelled | `<b>{label}</b>` | `{message}\n\n{capcode} @ {time} {date}` | label header, text, then a metadata line |
+| Plain, no bold at all | *(empty)* | `{message}\n{label}` | page text then labels, nothing bold |
+| Capcodes only (no text) | `<b>{label}</b>` | `{capcode}` | label header, then the capcode list |
+
+The recommended layout for a busy group call is **Title empty + Body `<b>{message}</b>\n{label}`**: you
+get the page text in bold on the first line and every paged service on its own line directly underneath,
+without an extra blank line. Remember `\n` uses a backslash (`\`), not a forward slash.
+
+For a FLEX group call, `{label}` and `{capcode}` expand to the full list of matching subscribers.
+Labels are placed **one per line**, so `Body = {label}` lists every paged service on its own line.
+The list is collected up to 32 KB (the same capacity as the MQTT/webhook feeds), so even a 122-capcode
+test alert fits. To deliver such a large group call **in full**, switch **Split messages over 4096
+chars ON** - PDW then sends it as several messages. With Split **off**, only the first 4096 characters
+go out and the rest is truncated with `...`.
+
+**Send filter modes** mirror the SMTP modes exactly:
+
+- *All messages* — every decoded page.
+- *Filtered messages only* — pages that match a filter (not monitor-only).
+- *Filtered + Monitor* — matched pages including monitor-only matches.
+- *Selected filters only* — only filters whose *Send Telegram* checkbox is ticked.
+
+**Per-capcode control:** in the filter window (**Ctrl-F**) every filter has a *Send Telegram*
+checkbox. This checkbox is used **only** in *Selected filters only* mode, letting you forward just a
+handful of capcodes/riccodes; in the other modes it is ignored. **FLEX group calls** are delivered as
+a single message listing all matching subscriber capcodes/labels, not one message per member. Activity
+logged to `YYMMDD_telegram.log`.
+
+### 10.3b Pushover
+
+Configure via **Pushover** in the menu. Pushes decoded pages to [Pushover](https://pushover.net)
+through its Messages API (WinHTTP — no external libraries).
+
+**Setup:** create an application on the Pushover dashboard to obtain an **API token**, and copy your
+**user key** (or a delivery-group key) from your account page. Enter both in the dialog and press
+**Test**.
+
+| Setting | Description |
+|---------|-------------|
+| App token | Application API token (stored locally, never written to the log) |
+| User/Group key | Your user key or a delivery-group key |
+| Title | Title template. Empty = no title. Placeholders below |
+| Body | Message-body template (default `{message}`). Placeholders below |
+| Priority | -2 Lowest / -1 Low / 0 Normal / 1 High |
+| Sound | Pushover sound name (empty = user default) |
+| Device | Optional target device name (empty = all devices) |
+| HTML formatting | Send `html=1` so limited HTML in the message is rendered |
+| Send filter | All / Filtered / Filtered + Monitor / Selected filters only |
+
+Messages are capped at 1024 characters and titles at 250 (Pushover limits); longer content is
+truncated. Rate-limit (HTTP 429) responses are retried with back-off. Emergency priority 2
+(acknowledgement and receipt polling) is intentionally not offered in this version.
+
+**Title and Body templates** work exactly like Telegram (see the cookbook above): both accept
+`{message} {label} {capcode} {time} {date} {mode} {type} {bitrate}`, any other text is copied verbatim,
+and `\n` forces a line break. The default is title-less with Body `<b>{message}</b>\n{label}` and **HTML
+formatting on**, matching Telegram. A few examples:
+
+| Goal | Title | Body |
+|------|-------|------|
+| Default (HTML on) | *(empty)* | `<b>{message}</b>\n{label}` |
+| Plain, no bold (HTML off) | *(empty)* | `{message}\n{label}` |
+| Label headline | `{label}` | `{message}` |
+
+An empty body falls back to the raw page text (Pushover requires a non-empty message). Note Pushover
+does not render `<b>`/`<i>`/etc. unless **HTML formatting** is on, and the message is hard-capped at
+1024 chars. Unlike Telegram, Pushover follows HTML rules in HTML mode where a bare newline is just
+whitespace; PDW therefore converts `\n` line breaks to `<br>` automatically when HTML formatting is on,
+so a template like `<b>{message}</b>\n{label}` shows the bold text and each label on its own line. (In
+plain mode Pushover keeps newlines as-is, but then the `<b>` tags show literally - turn HTML on for
+bold.) **Test** renders a sample page through the current Title/Body fields (and the HTML checkbox) so
+you preview the real formatting, just like Telegram.
+
+For a FLEX group call `{label}`/`{capcode}` expand to the matching subscribers, one label per line.
+Pushover has no splitting, so the notification is hard-capped at 1024 characters (title 250); a group
+call with more labels than fit is truncated. If you need every label of a large 122-capcode group
+call, use Telegram (which can split across messages).
+
+**Per-capcode control:** as with Telegram, the *Send filter* modes mirror SMTP, and every filter
+(**Ctrl-F**) has a *Send Pushover* checkbox that is consulted **only** in *Selected filters only*
+mode. FLEX group calls are delivered as a single notification listing all matching subscriber
+capcodes. Activity logged to `YYMMDD_pushover.log`.
 
 ### 10.4 Telnet server
 
@@ -828,6 +966,12 @@ PDW opens its COM port for exclusive access. While PDW is running and connected,
 ---
 
 ## 21. Changelog
+
+### v3.6.1
+- **Telegram & Pushover** — separate Title/Body templates with a `{message}` placeholder and `\n` line breaks; new default `<b>{message}</b>\n{label}` (Pushover defaults to HTML on). The Test button now previews the real template formatting with sample data (FIX [TgBodyTemplate], [TgTestPreview], [PoTestPreview])
+- **Telegram & Pushover** — group calls are sent as one message with each subscriber label on its own line; label list buffered to 32 KB so a 122-capcode test alert fits (FIX [TgGroupBatch], [TgGroupNewline])
+- **Pushover** — newlines are converted to `<br>` in HTML mode so multi-line templates render correctly (FIX [PoHtmlNewline])
+- **Telegram & Pushover** — send-in modes mirror SMTP (All / Filtered / Filtered+Monitor / Selected filters only); the per-capcode Ctrl-F checkbox is used only in *Selected filters only* mode (FIX [TgSendModes], [PoSendModes])
 
 ### v3.5.9
 - **Database** — FLEX group-call subscribers now carry a per-member `match_type` in the `subscribers` JSON, so a viewer can render each capcode in its correct pane (filtered / monitor-only) exactly as the PDW window does (FIX [GroupMatchPerCapcode])

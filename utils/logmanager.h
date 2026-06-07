@@ -27,7 +27,9 @@ enum LogCat : uint32_t {
     LC_MYSQL    = 1u << 5,   // {YYMMDD}_mysql.log  (daily rotation)
     LC_SQLITE   = 1u << 6,   // {YYMMDD}_sqlite.log
     LC_SMTP     = 1u << 7,   // {YYMMDD}_mail.log
-    LC_ALL      = 0x000000FFu
+    LC_TELEGRAM = 1u << 8,   // {YYMMDD}_telegram.log  // FIX [Telegram]
+    LC_PUSHOVER = 1u << 9,   // {YYMMDD}_pushover.log  // FIX [Pushover]
+    LC_ALL      = 0x000003FFu
 };
 
 // Maximum length of a single formatted log line (timestamp + tag + message).
@@ -140,5 +142,7 @@ private:
 #define PDW_MYSQLLOG(fmt, ...)   LogManager::Get().Write(LC_MYSQL,   fmt, ##__VA_ARGS__)
 #define PDW_SQLITELOG(fmt, ...)  LogManager::Get().Write(LC_SQLITE,  fmt, ##__VA_ARGS__)
 #define PDW_SMTPLOG(fmt, ...)    LogManager::Get().Write(LC_SMTP,    fmt, ##__VA_ARGS__)
+#define PDW_TELEGRAMLOG(fmt, ...) LogManager::Get().Write(LC_TELEGRAM, fmt, ##__VA_ARGS__)
+#define PDW_PUSHOVERLOG(fmt, ...) LogManager::Get().Write(LC_PUSHOVER, fmt, ##__VA_ARGS__)
 
 #endif // PDW_LOGMANAGER_H

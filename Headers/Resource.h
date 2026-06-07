@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
-#define PDW_VERSION_MINOR  5
-#define PDW_VERSION_PATCH  9
-#define PDW_VERSION_STR    "3.5.9"
+#define PDW_VERSION_MINOR  6
+#define PDW_VERSION_PATCH  1
+#define PDW_VERSION_STR    "3.6.1"
 
 #define IDC_STATIC             -1
 
@@ -283,6 +283,8 @@
 #define IDC_FILTERLABELCOLOR       970
 #define IDC_FILTERMATCHEXACT       971
 #define IDC_FILTERSMTP             972
+#define IDC_FILTERTELEGRAM         975   // FIX [Telegram]: per-filter Telegram checkbox
+#define IDC_FILTERPUSHOVER         979   // FIX [Telegram]: per-filter Pushover checkbox (phase 2)
 #define IDC_FILTERRXTXMAN          973
 #define IDC_FILTEREDITHELP         974
 
@@ -591,6 +593,41 @@
 #define IDC_SQLITE_LOG            1443
 #define IDC_SQLITE_STATUS         1444
 #define IDC_SQLITE_TEST           1445
+
+// FIX [Telegram]: Telegram Bot API output sink dialog (utils/telegram.cpp)
+#define TELEGRAM_DLGBOX           138
+#define IDM_TELEGRAM              247
+#define IDC_TG_ENABLED            1550
+#define IDC_TG_TOKEN              1551
+#define IDC_TG_CHATIDS            1552
+#define IDC_TG_TITLE              1553
+#define IDC_TG_THREADID           1554
+#define IDC_TG_SILENT             1555
+#define IDC_TG_NOPREVIEW          1556
+#define IDC_TG_SPLIT              1557
+#define IDC_TG_SEND_IN            1558
+#define IDC_TG_LOG                1559
+#define IDC_TG_STATUS             1560
+#define IDC_TG_TEST               1561
+#define IDC_TG_DISCOVER           1562
+#define IDC_TG_BODY               1563
+
+// FIX [Pushover]: Pushover output sink dialog (utils/pushover.cpp)
+#define PUSHOVER_DLGBOX           139
+#define IDM_PUSHOVER              248
+#define IDC_PO_ENABLED            1600
+#define IDC_PO_APPTOKEN           1601
+#define IDC_PO_USERKEY            1602
+#define IDC_PO_TITLE              1603
+#define IDC_PO_PRIORITY           1604
+#define IDC_PO_SOUND              1605
+#define IDC_PO_DEVICE             1606
+#define IDC_PO_HTML               1607
+#define IDC_PO_SEND_IN            1608
+#define IDC_PO_LOG                1609
+#define IDC_PO_STATUS             1610
+#define IDC_PO_TEST               1611
+#define IDC_PO_BODY               1612
 
 // FIX [LogManager]: write-buffering controls in the logfile dialog (1500+ to avoid SQLite collision)
 #define IDC_LOG_BUFFER_EN         1500   // checkbox  "Reduce disk writes (buffer)"

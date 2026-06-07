@@ -73,7 +73,20 @@ void LogManager::Init(const char* path, uint32_t enableMask, int monthNumber,
 
         m_stop   = false;
         m_hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr); // auto-reset
-        m_hThread = CreateThread(nullptr, 0, WorkerProc, this, 0, nullptr);
+        m_hThread = (m_hEvent != nullptr)
+                  ? CreateThread(nullptr, 0, WorkerProc, this, 0, nullptr)
+                  : nullptr;
+        // FIX [LogWorkerStart]: if the event or worker could not be created, fall back to
+        // direct (unbuffered) writes instead of buffering forever with no drain thread. Without
+        // this, the ring would fill and silently drop the oldest log line on every write, and
+        // m_hEvent would leak until Shutdown. Disable buffering and free the rings.
+        if (m_hThread == nullptr) {
+            if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }
+            delete[] m_buf;   m_buf   = nullptr;
+            delete[] m_drain; m_drain = nullptr;
+            m_slots = m_head = m_tail = m_count = 0;
+            m_bufEnabled = false;
+        }
     }
 
     m_initialized = true;
@@ -128,7 +141,22 @@ void LogManager::Reconfigure(const char* path, uint32_t enableMask, int monthNum
         m_head   = m_tail = m_count = 0;
 
         m_hEvent  = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        m_hThread = CreateThread(nullptr, 0, WorkerProc, this, 0, nullptr);
+        m_hThread = (m_hEvent != nullptr)
+                  ? CreateThread(nullptr, 0, WorkerProc, this, 0, nullptr)
+                  : nullptr;
+        // FIX [LogWorkerStart]: same fallback as Init() — no worker means no drain, so revert
+        // to direct writes rather than buffering into a ring that never empties.
+        if (m_hThread == nullptr) {
+            if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }
+            EnterCriticalSection(&m_cs);
+            Entry* b = m_buf;   m_buf   = nullptr;
+            Entry* d = m_drain; m_drain = nullptr;
+            m_slots = m_head = m_tail = m_count = 0;
+            m_bufEnabled = false;
+            LeaveCriticalSection(&m_cs);
+            delete[] b;
+            delete[] d;
+        }
     }
 }
 
@@ -270,7 +298,16 @@ void LogManager::Flush()
 // Build the full file path for a category.
 void LogManager::BuildPath(char* out, int outSize, LogCat cat, const SYSTEMTIME& st) const
 {
-    const char* root = m_path[0] ? m_path : ".";
+    // FIX [BuildPathSnapshot]: Write/WriteRaw run on the MQTT/SQLite/Telnet/SMTP worker threads,
+    // while Reconfigure() rewrites m_path/m_monthNumber on the main thread. Reading them unlocked
+    // could tear the path mid-rewrite -> one garbage filename. Snapshot both under m_cs.
+    char rootBuf[MAX_PATH];
+    int  monthNumber;
+    EnterCriticalSection(const_cast<CRITICAL_SECTION*>(&m_cs));
+    strncpy_s(rootBuf, sizeof(rootBuf), m_path[0] ? m_path : ".", _TRUNCATE);
+    monthNumber = m_monthNumber;
+    LeaveCriticalSection(const_cast<CRITICAL_SECTION*>(&m_cs));
+    const char* root = rootBuf;
 
     // Suffix determines filename (kept identical to existing per-subsystem names).
     const char* suffix = nullptr;
@@ -285,6 +322,8 @@ void LogManager::BuildPath(char* out, int outSize, LogCat cat, const SYSTEMTIME&
     case LC_MYSQL:   suffix = "_mysql.log";             break;
     case LC_SQLITE:  suffix = "_sqlite.log";            break;
     case LC_SMTP:    suffix = "_mail.log";              break;
+    case LC_TELEGRAM: suffix = "_telegram.log";         break;
+    case LC_PUSHOVER: suffix = "_pushover.log";         break;
     default:         suffix = "_pdw.log";               break;
     }
 
@@ -293,7 +332,7 @@ void LogManager::BuildPath(char* out, int outSize, LogCat cat, const SYSTEMTIME&
         "JUL","AUG","SEP","OCT","NOV","DEC"
     };
 
-    if (m_monthNumber) {
+    if (monthNumber) {
         // Numeric month: 260603_pdw_debug.log
         _snprintf_s(out, outSize, _TRUNCATE, "%s\\%02d%02d%02d%s",
                     root, st.wYear % 100, st.wMonth, st.wDay, suffix);

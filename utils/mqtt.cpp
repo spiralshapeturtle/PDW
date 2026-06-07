@@ -139,9 +139,11 @@ static MqttGroupAcc g_groupAcc[MAX_GROUPBITS];
 // Thread / synchronisation
 // ---------------------------------------------------------------------------
 
-static HANDLE g_hThread  = NULL;
-static HANDLE g_hEvent   = NULL;   // auto-reset, wakes worker
-static BOOL   g_bRunning = FALSE;
+static HANDLE          g_hThread  = NULL;
+static HANDLE          g_hEvent   = NULL;   // auto-reset, wakes worker
+// FIX [MqttVolatile]: volatile so the compiler cannot hoist the read out of the worker
+// loop body — main thread writes FALSE on shutdown, worker must see it promptly.
+static volatile BOOL   g_bRunning = FALSE;
 
 static CRITICAL_SECTION g_cs;
 
@@ -519,8 +521,22 @@ static void DoSend(const MqttJob *job)
 
         if (rc == MQTTCLIENT_SUCCESS)
         {
+            // FIX [MqttWaitCheck]: waitForCompletion can return MQTTCLIENT_DISCONNECTED or
+            // MQTTCLIENT_FAILURE (timeout) — previously its return was ignored and "SENT"
+            // was logged unconditionally, hiding a QoS>0 delivery failure on a flaky broker.
             if (g_iQos > 0)
-                MQTTClient_waitForCompletion(g_mqttClient, token, 5000);
+            {
+                int wrc = MQTTClient_waitForCompletion(g_mqttClient, token, 5000);
+                if (wrc != MQTTCLIENT_SUCCESS)
+                {
+                    WriteLog("WARN      QoS>0 waitForCompletion rc=%d topic=%s (delivery unconfirmed)", wrc, szTopic);
+                    // FIX [MqttWaitCheck]: drop the disconnected-but-alive handle so the next
+                    // message reconnects cleanly instead of burning a round-trip on a stale socket.
+                    ClientDestroy();
+                    PostStatus(MHS_ERROR, 0);
+                    return;
+                }
+            }
             WriteLog("SENT      %s (%d bytes)", szTopic, bodyLen);
             PostStatus(MHS_OK, 0);
             return;
@@ -843,6 +859,10 @@ void MqttFlushGroup(int groupbit)
 
 void MqttSetStatusWnd(HWND hWnd)
 {
+    // FIX [StatusWndCsGuard]: g_cs may not be initialized yet if the Setup dialog calls this
+    // before the first MqttInit(). Entering an uninitialized CRITICAL_SECTION is undefined
+    // (crash). Mirror the guarded SqliteSetStatusWnd: store directly until the CS exists.
+    if (!s_mqttCsInit) { g_hStatusWnd = hWnd; return; }
     EnterCriticalSection(&g_cs);
     g_hStatusWnd = hWnd;
     LeaveCriticalSection(&g_cs);

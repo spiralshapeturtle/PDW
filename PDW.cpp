@@ -315,6 +315,8 @@
 #include "utils\ostype.h"
 #include "utils\smtp.h"
 #include "utils\webhook.h"
+#include "utils\telegram.h"	// FIX [Telegram]
+#include "utils\pushover.h"	// FIX [Pushover]
 #include "utils\mqtt.h"
 #include "utils\telnet_server.h"
 #include "utils\mysql.h"
@@ -393,7 +395,7 @@ bool bLBUTTONDBLCLK=false;			// PH: Is true after 2 WM_LBUTTONDOWN messages
 bool bFilterFindCASE=false;			// PH: Filter Find Case Sensitive?
 
 BOOL g_betterContrast    = FALSE;	// Display enhancement: remap low-contrast filter label colors
-BOOL g_lighterBackground = FALSE;	// Display enhancement: dark-navy instead of pure-black background
+BOOL g_lighterBackground = FALSE;	// Display enhancement: neutral charcoal instead of pure-black background
 
 int   iTEMP = 0;					// Global temporary int
 char szTEMP[MAX_STR_LEN];			// Global temporary buffer
@@ -541,6 +543,37 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.webhookPagermonFormat  = 0;
 	Profile.webhookSendIn          = 0;
 	Profile.webhookFields          = 0x7F;
+
+	// FIX [Telegram]: defaults (feature off)
+	Profile.telegramEnabled        = 0;
+	Profile.szTelegramToken[0]     = '\0';
+	Profile.szTelegramChatIds[0]   = '\0';
+	// FIX [TgTestPreview]: default to title-less layout with bold page text and labels on their own
+	// lines (one block, no blank line). "\\n" stores the literal two-char \n that ResolveTemplate
+	// turns into a real line break at send time.
+	Profile.szTelegramTitle[0]     = '\0';
+	strcpy(Profile.szTelegramBody, "<b>{message}</b>\\n{label}");
+	Profile.telegramThreadId       = 0;
+	Profile.telegramSilent         = 0;
+	Profile.telegramNoPreview      = 0;
+	Profile.telegramSplitLong      = 1;
+	Profile.telegramSendIn         = 1;	// filtered only by default (per-capcode model)
+	Profile.telegramLogToFile      = 0;
+
+	// FIX [Pushover]: defaults (feature off)
+	Profile.pushoverEnabled        = 0;
+	Profile.szPushoverAppToken[0]  = '\0';
+	Profile.szPushoverUserKey[0]   = '\0';
+	// FIX [PoTestPreview]: same title-less bold layout as Telegram; HTML on by default so the <b> tag
+	// renders and the \n line breaks become <br> automatically.
+	Profile.szPushoverTitle[0]     = '\0';
+	strcpy(Profile.szPushoverBody, "<b>{message}</b>\\n{label}");
+	Profile.pushoverPriority       = 0;
+	Profile.szPushoverSound[0]     = '\0';
+	Profile.szPushoverDevice[0]    = '\0';
+	Profile.pushoverHtml           = 1;
+	Profile.pushoverSendIn         = 1;	// filtered only by default (per-capcode model)
+	Profile.pushoverLogToFile      = 0;
 
 	Profile.bDebugLog              = 0;     // Live debug log disabled by default
 
@@ -1622,6 +1655,16 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 												 hWnd, (DLGPROC) MqttDlgProc, 0L);
 				break;
 
+				case IDM_TELEGRAM:	// FIX [Telegram]
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(TELEGRAM_DLGBOX),
+												 hWnd, (DLGPROC) TelegramDlgProc, 0L);
+				break;
+
+				case IDM_PUSHOVER:	// FIX [Pushover]
+					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(PUSHOVER_DLGBOX),
+												 hWnd, (DLGPROC) PushoverDlgProc, 0L);
+				break;
+
 				case IDM_TELNETSERVER:
 					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(TELNETSERVER_DLGBOX),
 												 hWnd, (DLGPROC) TelnetServerDlgProc, 0L);
@@ -1898,7 +1941,16 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			}
 			break;
 		}
-		break; // FIX [TrayBalloon]: ontbrekende break veroorzaakte fall-through naar WM_GETMINMAXINFO → crash als bTrayed=false en lParam > 1000
+		break; // FIX [TrayBalloon]: ontbrekende break veroorzaakte fall-through naar WM_GETMINMAXINFO -> crash als bTrayed=false en lParam > 1000
+
+		case WM_AUDIO_CAPTURE_ERROR: // FIX [AudioCaptureError]: waveInAddBuffer failed in Process_ReadyBuffers
+		if (bCapturing)
+		{
+			KillTimer(ghWnd, PDW_TIMER);
+			Stop_Capturing();
+			MessageBox(ghWnd, "Audio capture error: failed to re-queue audio buffer.\nCapturing has been stopped.", "PDW - Audio Error", MB_OK | MB_ICONERROR);
+		}
+		break;
 
 		case WM_GETMINMAXINFO:
 
@@ -2071,6 +2123,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// HWi, stop Mail thread.....
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
 		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
+		TelegramDestroy(); // FIX [Telegram]: shutdown + DeleteCriticalSection
+		PushoverDestroy(); // FIX [Pushover]: shutdown + DeleteCriticalSection
 		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
 		MysqlDestroy();    // FIX [MySQLFeed]: shutdown + DeleteCriticalSection
 		SqliteDestroy();   // FIX [SqliteFeed]: shutdown + DeleteCriticalSection
@@ -2965,7 +3019,8 @@ static COLORREF ApplyContrastRemap(COLORREF clr) {
 }
 
 static COLORREF MsgListBg(void) {
-	return g_lighterBackground ? RGB(26, 26, 46) : Profile.color_background;
+	// FIX [BgNeutralCharcoal]: #1A1A2E (26,26,46) read too blue/navy on screen; use neutral charcoal #18181B
+	return g_lighterBackground ? RGB(24, 24, 27) : Profile.color_background;
 }
 
 static COLORREF FilterDropBg(void) {
@@ -6826,6 +6881,8 @@ void Copy_Filter_Fields(FILTER *out_filter, FILTER in_filter)
 	out_filter->cmd_enabled		= in_filter.cmd_enabled;
 	out_filter->monitor_only	= in_filter.monitor_only;
 	out_filter->smtp			= in_filter.smtp;
+	out_filter->telegram		= in_filter.telegram;		// FIX [Telegram]
+	out_filter->pushover		= in_filter.pushover;		// FIX [Telegram]
 	out_filter->match_exact_msg	= in_filter.match_exact_msg;
 
 	for (int i=0; i<3; i++)
@@ -7913,7 +7970,8 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 	int type=0, monitor_only=0, reject=0, match_exact=0, label_en=0, smtp=0;
 	int filter_cmd=0, color=0, audio=0, iHits=0;
 	int sep_en=0, sep1=0, sep2=0, sep3=0;
-	
+	int telegram=0, pushover=0;	// FIX [Telegram]: multi-edit "don't change" trackers
+
 	char temp_cap[FILTER_CAPCODE_LEN+1]="",
 		 temp[MAX_PATH],
 		 tmp_text[FILTER_TEXT_LEN+1],
@@ -8253,6 +8311,20 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			SendDlgItemMessage(hDlg, IDC_FILTERSMTP, WM_SETTEXT, 0, (LPARAM) "Send email");
 		}
 
+		// FIX [Telegram]: enable per-filter checkbox + dynamic label when the global sink is on
+		if (Profile.telegramEnabled)
+		{
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTERTELEGRAM), true);
+			SendDlgItemMessage(hDlg, IDC_FILTERTELEGRAM, WM_SETTEXT, 0, (LPARAM) "Send Telegram");
+		}
+
+		// FIX [Pushover]: idem
+		if (Profile.pushoverEnabled)
+		{
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTERPUSHOVER), true);
+			SendDlgItemMessage(hDlg, IDC_FILTERPUSHOVER, WM_SETTEXT, 0, (LPARAM) "Send Pushover");
+		}
+
 		if (filter.type == UNUSED_FILTER) // Add Filter
 		{
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTERTYPE), true);
@@ -8287,6 +8359,8 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					if (Profile.filters[index].label_color != filter.label_color) color=1;
 					if (Profile.filters[index].wave_number != filter.wave_number) audio=1;
 					if (Profile.filters[index].smtp != filter.smtp) smtp=1;
+					if (Profile.filters[index].telegram != filter.telegram) telegram=1;	// FIX [Telegram]
+					if (Profile.filters[index].pushover != filter.pushover) pushover=1;	// FIX [Telegram]
 					if (Profile.filters[index].sep_filterfile_en != filter.sep_filterfile_en) sep_en=1;
 					if (Profile.filters[index].sep_filterfiles > sep_filterfiles) sep_filterfiles = Profile.filters[index].sep_filterfiles;
 
@@ -8300,6 +8374,8 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 				if (filter_cmd)   SendDlgItemMessage(hDlg, IDC_FILTERCMD,           BM_SETSTYLE, BS_AUTO3STATE, TRUE);
 				if (sep_en)       SendDlgItemMessage(hDlg, IDC_SEPFILTERFILEEN,     BM_SETSTYLE, BS_AUTO3STATE, TRUE);
 				if (smtp)         SendDlgItemMessage(hDlg, IDC_FILTERSMTP,          BM_SETSTYLE, BS_AUTO3STATE, TRUE);
+				if (telegram)     SendDlgItemMessage(hDlg, IDC_FILTERTELEGRAM,      BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [Telegram]
+				if (pushover)     SendDlgItemMessage(hDlg, IDC_FILTERPUSHOVER,      BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [Pushover]
 
 				sprintf(temp, "Total number of hits: %i", iHits);
 				SetDlgItemText(hDlg, IDC_FILTERHITS, temp);
@@ -8356,6 +8432,8 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		CheckDlgButton(hDlg, IDC_FILTERLABELEN,       label_en     ? BST_INDETERMINATE : filter.label_enabled);
 		CheckDlgButton(hDlg, IDC_FILTERCMD,           filter_cmd   ? BST_INDETERMINATE : filter.cmd_enabled);
 		CheckDlgButton(hDlg, IDC_FILTERSMTP,          smtp         ? BST_INDETERMINATE : filter.smtp);
+		CheckDlgButton(hDlg, IDC_FILTERTELEGRAM,      telegram     ? BST_INDETERMINATE : filter.telegram);	// FIX [Telegram]
+		CheckDlgButton(hDlg, IDC_FILTERPUSHOVER,      pushover     ? BST_INDETERMINATE : filter.pushover);	// FIX [Pushover]
 		CheckDlgButton(hDlg, IDC_SEPFILTERFILEEN,     sep_en       ? BST_INDETERMINATE : filter.sep_filterfile_en);
 
 		SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_RESETCONTENT, 0, 0);
@@ -9077,6 +9155,18 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					if (IsDlgButtonChecked(hDlg, IDC_FILTERSMTP) != BST_INDETERMINATE)
 					{
 						Profile.filters[index].smtp = IsDlgButtonChecked(hDlg, IDC_FILTERSMTP);
+					}
+
+					// FIX [Telegram]: persist per-filter Telegram bit (tri-state aware)
+					if (IsDlgButtonChecked(hDlg, IDC_FILTERTELEGRAM) != BST_INDETERMINATE)
+					{
+						Profile.filters[index].telegram = IsDlgButtonChecked(hDlg, IDC_FILTERTELEGRAM);
+					}
+
+					// FIX [Pushover]: persist per-filter Pushover bit (tri-state aware)
+					if (IsDlgButtonChecked(hDlg, IDC_FILTERPUSHOVER) != BST_INDETERMINATE)
+					{
+						Profile.filters[index].pushover = IsDlgButtonChecked(hDlg, IDC_FILTERPUSHOVER);
 					}
 
 					if (IsDlgButtonChecked(hDlg, IDC_SEPFILTERFILEEN) != BST_INDETERMINATE)
@@ -9953,6 +10043,225 @@ BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 	}
 	return (FALSE);
 } // end of WebhookDlgProc
+
+
+// FIX [Telegram]: Telegram Bot API config dialog. Live status via WM_TELEGRAM_STATUS.
+BOOL FAR PASCAL TelegramDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_TG_ENABLED,   Profile.telegramEnabled);
+		SetDlgItemText(hDlg, IDC_TG_TOKEN,     Profile.szTelegramToken);
+		SetDlgItemText(hDlg, IDC_TG_CHATIDS,   Profile.szTelegramChatIds);
+		SetDlgItemText(hDlg, IDC_TG_TITLE,     Profile.szTelegramTitle);
+		SetDlgItemText(hDlg, IDC_TG_BODY,      Profile.szTelegramBody);	// FIX [TgBodyTemplate]
+		SetDlgItemInt (hDlg, IDC_TG_THREADID,  Profile.telegramThreadId, FALSE);
+		CheckDlgButton(hDlg, IDC_TG_SILENT,    Profile.telegramSilent);
+		CheckDlgButton(hDlg, IDC_TG_NOPREVIEW, Profile.telegramNoPreview);
+		CheckDlgButton(hDlg, IDC_TG_SPLIT,     Profile.telegramSplitLong);
+		CheckDlgButton(hDlg, IDC_TG_LOG,       Profile.telegramLogToFile);
+		SendDlgItemMessage(hDlg, IDC_TG_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"All messages");
+		SendDlgItemMessage(hDlg, IDC_TG_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered messages only");
+		SendDlgItemMessage(hDlg, IDC_TG_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered + monitor-only messages");
+		SendDlgItemMessage(hDlg, IDC_TG_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Selected filters only (Ctrl-F checkbox)");
+		SendDlgItemMessage(hDlg, IDC_TG_SEND_IN, CB_SETCURSEL, (WPARAM)Profile.telegramSendIn, 0);
+		SetDlgItemText(hDlg, IDC_TG_STATUS, "Status: Idle");
+		TelegramSetStatusWnd(hDlg);
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_DESTROY:
+		TelegramSetStatusWnd(NULL);
+		break;
+
+	case WM_TELEGRAM_STATUS:
+	{
+		char szStatus[64];
+		switch ((int)wParam)
+		{
+		case TGS_IDLE:     strcpy(szStatus, "Status: Idle");                    break;
+		case TGS_SENDING:  strcpy(szStatus, "Status: Sending...");              break;
+		case TGS_OK:       sprintf(szStatus, "Status: OK %d", (int)lParam);     break;
+		case TGS_RETRY:    sprintf(szStatus, "Status: Retry %d/3", (int)lParam);break;
+		case TGS_ERROR:    sprintf(szStatus, "Status: Error %d", (int)lParam);  break;
+		case TGS_DISABLED: strcpy(szStatus, "Status: Disabled");                break;
+		default:           strcpy(szStatus, "Status: ...");                     break;
+		}
+		SetDlgItemText(hDlg, IDC_TG_STATUS, szStatus);
+		break;
+	}
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDC_TG_TEST:
+		{
+			char token[80], chatids[512], title[128], body[256], err[160];
+			GetDlgItemText(hDlg, IDC_TG_TOKEN,   token,   sizeof(token));
+			GetDlgItemText(hDlg, IDC_TG_CHATIDS, chatids, sizeof(chatids));
+			GetDlgItemText(hDlg, IDC_TG_TITLE,   title,   sizeof(title));	// FIX [TgTestPreview]: preview current templates
+			GetDlgItemText(hDlg, IDC_TG_BODY,    body,    sizeof(body));
+			SetDlgItemText(hDlg, IDC_TG_STATUS, "Status: Testing...");
+			BOOL ok = TelegramTestSend(token, chatids, title, body, err, sizeof(err));
+			char msg[200];
+			sprintf(msg, "Status: %s", ok ? "Test OK" : (err[0] ? err : "Test failed"));
+			SetDlgItemText(hDlg, IDC_TG_STATUS, msg);
+			break;
+		}
+		case IDC_TG_DISCOVER:
+		{
+			char token[80], chat[64], info[200];
+			GetDlgItemText(hDlg, IDC_TG_TOKEN, token, sizeof(token));
+			SetDlgItemText(hDlg, IDC_TG_STATUS, "Status: Querying getUpdates...");
+			BOOL ok = TelegramDiscoverChatId(token, chat, sizeof(chat), info, sizeof(info));
+			if (ok)
+			{
+				// Append the discovered id to the chat_id field (if not already present).
+				char cur[512];
+				GetDlgItemText(hDlg, IDC_TG_CHATIDS, cur, sizeof(cur));
+				if (!strstr(cur, chat))
+				{
+					if (cur[0]) strncat(cur, ";", sizeof(cur) - strlen(cur) - 1);
+					strncat(cur, chat, sizeof(cur) - strlen(cur) - 1);
+					SetDlgItemText(hDlg, IDC_TG_CHATIDS, cur);
+				}
+			}
+			char msg[220];
+			sprintf(msg, "Status: %s", info[0] ? info : (ok ? "Found" : "Not found"));
+			SetDlgItemText(hDlg, IDC_TG_STATUS, msg);
+			break;
+		}
+		case IDOK:
+			Profile.telegramEnabled   = IsDlgButtonChecked(hDlg, IDC_TG_ENABLED)   ? 1 : 0;
+			Profile.telegramSilent    = IsDlgButtonChecked(hDlg, IDC_TG_SILENT)    ? 1 : 0;
+			Profile.telegramNoPreview = IsDlgButtonChecked(hDlg, IDC_TG_NOPREVIEW) ? 1 : 0;
+			Profile.telegramSplitLong = IsDlgButtonChecked(hDlg, IDC_TG_SPLIT)     ? 1 : 0;
+			Profile.telegramLogToFile = IsDlgButtonChecked(hDlg, IDC_TG_LOG)       ? 1 : 0;
+			GetDlgItemText(hDlg, IDC_TG_TOKEN,   Profile.szTelegramToken,   sizeof(Profile.szTelegramToken));
+			GetDlgItemText(hDlg, IDC_TG_CHATIDS, Profile.szTelegramChatIds, sizeof(Profile.szTelegramChatIds));
+			GetDlgItemText(hDlg, IDC_TG_TITLE,   Profile.szTelegramTitle,   sizeof(Profile.szTelegramTitle));
+			GetDlgItemText(hDlg, IDC_TG_BODY,    Profile.szTelegramBody,    sizeof(Profile.szTelegramBody));	// FIX [TgBodyTemplate]
+			Profile.telegramThreadId  = (int) GetDlgItemInt(hDlg, IDC_TG_THREADID, NULL, FALSE);
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_TG_SEND_IN, CB_GETCURSEL, 0, 0);
+				Profile.telegramSendIn = (iSel == CB_ERR) ? 0 : iSel;
+			}
+			TelegramInit();
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+
+		case IDCANCEL:
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of TelegramDlgProc
+
+
+// FIX [Pushover]: Pushover config dialog. Live status via WM_PUSHOVER_STATUS.
+BOOL FAR PASCAL PushoverDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+	case WM_INITDIALOG:
+		CheckDlgButton(hDlg, IDC_PO_ENABLED,  Profile.pushoverEnabled);
+		SetDlgItemText(hDlg, IDC_PO_APPTOKEN, Profile.szPushoverAppToken);
+		SetDlgItemText(hDlg, IDC_PO_USERKEY,  Profile.szPushoverUserKey);
+		SetDlgItemText(hDlg, IDC_PO_TITLE,    Profile.szPushoverTitle);
+		SetDlgItemText(hDlg, IDC_PO_BODY,     Profile.szPushoverBody);	// FIX [PoBodyTemplate]
+		SetDlgItemText(hDlg, IDC_PO_SOUND,    Profile.szPushoverSound);
+		SetDlgItemText(hDlg, IDC_PO_DEVICE,   Profile.szPushoverDevice);
+		CheckDlgButton(hDlg, IDC_PO_HTML,     Profile.pushoverHtml);
+		CheckDlgButton(hDlg, IDC_PO_LOG,      Profile.pushoverLogToFile);
+		SendDlgItemMessage(hDlg, IDC_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"-2 Lowest (no notification)");
+		SendDlgItemMessage(hDlg, IDC_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"-1 Low (quiet)");
+		SendDlgItemMessage(hDlg, IDC_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"0 Normal");
+		SendDlgItemMessage(hDlg, IDC_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"1 High (bypass quiet hours)");
+		SendDlgItemMessage(hDlg, IDC_PO_PRIORITY, CB_SETCURSEL, (WPARAM)(Profile.pushoverPriority + 2), 0);
+		SendDlgItemMessage(hDlg, IDC_PO_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"All messages");
+		SendDlgItemMessage(hDlg, IDC_PO_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered messages only");
+		SendDlgItemMessage(hDlg, IDC_PO_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Filtered + monitor-only messages");
+		SendDlgItemMessage(hDlg, IDC_PO_SEND_IN, CB_ADDSTRING, 0, (LPARAM)"Selected filters only (Ctrl-F checkbox)");
+		SendDlgItemMessage(hDlg, IDC_PO_SEND_IN, CB_SETCURSEL, (WPARAM)Profile.pushoverSendIn, 0);
+		SetDlgItemText(hDlg, IDC_PO_STATUS, "Status: Idle");
+		PushoverSetStatusWnd(hDlg);
+		CenterWindow(hDlg);
+		return (TRUE);
+
+	case WM_DESTROY:
+		PushoverSetStatusWnd(NULL);
+		break;
+
+	case WM_PUSHOVER_STATUS:
+	{
+		char szStatus[64];
+		switch ((int)wParam)
+		{
+		case PUS_IDLE:     strcpy(szStatus, "Status: Idle");                    break;
+		case PUS_SENDING:  strcpy(szStatus, "Status: Sending...");              break;
+		case PUS_OK:       sprintf(szStatus, "Status: OK %d", (int)lParam);     break;
+		case PUS_RETRY:    sprintf(szStatus, "Status: Retry %d/3", (int)lParam);break;
+		case PUS_ERROR:    sprintf(szStatus, "Status: Error %d", (int)lParam);  break;
+		case PUS_DISABLED: strcpy(szStatus, "Status: Disabled");                break;
+		default:           strcpy(szStatus, "Status: ...");                     break;
+		}
+		SetDlgItemText(hDlg, IDC_PO_STATUS, szStatus);
+		break;
+	}
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDC_PO_TEST:
+		{
+			char appTok[64], userKey[64], title[128], body[256], err[160];
+			GetDlgItemText(hDlg, IDC_PO_APPTOKEN, appTok,  sizeof(appTok));
+			GetDlgItemText(hDlg, IDC_PO_USERKEY,  userKey, sizeof(userKey));
+			GetDlgItemText(hDlg, IDC_PO_TITLE,    title,   sizeof(title));	// FIX [PoTestPreview]: preview current templates
+			GetDlgItemText(hDlg, IDC_PO_BODY,     body,    sizeof(body));
+			BOOL htmlOn = IsDlgButtonChecked(hDlg, IDC_PO_HTML) ? TRUE : FALSE;
+			SetDlgItemText(hDlg, IDC_PO_STATUS, "Status: Testing...");
+			BOOL ok = PushoverTestSend(appTok, userKey, title, body, htmlOn, err, sizeof(err));
+			char msg[200];
+			sprintf(msg, "Status: %s", ok ? "Test OK" : (err[0] ? err : "Test failed"));
+			SetDlgItemText(hDlg, IDC_PO_STATUS, msg);
+			break;
+		}
+		case IDOK:
+			Profile.pushoverEnabled   = IsDlgButtonChecked(hDlg, IDC_PO_ENABLED) ? 1 : 0;
+			Profile.pushoverHtml      = IsDlgButtonChecked(hDlg, IDC_PO_HTML)    ? 1 : 0;
+			Profile.pushoverLogToFile = IsDlgButtonChecked(hDlg, IDC_PO_LOG)     ? 1 : 0;
+			GetDlgItemText(hDlg, IDC_PO_APPTOKEN, Profile.szPushoverAppToken, sizeof(Profile.szPushoverAppToken));
+			GetDlgItemText(hDlg, IDC_PO_USERKEY,  Profile.szPushoverUserKey,  sizeof(Profile.szPushoverUserKey));
+			GetDlgItemText(hDlg, IDC_PO_TITLE,    Profile.szPushoverTitle,    sizeof(Profile.szPushoverTitle));
+			GetDlgItemText(hDlg, IDC_PO_BODY,     Profile.szPushoverBody,     sizeof(Profile.szPushoverBody));	// FIX [PoBodyTemplate]
+			GetDlgItemText(hDlg, IDC_PO_SOUND,    Profile.szPushoverSound,    sizeof(Profile.szPushoverSound));
+			GetDlgItemText(hDlg, IDC_PO_DEVICE,   Profile.szPushoverDevice,   sizeof(Profile.szPushoverDevice));
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_PO_PRIORITY, CB_GETCURSEL, 0, 0);
+				Profile.pushoverPriority = (iSel == CB_ERR) ? 0 : (iSel - 2);   // index 0..3 -> -2..1
+			}
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_PO_SEND_IN, CB_GETCURSEL, 0, 0);
+				Profile.pushoverSendIn = (iSel == CB_ERR) ? 0 : iSel;
+			}
+			PushoverInit();
+			WriteSettings();
+			EndDialog(hDlg, TRUE);
+			break;
+
+		case IDCANCEL:
+			EndDialog(hDlg, FALSE);
+			break;
+		}
+		break;
+	}
+	return (FALSE);
+} // end of PushoverDlgProc
 
 
 // Telnet-server config dialog (Ctrl-N). Live status updates via WM_TELNET_STATUS
@@ -11074,6 +11383,34 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->webhookFields          = (INT) GetPrivateProfileInt("Webhook", TEXT("Fields"),          0x7F, lpszIniPathName);
 	WebhookInit();
 
+	// FIX [Telegram]: Telegram Bot API sink
+	pProfile->telegramEnabled   = (INT) GetPrivateProfileInt("Telegram", TEXT("Enabled"), 0, lpszIniPathName);
+	GetPrivateProfileString("Telegram", TEXT("Token"),   "", pProfile->szTelegramToken,   sizeof(pProfile->szTelegramToken),   lpszIniPathName);
+	GetPrivateProfileString("Telegram", TEXT("ChatIds"), "", pProfile->szTelegramChatIds, sizeof(pProfile->szTelegramChatIds), lpszIniPathName);
+	GetPrivateProfileString("Telegram", TEXT("Title"),   "", pProfile->szTelegramTitle, sizeof(pProfile->szTelegramTitle), lpszIniPathName);	// FIX [TgTestPreview]: title-less default
+	GetPrivateProfileString("Telegram", TEXT("Body"),    "<b>{message}</b>\\n{label}", pProfile->szTelegramBody, sizeof(pProfile->szTelegramBody), lpszIniPathName);	// FIX [TgBodyTemplate]
+	pProfile->telegramThreadId  = (INT) GetPrivateProfileInt("Telegram", TEXT("ThreadId"),  0, lpszIniPathName);
+	pProfile->telegramSilent    = (INT) GetPrivateProfileInt("Telegram", TEXT("Silent"),    0, lpszIniPathName);
+	pProfile->telegramNoPreview = (INT) GetPrivateProfileInt("Telegram", TEXT("NoPreview"), 0, lpszIniPathName);
+	pProfile->telegramSplitLong = (INT) GetPrivateProfileInt("Telegram", TEXT("SplitLong"), 1, lpszIniPathName);
+	pProfile->telegramSendIn    = (INT) GetPrivateProfileInt("Telegram", TEXT("SendIn"),    1, lpszIniPathName);
+	pProfile->telegramLogToFile = (INT) GetPrivateProfileInt("Telegram", TEXT("LogToFile"), 0, lpszIniPathName);
+	TelegramInit();
+
+	// FIX [Pushover]: Pushover sink
+	pProfile->pushoverEnabled   = (INT) GetPrivateProfileInt("Pushover", TEXT("Enabled"), 0, lpszIniPathName);
+	GetPrivateProfileString("Pushover", TEXT("AppToken"), "", pProfile->szPushoverAppToken, sizeof(pProfile->szPushoverAppToken), lpszIniPathName);
+	GetPrivateProfileString("Pushover", TEXT("UserKey"),  "", pProfile->szPushoverUserKey,  sizeof(pProfile->szPushoverUserKey),  lpszIniPathName);
+	GetPrivateProfileString("Pushover", TEXT("Title"),    "", pProfile->szPushoverTitle, sizeof(pProfile->szPushoverTitle), lpszIniPathName);	// FIX [PoTestPreview]: title-less default
+	GetPrivateProfileString("Pushover", TEXT("Body"),     "<b>{message}</b>\\n{label}", pProfile->szPushoverBody, sizeof(pProfile->szPushoverBody), lpszIniPathName);	// FIX [PoBodyTemplate]
+	pProfile->pushoverPriority  = (INT) GetPrivateProfileInt("Pushover", TEXT("Priority"), 0, lpszIniPathName);
+	GetPrivateProfileString("Pushover", TEXT("Sound"),  "", pProfile->szPushoverSound,  sizeof(pProfile->szPushoverSound),  lpszIniPathName);
+	GetPrivateProfileString("Pushover", TEXT("Device"), "", pProfile->szPushoverDevice, sizeof(pProfile->szPushoverDevice), lpszIniPathName);
+	pProfile->pushoverHtml      = (INT) GetPrivateProfileInt("Pushover", TEXT("Html"),      1, lpszIniPathName);	// FIX [PoTestPreview]: HTML on by default
+	pProfile->pushoverSendIn    = (INT) GetPrivateProfileInt("Pushover", TEXT("SendIn"),    1, lpszIniPathName);
+	pProfile->pushoverLogToFile = (INT) GetPrivateProfileInt("Pushover", TEXT("LogToFile"), 0, lpszIniPathName);
+	PushoverInit();
+
 	pProfile->mqttEnabled     = (INT) GetPrivateProfileInt("MQTT", TEXT("Enabled"),     0,              lpszIniPathName);
 	GetPrivateProfileString("MQTT", TEXT("Broker"),   "localhost", pProfile->szMqttBroker,   sizeof(pProfile->szMqttBroker),   lpszIniPathName);
 	pProfile->mqttPort        = (INT) GetPrivateProfileInt("MQTT", TEXT("Port"),        1883,           lpszIniPathName);
@@ -11372,6 +11709,8 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 							filter.sep_filterfile_en   = (iTEMP & 0x01) != 0;
 							filter.smtp                = (iTEMP & 0x08) != 0;
 							filter.match_exact_msg     = (iTEMP & 0x10) != 0;
+							filter.telegram            = (iTEMP & 0x20) != 0;	// FIX [Telegram]: per-filter Telegram bit
+							filter.pushover            = (iTEMP & 0x40) != 0;	// FIX [Telegram]: per-filter Pushover bit (phase 2)
 
 							break;
 							
@@ -11644,6 +11983,34 @@ void WriteSettings()
 		fprintf(pFile, "SendIn=%i\n",           Profile.webhookSendIn);
 		fprintf(pFile, "Fields=%i\n",           Profile.webhookFields);
 
+		// FIX [Telegram]
+		fprintf(pFile, "\n[Telegram]\n");
+		fprintf(pFile, "Enabled=%i\n",   Profile.telegramEnabled);
+		fprintf(pFile, "Token=%s\n",     Profile.szTelegramToken);
+		fprintf(pFile, "ChatIds=%s\n",   Profile.szTelegramChatIds);
+		fprintf(pFile, "Title=%s\n",     Profile.szTelegramTitle);
+		fprintf(pFile, "Body=%s\n",      Profile.szTelegramBody);	// FIX [TgBodyTemplate]
+		fprintf(pFile, "ThreadId=%i\n",  Profile.telegramThreadId);
+		fprintf(pFile, "Silent=%i\n",    Profile.telegramSilent);
+		fprintf(pFile, "NoPreview=%i\n", Profile.telegramNoPreview);
+		fprintf(pFile, "SplitLong=%i\n", Profile.telegramSplitLong);
+		fprintf(pFile, "SendIn=%i\n",    Profile.telegramSendIn);
+		fprintf(pFile, "LogToFile=%i\n", Profile.telegramLogToFile);
+
+		// FIX [Pushover]
+		fprintf(pFile, "\n[Pushover]\n");
+		fprintf(pFile, "Enabled=%i\n",   Profile.pushoverEnabled);
+		fprintf(pFile, "AppToken=%s\n",  Profile.szPushoverAppToken);
+		fprintf(pFile, "UserKey=%s\n",   Profile.szPushoverUserKey);
+		fprintf(pFile, "Title=%s\n",     Profile.szPushoverTitle);
+		fprintf(pFile, "Body=%s\n",      Profile.szPushoverBody);	// FIX [PoBodyTemplate]
+		fprintf(pFile, "Priority=%i\n",  Profile.pushoverPriority);
+		fprintf(pFile, "Sound=%s\n",     Profile.szPushoverSound);
+		fprintf(pFile, "Device=%s\n",    Profile.szPushoverDevice);
+		fprintf(pFile, "Html=%i\n",      Profile.pushoverHtml);
+		fprintf(pFile, "SendIn=%i\n",    Profile.pushoverSendIn);
+		fprintf(pFile, "LogToFile=%i\n", Profile.pushoverLogToFile);
+
 		fprintf(pFile, "\n[MQTT]\n");
 		fprintf(pFile, "Enabled=%i\n",       Profile.mqttEnabled);
 		fprintf(pFile, "Broker=%s\n",        Profile.szMqttBroker);
@@ -11807,6 +12174,8 @@ void WriteFilters(PPROFILE pProfile, int backup)
 				if (pProfile->filters[index].sep_filterfile_en)	iTEMP += 1;
 				if (pProfile->filters[index].smtp)				iTEMP += 8;
 				if (pProfile->filters[index].match_exact_msg)	iTEMP += 16;
+				if (pProfile->filters[index].telegram)			iTEMP += 32;	// FIX [Telegram]: 0x20
+				if (pProfile->filters[index].pushover)			iTEMP += 64;	// FIX [Telegram]: 0x40
 			}
 
 			sprintf(szTEMP, "%i", iTEMP);

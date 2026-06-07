@@ -1,6 +1,6 @@
 # PDW — Paging Decoder for Windows
 
-**Version 3.5.9** | Windows 7–11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.6.1** | Windows 7–11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -131,6 +131,44 @@ HTTP POST to any endpoint using WinHTTP. No external libraries.
 - Optional self-signed certificate bypass
 - Capcode padding to 9 digits (optional)
 - Send-in filter: All / Filtered / Filtered+Monitor / Raw feed
+
+---
+
+### Telegram output
+
+Push decoded pages to Telegram chats, groups, and supergroups via the Bot API (WinHTTP, no external
+libraries). Configure via **Telegram** in the menu.
+
+- Bot token from @BotFather; one or more numeric chat_id's (';'-separated)
+- **Discover** helper retrieves the chat_id via `getUpdates` after you send `/start` to the bot
+- Separate **Title** and **Body** templates (default `<b>{label}</b>` / `{message}`) with placeholders
+  `{message}/{label}/{capcode}/{time}/{date}/{mode}/{type}/{bitrate}`; `\n` forces a line break. E.g.
+  leave Title empty and set Body `<b>{message}</b>\n{label}` for a bold page text with each capcode
+  label on its own line underneath (see the manual's template cookbook for more examples)
+- HTML formatting with automatic plain-text fall-back; 4096-char split or truncate
+- HTTP 429 rate-limit back-off; automatic supergroup `migrate_to_chat_id` handling
+- Silent delivery, link-preview toggle, optional supergroup topic (`message_thread_id`), Test button
+- Send-in modes mirror SMTP: All / Filtered / Filtered+Monitor / **Selected filters only**
+- **Per-capcode control**: each filter (Ctrl-F) has a *Send Telegram* checkbox, used only in
+  "Selected filters only" mode (forward just a few capcodes); ignored in the other modes
+- **FLEX group calls** sent as one message listing all matching subscriber capcodes. Bot token never logged.
+
+---
+
+### Pushover output
+
+Push decoded pages to [Pushover](https://pushover.net) via its Messages API (WinHTTP, no external
+libraries). Configure via **Pushover** in the menu.
+
+- Application token + user-key or group-key (stored locally, never logged)
+- Separate **Title** and **Body** templates (default `{label}` / `{message}`) with the same
+  `{message}/{label}/{capcode}/...` placeholders as Telegram - swap them to reshape the notification
+- Priority -2..1, optional sound, target device, optional HTML formatting
+- Message/title length caps and HTTP 429 rate-limit back-off; Test button
+- Send-in modes mirror SMTP: All / Filtered / Filtered+Monitor / **Selected filters only**
+- **Per-capcode control**: each filter (Ctrl-F) has a *Send Pushover* checkbox, used only in
+  "Selected filters only" mode; FLEX group calls sent as one notification listing all subscribers
+- Emergency priority 2 (receipt polling) intentionally not offered yet
 
 ---
 
@@ -455,11 +493,15 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 
 ### Executable size
 
-The PDW executable is intentionally large. OpenSSL, Paho MQTT, and all other third-party libraries are **statically linked** directly into the binary — there are no separate DLLs to install or keep in sync. Upgrading is a single-file operation: copy the new `PDW.exe` and you are done.
+`PDW.exe` is a single binary of under 7 MB because OpenSSL, Paho MQTT, SQLite and the MySQL client are **statically compiled in** rather than shipped as separate `*.DLL` files. This keeps deployment dependency-free — upgrading is just copying one file.
 
 ---
 
 ## Changelog highlights
+
+### v3.6.1 (June 2026)
+- **Telegram & Pushover output sinks** with separate Title/Body templates (`{message}` placeholder, `\n` line breaks), a Test button that previews the real formatting, SMTP-style send-in modes, and one-message-per-group-call batching (one label per line)
+- Pushover HTML line breaks fixed (`\n` → `<br>` in HTML mode); both sinks default to bold `<b>{message}</b>\n{label}`
 
 ### v3.5.9 (June 2026)
 - **Per-capcode match state in group calls** — each member in the `subscribers` JSON now carries its own `match_type` (filtered / monitor-only / no match), so a viewer renders every capcode in the same pane the PDW window does

@@ -29,7 +29,10 @@ static HANDLE hMailEvent = NULL ;
 static SOCKET g_persistSocket = INVALID_SOCKET ;
 static THEMAIL mail ;
 static int nMaxLen ;
-static BOOL keepbusy = TRUE ;
+// FIX [SmtpVolatile]: volatile so the compiler cannot hoist the read out of the worker
+// loop (while(keepbusy)) — main thread writes FALSE on shutdown; without this the worker
+// can miss it and the INFINITE join in StartMail hangs. Same fix as mqtt/webhook g_bRunning.
+static volatile BOOL keepbusy = TRUE ;
 static BOOL bWsaStartup ;
 
 #define MAX_MAIL		100
@@ -50,8 +53,12 @@ static BOOL bWsaStartup ;
 // QueueAlertMail, both via WM_TIMER). CONSUMER = the one mail worker thread. The design relies
 // on this; adding a producer on another thread would require real synchronisation.
 static char szMailBuffer[MAX_MAIL][MAX_MAIL_LEN] ;
-static int  nBufferdMailStart ;   // producer index (main thread)
-static int  nBufferdMailEnd ;     // consumer index (worker thread)
+// FIX [SmtpRingVolatile]: volatile so the compiler cannot cache the cross-thread index read in
+// either the producer's full-check or the worker's empty-check. The producer fills the slot then
+// publishes the new index; a _WriteBarrier() before each bump (see SendMail/QueueAlertMail) keeps
+// the slot stores from being reordered past the index store. Mirrors the rs232_cpstn SPSC pattern.
+static volatile int  nBufferdMailStart ;   // producer index (main thread)
+static volatile int  nBufferdMailEnd ;     // consumer index (worker thread)
 
 // FIX [SmtpQueueFull]: the producers (SendMail/QueueAlertMail) previously advanced
 // nBufferdMailStart with NO full-check. When the worker stalls (server hung — connect/IO
@@ -208,7 +215,11 @@ int initOpenSSL()
 }
 
 
-#define TIME_IN_SEC		3*60	// how long client will wait for server response in non-blocking mode
+// FIX [SmtpTlsTimeout]: was 3*60. The TLS paths use select() with this timeout, and select()
+// ignores SO_RCVTIMEO/SO_SNDTIMEO, so a black-holed TLS server could block the mail worker for
+// minutes — and StartMail()'s INFINITE join (shutdown/reconfigure) with it. 30 s matches the
+// plaintext recv()/send() SO_*TIMEO ceiling and keeps shutdown responsive.
+#define TIME_IN_SEC		30	// how long client will wait for server response in non-blocking mode
 
 int openSSLConnect()
 {
@@ -312,7 +323,9 @@ void cleanupOpenSSL()
 }
 
 
-#define SEND_RECIEVE_TO 5*60
+// FIX [SmtpTlsTimeout]: was 5*60 — see TIME_IN_SEC above. Bounds the TLS read/write select() so
+// a silent server cannot park the worker (and the INFINITE shutdown join) for minutes.
+#define SEND_RECIEVE_TO 30
 
 int receiveData_SSL(SSL* ssl, char* buf)
 {
@@ -1549,6 +1562,9 @@ int QueueAlertMail(const char *szTo, const char *szSubject, const char *szBody)
 	strncpy(szMailToOverride[nBufferdMailStart], szTo, MAIL_TO_LEN - 1) ;
 	szMailToOverride[nBufferdMailStart][MAIL_TO_LEN - 1] = '\0' ;
 
+	// FIX [SmtpRingVolatile]: commit the slot stores before publishing the new producer index,
+	// so the worker can never observe an advanced index over a half-written slot.
+	_WriteBarrier() ;
 	nBufferdMailStart++ ;
 	if (nBufferdMailStart >= MAX_MAIL) nBufferdMailStart = 0 ;
 
@@ -1792,6 +1808,8 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 		strncpy(szMailBuffer[nBufferdMailStart], szBuffer, MAX_MAIL_LEN - 1) ;
 		szMailBuffer[nBufferdMailStart][MAX_MAIL_LEN - 1] = '\0' ;
 		szMailToOverride[nBufferdMailStart][0] = '\0' ;   // FIX [RxQualAlert]: normal mail uses mail.to, no override
+		// FIX [SmtpRingVolatile]: publish slot stores before advancing the producer index.
+		_WriteBarrier() ;
 		nBufferdMailStart++ ;
 
 		if(nBufferdMailStart >= MAX_MAIL)

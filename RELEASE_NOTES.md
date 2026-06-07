@@ -1,6 +1,114 @@
-# PDW 3.5.9 — Release Notes
+# PDW 3.6.1 - Release Notes
+
+## New in 3.6.1
+
+### Telegram & Pushover refinements (FIX [TgBodyTemplate] / [PoHtmlNewline] / [TgTestPreview])
+
+- **Title + Body templates** for both sinks, with a `{message}` placeholder and `\n` for line breaks.
+  New default layout (title-less, Body `<b>{message}</b>\n{label}`): bold page text with each capcode
+  label on its own line. Pushover defaults to **HTML formatting on** so the bold renders.
+- **Test button previews the real templates**: it renders a sample page (with three sample labels)
+  through the current Title/Body fields - Telegram via `parse_mode=HTML`, Pushover honouring the HTML
+  checkbox - so you see the exact formatting before saving.
+- **Pushover HTML line breaks fixed:** Pushover treats a bare newline as whitespace in HTML mode, so
+  PDW now converts `\n` to `<br>` automatically when HTML formatting is on (FIX [PoHtmlNewline]).
+- **Group calls** are delivered as one message with each subscriber label on its own line; the label
+  list is buffered up to 32 KB (matching the MQTT/webhook feeds) so a 122-capcode test alert fits, and
+  with Telegram **Split** on it is delivered in full across several messages.
+- **Send-in modes** now mirror SMTP exactly (All / Filtered / Filtered+Monitor / Selected filters
+  only); the per-capcode Ctrl-F checkbox is consulted only in *Selected filters only* mode.
+
+### Telegram & Pushover stability fixes
+
+- **Test button data race fixed (FIX [TgBuildRace]):** the Telegram message builder used a shared
+  static buffer reached from both the worker thread and the GUI **Test** button. Clicking Test while a
+  live page was being sent could corrupt either message body. The builder now uses a per-call buffer.
+- **Status-message id collision removed (FIX [StatusMsgId]):** the Telegram (`WM_USER+52`) and Pushover
+  (`WM_USER+53`) dialog status messages collided with MySQL/SQLite. They never misdelivered in practice
+  (each feed posts only to its own dialog), but the duplicate ids are now unique (`+54` / `+55`).
+- **Event-handle guard (FIX [TgEventGuard] / [PoEventGuard]):** the queue wake-up no longer signals a
+  handle that shutdown may have just closed.
 
 ## New in 3.5.9
+
+### Telegram output (new sink, FIX [Telegram])
+
+PDW can now push decoded messages to Telegram via the Bot API, as a regular output sink alongside
+SMTP, webhook, MQTT, MySQL and SQLite. Configure it under **Telegram...** in the menu:
+
+- Enter the bot token (from @BotFather) and one or more numeric chat_id's (';'-separated). 1:1 chats
+  are positive, groups negative, supergroups start with `-100`. Because a bot cannot message a user
+  first, send `/start` (or add the bot to your group) once, then press **Discover...** to fetch the
+  chat_id automatically.
+- Separate, configurable **Title** and **Body** templates (like the SMTP subject/body split). The
+  title (default `<b>{label}</b>`) is a bold first line; the body (default `{message}`) follows after a
+  blank line. Both accept the placeholders `{message} {label} {capcode} {time} {date} {mode} {type}
+  {bitrate}`, and `\n` forces a line break. Leave the title empty for a body-only message. Recommended
+  for group calls: Title empty + Body `<b>{message}</b>\n{label}` (bold page text, then each capcode
+  label on its own line). See the manual's template cookbook for more examples.
+- HTML formatting (`parse_mode=HTML`) with automatic fall-back to plain text if Telegram rejects the
+  markup. Messages over 4096 characters are split (or truncated, configurable). Rate-limit (HTTP 429)
+  responses are honoured with back-off, and supergroup migrations update the stored chat_id
+  automatically.
+- Options: silent delivery, disable link preview, optional `message_thread_id` for supergroup topics.
+  The **Test** button renders a sample page through the current Title/Body fields with `parse_mode=HTML`,
+  so you preview the real formatting (bold, line breaks, stacked labels) before saving. The default
+  layout is now title-less with Body `<b>{message}</b>\n{label}`. The bot token is never written to the log.
+- **Send-in mode** (mirrors the SMTP modes 1:1): *All messages*, *Filtered messages only*,
+  *Filtered + monitor-only messages*, or *Selected filters only*. The per-capcode **Send Telegram**
+  checkbox in the filter window (Ctrl-F) is consulted **only** in *Selected filters only* mode - so you
+  can forward just a handful of capcodes. In the other modes the checkbox is ignored and every matched
+  (or every) message is sent. The sink runs on its own worker thread with a ring buffer.
+- **Group calls** (FLEX): a group page is delivered as **one** message listing all matching subscriber
+  capcodes/labels (one label per line), instead of one Telegram per member capcode. The label list is
+  collected up to 32 KB (same as the MQTT/webhook feeds) so a 122-capcode test alert fits; turn
+  **Split** ON to deliver it in full across several messages (OFF truncates at 4096). Pushover follows
+  the same model but is bound by its 1024-char cap.
+
+The new per-filter flags are stored as extra bits in the existing `filters.ini` filter field, so an
+older PDW build keeps reading the file without corruption (it simply ignores the unknown bits). The
+global Telegram configuration lives in a `[Telegram]` section in the main INI.
+
+### Pushover output (new sink, FIX [Pushover])
+
+PDW can also push decoded messages to [Pushover](https://pushover.net) via its Messages API, set up
+under **Pushover...** in the menu. Same send-in model as Telegram: *All / Filtered / Filtered +
+monitor-only / Selected filters only*. The per-capcode **Send Pushover** checkbox (Ctrl-F) is only
+used in *Selected filters only* mode. FLEX group calls are likewise delivered as one notification
+listing all matching subscriber capcodes.
+
+- Application API token + user-key or group-key (both stored locally, never logged)
+- Separate **Title** and **Body** templates (default `{label}` / `{message}`) with the same
+  `{message} {label} {capcode} {time} {date} {mode} {type} {bitrate}` placeholders as Telegram, so the
+  title and body can be swapped freely (empty body falls back to the raw page text)
+- Priority -2..1, optional sound, target device, and optional HTML formatting (`html=1`)
+- Message capped at 1024 chars / title at 250 (Pushover limits); HTTP 429 rate-limit back-off
+- **Test** button renders a sample page through the current Title/Body fields (and HTML checkbox) so
+  you preview the real formatting, just like Telegram
+- Emergency priority 2 (acknowledgement + receipt polling) is intentionally not offered yet
+
+Configuration lives in a `[Pushover]` section in the main INI; the per-filter flag is a second bit in
+the same `filters.ini` field, equally safe for older builds.
+
+
+
+### Stability: hardening for 24/7 unattended operation (audit fixes)
+
+A focused audit of the long-running worker threads closed several remaining edge cases:
+
+- Audio capture no longer leaks the sound device handle or its buffers when the device is briefly
+  busy (for example grabbed by another application) and a capture start fails - previously every
+  failed start leaked handles and memory, which over weeks of auto-retry could exhaust resources
+  (FIX [WaveInStartLeak], FIX [WaveOutLeak]).
+- The mail sender no longer blocks shutdown or a settings change for minutes when a secure (TLS)
+  mail server accepts the connection but then goes silent; the TLS wait is now capped at 30 seconds,
+  matching the plain-text path (FIX [SmtpTlsTimeout]).
+- The MQTT and webhook status indicators can no longer crash if their setup dialog is opened before
+  the feed has finished initialising (FIX [StatusWndCsGuard]).
+- If the central log writer thread cannot start, logging now falls back to direct writes instead of
+  silently buffering and dropping the oldest lines (FIX [LogWorkerStart]).
+- Minor internal consistency fixes to the mail queue and log filename handling under heavy
+  multi-threaded load (FIX [SmtpRingVolatile], FIX [BuildPathSnapshot]).
 
 ### Database: per-capcode match state for group calls (FIX [GroupMatchPerCapcode])
 

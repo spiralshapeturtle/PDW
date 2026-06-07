@@ -113,9 +113,11 @@ static GroupAcc g_groupAcc[MAX_GROUPBITS];
 // Thread / synchronisation
 // ---------------------------------------------------------------------------
 
-static HANDLE g_hThread  = NULL;
-static HANDLE g_hEvent   = NULL;   // auto-reset, signals worker
-static BOOL   g_bRunning = FALSE;
+static HANDLE          g_hThread  = NULL;
+static HANDLE          g_hEvent   = NULL;   // auto-reset, signals worker
+// FIX [WebhookVolatile]: volatile so the compiler cannot hoist the read out of the worker
+// loop body or DoSend's early-out — main thread writes FALSE on shutdown.
+static volatile BOOL   g_bRunning = FALSE;
 
 static CRITICAL_SECTION g_cs;      // protects queue, groupAcc, g_hStatusWnd
 
@@ -907,6 +909,10 @@ void WebhookFlushGroup(int groupbit)
 
 void WebhookSetStatusWnd(HWND hWnd)
 {
+    // FIX [StatusWndCsGuard]: g_cs may not be initialized yet if the Setup dialog calls this
+    // before the first WebhookInit(). Entering an uninitialized CRITICAL_SECTION is undefined
+    // (crash). Store directly until the CS exists, same as the SQLite feed.
+    if (!s_webhookCsInit) { g_hStatusWnd = hWnd; return; }
     EnterCriticalSection(&g_cs);
     g_hStatusWnd = hWnd;
     LeaveCriticalSection(&g_cs);

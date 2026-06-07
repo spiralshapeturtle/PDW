@@ -34,6 +34,8 @@ typedef struct
 	int			 label_enabled;
 	int			 label_color;
 	int			 smtp;
+	int			 telegram;		// FIX [Telegram]: per-filter Telegram notify (bit 0x20 in filters.ini SEP field)
+	int			 pushover;		// FIX [Telegram]: per-filter Pushover notify (bit 0x40), reserved for phase 2
 	int			 sep_filterfile_en;
 	char		 sep_filterfile[3][FILTER_FILE_LEN+1];	// PH: max 3 sepfiles
 	int			 sep_filterfiles;						// PH: number of sepfiles
@@ -82,7 +84,8 @@ typedef struct
 #define COLOR_FILTERLABEL	20	// 21-36 are reserved for the filter label colors
 
 
-#define SYSTEMTRAY_ICON_MESSAGE (WM_USER+1) // ID for PDW sytem tray icon
+#define SYSTEMTRAY_ICON_MESSAGE  (WM_USER+1) // ID for PDW sytem tray icon
+#define WM_AUDIO_CAPTURE_ERROR   (WM_USER+2) // FIX [AudioCaptureError]: waveInAddBuffer failure -> clean teardown
 
 #include <cstring>
 
@@ -276,7 +279,7 @@ typedef struct
 	int  bDebugLog;             // 0=off, 1=write per-frame trace to pdw_debug.log
 
 	int  betterContrast;        // 0=off, 1=remap low-contrast filter label colors
-	int  lighterBackground;     // 0=off, 1=use dark-navy background instead of pure black
+	int  lighterBackground;     // 0=off, 1=use neutral charcoal background instead of pure black
 
 	// Telnet server — exposes decoded messages in p2kflexDecoder wire-format.
 	// See utils/telnet_server.{h,cpp}.
@@ -318,6 +321,32 @@ typedef struct
 	int  sqlite_purgeEnabled;         // 0=off, 1=auto-delete rows older than purgeDays
 	int  sqlite_purgeDays;            // default 30
 	int  sqlite_maxSizeMB;            // 0=off, else cap db file size (deletes oldest rows)
+
+	// FIX [Telegram]: Telegram Bot API output sink — WinHTTP, geen externe DLL. See utils/telegram.{h,cpp}.
+	int  telegramEnabled;            // 0=off, 1=on
+	char szTelegramToken[80];        // BotFather token (secret, never logged)
+	char szTelegramChatIds[512];     // ';'-separated numeric chat_id's (1:1 positive, group negative, supergroup -100...)
+	char szTelegramTitle[128];       // title template, e.g. "<b>{label}</b>"; SMTP-subject emulation
+	char szTelegramBody[256];        // FIX [TgBodyTemplate]: body template, default "{message}"; placeholders incl. {message}
+	int  telegramThreadId;           // optional message_thread_id for supergroup topics, 0=none
+	int  telegramSilent;             // disable_notification
+	int  telegramNoPreview;          // disable_web_page_preview
+	int  telegramSplitLong;          // 1=split >4096 into parts, 0=truncate
+	int  telegramSendIn;             // 0=All, 1=Filtered only, 2=Filtered+Monitor, 3=Raw feed
+	int  telegramLogToFile;          // 0=off, 1=write pdw_telegram.log
+
+	// FIX [Pushover]: Pushover (pushover.net) output sink — WinHTTP, geen externe DLL. See utils/pushover.{h,cpp}.
+	int  pushoverEnabled;            // 0=off, 1=on
+	char szPushoverAppToken[64];     // application API token (secret, never logged)
+	char szPushoverUserKey [64];     // user-key or group-key (secret, never logged)
+	char szPushoverTitle   [128];    // title template (SMTP-subject 1:1); placeholders like Telegram
+	char szPushoverBody    [256];    // FIX [PoBodyTemplate]: body template, default "{message}"; placeholders incl. {message}
+	int  pushoverPriority;           // -2..1 (emergency priority 2 intentionally not offered in phase 1)
+	char szPushoverSound   [32];     // sound name ("" = user default)
+	char szPushoverDevice  [64];     // optional target device ("" = all)
+	int  pushoverHtml;               // 1=html=1 (limited HTML), 0=plain
+	int  pushoverSendIn;             // 0=All, 1=Filtered only, 2=Filtered+Monitor, 3=Raw feed
+	int  pushoverLogToFile;          // 0=off, 1=write pdw_pushover.log
 } PROFILE, *PPROFILE;
 
 extern PROFILE Profile;     // profile information
@@ -507,6 +536,8 @@ BOOL FAR PASCAL FilterCheckDuplicateDlgProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 BOOL FAR PASCAL MonStatDlgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL WebhookDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+BOOL FAR PASCAL TelegramDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);	// FIX [Telegram]
+BOOL FAR PASCAL PushoverDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);	// FIX [Pushover]
 BOOL FAR PASCAL MqttDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL FAR PASCAL MysqlDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);

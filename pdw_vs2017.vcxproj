@@ -206,6 +206,8 @@
     <ClCompile Include="utils\rs232.cpp" />
     <ClCompile Include="utils\smtp.cpp" />
     <ClCompile Include="utils\webhook.cpp" />
+    <ClCompile Include="utils\telegram.cpp" />
+    <ClCompile Include="utils\pushover.cpp" />
     <ClCompile Include="utils\mqtt.cpp" />
     <ClCompile Include="utils\mysql.cpp" />
     <ClCompile Include="utils\sqlite_feed.cpp" />
@@ -330,6 +332,8 @@
     <ClInclude Include="utils\smtp_int.h" />
     <ClInclude Include="utils\mqtt.h" />
     <ClInclude Include="utils\webhook.h" />
+    <ClInclude Include="utils\telegram.h" />
+    <ClInclude Include="utils\pushover.h" />
     <ClInclude Include="utils\telnet_server.h" />
     <ClInclude Include="utils\rxq.h" />
     <ClInclude Include="utils\debuglog.h" />
