@@ -53,8 +53,7 @@
 18. [Multi-instance / title bar](#18-multi-instance--title-bar)
 19. [COM ports >= 10](#19-com-ports--10)
 20. [Troubleshooting](#20-troubleshooting)
-21. [Changelog](#21-changelog)
-22. [Credits and license](#22-credits-and-license)
+21. [Credits and license](#21-credits-and-license)
 
 ---
 
@@ -62,7 +61,7 @@
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (3.6.1) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. The main additions over the original release are listed in [section 21](#21-changelog).
+This version (3.6.1) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
 
 ---
 
@@ -138,7 +137,7 @@ The main window shows a scrolling list of decoded messages. Each row is one pagi
 
 ### 5.1 Signal indicator / RX Quality bar
 
-The bar at the right of the toolbar shows the current receive quality as a percentage (0–100 %). A higher value means a cleaner signal. This value is also streamed to Telnet clients as `<RXQ:NN>` (see [section 10.4](#104-telnet-server)).
+The bar at the right of the toolbar shows the current receive quality as a percentage (0-100 %). A higher value means a cleaner signal.
 
 ### 5.2 Message columns
 
@@ -465,7 +464,9 @@ capcodes. Activity logged to `YYMMDD_pushover.log`.
 
 Configure via **Options → Telnet Server**.
 
-PDW includes a built-in Telnet server (default port **8024**) that streams every decoded message in the wire-format used by CS FlexDecoder. Clients built for CS FlexDecoder — such as p2kflexMonitor — connect without any reconfiguration.
+> **Note:** The built-in Telnet server is a custom extension intended for integration with specialised monitoring software. It is not needed for normal PDW use and is disabled by default. Regular users can ignore this section.
+
+PDW includes a built-in Telnet server (default port **8024**) that streams every decoded message over a plain TCP connection using an internal wire-format. Up to 25 simultaneous clients are supported. A reconnecting client receives a configurable backlog window (default 60 s) so it can catch up on messages it missed while disconnected.
 
 | Setting | Description |
 |---------|-------------|
@@ -480,9 +481,9 @@ PDW includes a built-in Telnet server (default port **8024**) that streams every
 | Message | Meaning |
 |---------|---------|
 | `CC/FFF -ALPHA- capcode text` | FLEX alpha (CC=cycle, FFF=frame) |
-| `-ALPHA- capcode-N text` | POCSAG alpha (N=function 0–3) |
+| `-ALPHA- capcode-N text` | POCSAG alpha (N=function 0-3) |
 | `<TX_START>` / `<TX_STOP>` | Transmission start / end |
-| `<RXQ:NN>` | RX quality 0–100 % |
+| `<RXQ:NN>` | RX quality 0-100 % |
 | `<WD>` | Watchdog heartbeat |
 | `<RS232:0>` / `<RS232:1>` | Serial data lost / recovered |
 | `<AUDIO:0>` / `<AUDIO:1>` | Audio signal lost / recovered |
@@ -965,58 +966,7 @@ PDW opens its COM port for exclusive access. While PDW is running and connected,
 
 ---
 
-## 21. Changelog
-
-### v3.6.1
-- **Telegram & Pushover** — separate Title/Body templates with a `{message}` placeholder and `\n` line breaks; new default `<b>{message}</b>\n{label}` (Pushover defaults to HTML on). The Test button now previews the real template formatting with sample data (FIX [TgBodyTemplate], [TgTestPreview], [PoTestPreview])
-- **Telegram & Pushover** — group calls are sent as one message with each subscriber label on its own line; label list buffered to 32 KB so a 122-capcode test alert fits (FIX [TgGroupBatch], [TgGroupNewline])
-- **Pushover** — newlines are converted to `<br>` in HTML mode so multi-line templates render correctly (FIX [PoHtmlNewline])
-- **Telegram & Pushover** — send-in modes mirror SMTP (All / Filtered / Filtered+Monitor / Selected filters only); the per-capcode Ctrl-F checkbox is used only in *Selected filters only* mode (FIX [TgSendModes], [PoSendModes])
-
-### v3.5.9
-- **Database** — FLEX group-call subscribers now carry a per-member `match_type` in the `subscribers` JSON, so a viewer can render each capcode in its correct pane (filtered / monitor-only) exactly as the PDW window does (FIX [GroupMatchPerCapcode])
-- **Stability** — log manager now waits for its background writer to finish before freeing buffers on shutdown/reconfigure, preventing a possible crash when logging to a slow or disconnected drive (FIX [LogJoinRace])
-- **Stability** — MQTT and webhook senders flush their queue under the normal lock on shutdown, closing a narrow shutdown race (FIX [FlushLockRace])
-
-### v3.5.8
-- **Central Log Manager** — all log output flows through one consistent path; uniform `YYYY-MM-DD HH:MM:SS.mmm` timestamps; daily rotation for every log type
-- **Write buffering** — coalesce log writes into timed batches (500 ms / 512 slots by default) to reduce SSD write amplification on busy networks
-- **ISO timestamp option** — `YYYY-MM-DD HH:MM:SS` inside monitor and filter log lines (sortable)
-
-### v3.5.7
-- **SQLite output feed** — single local database file; no server, no DLL; LowWrite mode; optional auto-purge
-
-### v3.5.6
-- **MySQL output feed** — no external DLLs; three schema modes (Classic / Extended / Optimized)
-- **RX Quality Alert** — e-mail notification on sustained signal quality drop
-- SMTP crash on rapid Test-button clicks fixed
-- Raw feed mode added to MQTT, Webhook, and Telnet
-- Date-stamped log files for all output feeds
-
-### v3.4
-- **Telnet server** on port 8024 — CS FlexDecoder-compatible wire-format
-- `<RXQ:NN>`, `<WD>`, `<RS232:x>`, `<AUDIO:x>` markers
-- Reconnect backlog replay window (60 s)
-- RX Quality corrected for POCSAG channels
-
-### v3.3
-- **High-DPI support** — crisp layout on 4K and HiDPI monitors
-- **SMTP split Subject / Body** — independent field selection for subject and body
-- SMTP error logging to disk
-
-### v3.2 → v3.3
-- **MQTT output** with PDW-native and flat / Node-RED JSON formats
-- **Webhook HTTP(S)** output
-- **Windows 11 toast notifications** (Action Center)
-- FLEX multi-frame message reassembly
-- SMTP STARTTLS (port 587) and implicit TLS (port 465)
-- x64 build target
-- COM ports >= 10 supported
-- Filter label length increased to 256 characters
-
----
-
-## 22. Credits and license
+## 21. Credits and license
 
 PDW is licensed under the **GNU General Public License v3.0** (GPL-3.0). All additions in this repository are released under the same terms. See `LICENSE` for the full text.
 
