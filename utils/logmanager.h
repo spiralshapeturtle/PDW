@@ -14,6 +14,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include <atomic>
 
 // ---------------------------------------------------------------------------
 // Log categories — each maps to a distinct output file.
@@ -110,7 +111,7 @@ private:
     CRITICAL_SECTION m_cs;
     HANDLE   m_hEvent;          // auto-reset, signaled when entries are pushed
     HANDLE   m_hThread;
-    volatile bool m_stop;
+    std::atomic<bool> m_stop;   // FIX [AtomicRunning]: written by main thread, read by worker
     bool     m_initialized;
 
     // Push a pre-built line + path into the ring buffer (or write directly).

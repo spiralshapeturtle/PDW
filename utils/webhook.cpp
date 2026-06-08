@@ -22,6 +22,7 @@
 #include <winhttp.h>
 #include <stdio.h>
 #include <string.h>
+#include <atomic>      // FIX [AtomicRunning]: std::atomic<bool> for the cross-thread run flag
 
 #include "..\headers\pdw.h"
 #include "..\headers\initapp.h"
@@ -115,9 +116,12 @@ static GroupAcc g_groupAcc[MAX_GROUPBITS];
 
 static HANDLE          g_hThread  = NULL;
 static HANDLE          g_hEvent   = NULL;   // auto-reset, signals worker
-// FIX [WebhookVolatile]: volatile so the compiler cannot hoist the read out of the worker
-// loop body or DoSend's early-out — main thread writes FALSE on shutdown.
-static volatile BOOL   g_bRunning = FALSE;
+// FIX [AtomicRunning]: was `volatile BOOL`. volatile gives neither atomicity nor cross-thread
+// memory ordering in the C++ model, yet this flag is written by the GUI thread (Init/Shutdown)
+// and read lock-free by the decoder thread (Notify/FlushGroup) and the worker (loop + sleep).
+// std::atomic<bool> makes those reads/writes well-defined; assignment from BOOL TRUE/FALSE and
+// use in boolean context are unchanged, so no call site needs to change. Mirrors telegram/pushover.
+static std::atomic<bool> g_bRunning(false);
 
 static CRITICAL_SECTION g_cs;      // protects queue, groupAcc, g_hStatusWnd
 
