@@ -67,7 +67,7 @@ This version (3.6.1) builds on the classic PDW 3.2 codebase and adds five years 
 
 ## 2. Legal notice
 
-Decoding paging signals may be illegal in your country. This software is provided on an as-is basis. The authors cannot be held responsible for any legal action that results from its use.
+Receiving and decoding paging transmissions may be restricted or prohibited by law in your country or region. It is your sole responsibility to verify that your use of this software complies with all applicable local, national, and international laws and regulations. This software is provided "as is", without warranty of any kind, express or implied. The authors and contributors accept no liability whatsoever for any damages, legal consequences, or other losses arising from the use or misuse of this software. By using this software you accept full responsibility for ensuring its lawful use.
 
 ---
 

@@ -1,6 +1,10 @@
 # PDW — Paging Decoder for Windows
 
-**Version 3.6.1** | Windows 7–11 | Win32 + x64 | Visual Studio 2017+
+> **Legal notice:** Receiving and decoding paging transmissions may be restricted or prohibited by law in your country or region. It is your sole responsibility to verify that your use of this software complies with all applicable local, national, and international laws and regulations. This software is provided "as is", without warranty of any kind, express or implied. The authors and contributors accept no liability whatsoever for any damages, legal consequences, or other losses arising from the use or misuse of this software. By using this software you accept full responsibility for ensuring its lawful use.
+
+---
+
+**Version 3.6.1** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 

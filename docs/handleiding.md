@@ -67,7 +67,7 @@ Deze versie (3.6.1) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf j
 
 ## 2. Juridische kennisgeving
 
-Het decoderen van pagingsignalen kan in uw land illegaal zijn. Deze software wordt aangeboden zoals ze is. De auteurs kunnen niet aansprakelijk worden gesteld voor enige juridische actie die voortvloeit uit het gebruik ervan.
+Het ontvangen en decoderen van paginguitzendingen kan in uw land of regio bij wet beperkt of verboden zijn. Het is uw eigen verantwoordelijkheid om te controleren of uw gebruik van deze software voldoet aan alle toepasselijke lokale, nationale en internationale wet- en regelgeving. Deze software wordt aangeboden "zoals ze is", zonder enige garantie, uitdrukkelijk of stilzwijgend. De auteurs en bijdragers aanvaarden geen enkele aansprakelijkheid voor schade, juridische gevolgen of andere verliezen die voortvloeien uit het gebruik of misbruik van deze software. Door deze software te gebruiken aanvaardt u de volledige verantwoordelijkheid voor het waarborgen van het rechtmatige gebruik ervan.
 
 ---
 
