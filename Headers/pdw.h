@@ -7,7 +7,7 @@
 
 #define FILTER_CAPCODE_LEN  9	// longest is FLEX long (9 chars)
 #define FILTER_LABEL_LEN    256	// was 70, see issue #21
-#define FILTER_TEXT_LEN     120	// FIX [FilterText]: was 40 (PH: was 25) — bumped naar 120 voor langere roepnummerlijsten
+#define FILTER_TEXT_LEN     256	// FIX [FilterTextLen]: was 120 (was 40, PH: was 25) - bumped to 256 (matches label) for longer OR/AND filter expressions
 #define FILTER_FILE_LEN     128	// PH: was 256
 
 #define MAX_STR_LEN			5120
@@ -498,7 +498,7 @@ void CopyToClipboard(PaneStruct *pane, UINT min_col, UINT max_col, UINT min_row,
 void PanePaint(PaneStruct *pane);
 void PaneHScroll(PaneStruct *pane, WPARAM wParam);
 void PaneVScroll(PaneStruct *pane, WPARAM wParam, LPARAM lParam);
-void BuildFilterString(char *temp_str, FILTER filter);
+void BuildFilterString(char *temp_str, size_t bufsize, FILTER filter);	// FIX [FilterTextLen]: bounded destination
 void ChangeDataMode(HWND hWnd, int mode);
 
 VOID NEAR GoModalDialogBoxParam(HINSTANCE hInstance, LPCSTR lpszTemplate, HWND hWnd, DLGPROC lpDlgProc, LPARAM lParam);

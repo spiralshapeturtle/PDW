@@ -1,6 +1,24 @@
-# PDW 3.6.2 - Release Notes
+# PDW 3.6.3 - Release Notes
 
-## New in 3.6.2
+## New in 3.6.3
+
+### Filter improvements
+
+- **OR operator in filter text (FIX [FilterOR]):** message-text filters now support `|` as a
+  top-level OR operator in addition to the existing `&` (AND). For example `P 1&BR|P 1&HV` matches
+  when the message contains `P 1` and `BR`, **or** `P 1` and `HV`. `&` binds tighter than `|`
+  (standard precedence), empty terms are ignored (`|alpha` behaves like `alpha`), and a leading `^`
+  on a term is ignored when `|` is present. Filters without `|` are completely unaffected. The
+  highlight positions on a match are set exactly as for a normal single-term match. The *Match exact
+  text* checkbox is now greyed out and cleared automatically while the filter text contains `&` or
+  `|`, since whole-message matching is incompatible with those operators.
+- **Filter text length raised to 256 (FIX [FilterTextLen]):** message-text filters now accept up to
+  256 characters (was 120, matching the label field), giving room for longer `|`/`&` expressions.
+  Existing `filters.ini` files load unchanged. Two fixed-size buffers that build strings from the
+  filter text were hardened for the larger size so a long text can never overflow them: the filter-row
+  display string (`BuildFilterString` now takes a destination size and appends within bounds) and the
+  per-filter wave-file name lookup (`PlayWaveFile` now builds the file name with a bounded copy; an
+  over-long name simply will not match a file on disk and falls back as before).
 
 ### Stability fixes
 

@@ -471,6 +471,7 @@ std::vector<FILTER> g_copyBuffer;  // FIX [CopyPaste]: databuffer voor non-conti
 
 void OnBeginDrag(NMHDR* pnmhdr);
 void InitListControl(HWND hDlg);
+void FilterAutoSizeColumn(void);	// FIX [FilterHScroll]: size column to widest row so the H-scrollbar can appear
 bool WINAPI InsertListViewItem(char *szLine, int nItem);
 void OnMouseMove(UINT nFlags, int x, int y);
 void OnMouseWheel(WPARAM wParam, int x, int y, RECT g_rect);
@@ -6903,18 +6904,32 @@ void Copy_Filter_Fields(FILTER *out_filter, FILTER in_filter)
 } // end of Copy_Filter_Fields()
 
 
-void BuildFilterString(char *temp_str, FILTER filter)
+// FIX [FilterTextLen]: bounded append helper. FILTER_TEXT_LEN was bumped 120->256
+// (and label is 256), so the worst-case display string is ~560 bytes - larger than
+// some callers' destination buffers. Route every append through this so the function
+// can never overflow temp_str regardless of label/text length; it truncates instead.
+static void bfs_cat(char *dst, size_t cap, const char *src)
+{
+	if (cap == 0) return;
+	size_t len = strlen(dst);
+	if (len >= cap - 1) return;					// already full
+	strncat(dst, src, cap - 1 - len);			// leaves room for the terminating NUL
+}
+
+void BuildFilterString(char *temp_str, size_t bufsize, FILTER filter)
 {
 	char *filter_types[7] = {"UNUSED", "FLEX","POCSAG","TEXT","ERMES ","ACARS ", "MOBITX"};
 	char *wave_names[11]  = {"Default","Sound-0","Sound-1","Sound-2","Sound-3","Sound-4",
 									   "Sound-5","Sound-6","Sound-7","Sound-8","Sound-9"};
 
-	strcpy(temp_str, filter_types[filter.type]);
+	if (bufsize == 0) return;
+	temp_str[0] = '\0';
+	bfs_cat(temp_str, bufsize, filter_types[filter.type]);
 
-	if (filter.type == ACARS_FILTER) strcat(temp_str, " ");
-	
-	strcat(temp_str, " ");
-	strcat(temp_str, filter.capcode[0] ? filter.capcode : "         ");
+	if (filter.type == ACARS_FILTER) bfs_cat(temp_str, bufsize, " ");
+
+	bfs_cat(temp_str, bufsize, " ");
+	bfs_cat(temp_str, bufsize, filter.capcode[0] ? filter.capcode : "         ");
 
 	if ((filter.type == MOBITEX_FILTER) && filter.capcode[strlen(filter.capcode)-1] == 'X')
 	{
@@ -6927,47 +6942,47 @@ void BuildFilterString(char *temp_str, FILTER filter)
 
 	if (filter.reject)
 	{
-		strcat(temp_str, " | REJECT");
+		bfs_cat(temp_str, bufsize, " | REJECT");
 		if (filter.text[0] && !filter.capcode[0])
 		{
-			strcat(temp_str, " | \"");
-			strcat(temp_str, filter.text);
-			strcat(temp_str, "\"");
+			bfs_cat(temp_str, bufsize, " | \"");
+			bfs_cat(temp_str, bufsize, filter.text);
+			bfs_cat(temp_str, bufsize, "\"");
 		}
 		return;
 	}
 
 	if (Profile.FilterWindowExtra)
 	{
-		strcat(temp_str, " | ");
-		strcat(temp_str, filter.cmd_enabled ? "CMD" : "cmd");
-		strcat(temp_str, " | ");
-		strcat(temp_str, filter.label_enabled ? "LAB" : "lab");
-		strcat(temp_str, " | ");
-		strcat(temp_str, filter.sep_filterfile_en ? "SEP" : "sep");
-		strcat(temp_str, " | ");
+		bfs_cat(temp_str, bufsize, " | ");
+		bfs_cat(temp_str, bufsize, filter.cmd_enabled ? "CMD" : "cmd");
+		bfs_cat(temp_str, bufsize, " | ");
+		bfs_cat(temp_str, bufsize, filter.label_enabled ? "LAB" : "lab");
+		bfs_cat(temp_str, bufsize, " | ");
+		bfs_cat(temp_str, bufsize, filter.sep_filterfile_en ? "SEP" : "sep");
+		bfs_cat(temp_str, bufsize, " | ");
 
 		if (filter.monitor_only)
 		{
-			strcat(temp_str, filter.wave_number ? "M-ONLY " : "NoSound");
+			bfs_cat(temp_str, bufsize, filter.wave_number ? "M-ONLY " : "NoSound");
 		}
 		else
 		{
-			strcat(temp_str, filter.wave_number == -1 ? "NoSound" : wave_names[filter.wave_number]);
+			bfs_cat(temp_str, bufsize, filter.wave_number == -1 ? "NoSound" : wave_names[filter.wave_number]);
 		}
 	}
 
 	if (filter.label[0])
 	{
-		strcat(temp_str, " | ");
-		strcat(temp_str, filter.label);
+		bfs_cat(temp_str, bufsize, " | ");
+		bfs_cat(temp_str, bufsize, filter.label);
 	}
 
 	if (filter.text[0])
 	{
-		strcat(temp_str, " | \"");
-		strcat(temp_str, filter.text);
-		strcat(temp_str, "\"");
+		bfs_cat(temp_str, bufsize, " | \"");
+		bfs_cat(temp_str, bufsize, filter.text);
+		bfs_cat(temp_str, bufsize, "\"");
 	}
 	return;
 } // end of BuildFilterString()
@@ -6996,9 +7011,20 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			if (idCtl != IDC_FILTERS) break;
 
-			lpdis = (LPDRAWITEMSTRUCT) lParam;			// item-drawing information 
+			lpdis = (LPDRAWITEMSTRUCT) lParam;			// item-drawing information
 			rect  = lpdis->rcItem ;
-			rect.left=1;
+			// FIX [FilterHScroll]: the column is now wider than the client area to enable
+			// the horizontal scrollbar, so rcItem can be far wider than what is visible.
+			// Filling / drawing / focus-rect into that oversized rect produced overlapping
+			// garbled text on long rows. Honor the scroll offset (rcItem.left goes negative
+			// when scrolled, instead of forcing left=1) and clamp the right edge to the
+			// visible client width so all drawing stays inside the viewport.
+			rect.left += 1;
+			{
+				RECT rcClient;
+				GetClientRect(hListView, &rcClient);
+				if (rect.right > rcClient.right) rect.right = rcClient.right;
+			}
 
 			if (lpdis->itemAction == ODA_DRAWENTIRE)
 			{
@@ -7020,17 +7046,24 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 					DeleteObject(hb) ;
 				}
 
-				BuildFilterString(szTEMP, Profile.filters[lpdis->itemID]);
-				DrawText(lpdis->hDC, szTEMP, strlen(szTEMP), &rect, DT_SINGLELINE | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+				BuildFilterString(szTEMP, sizeof(szTEMP), Profile.filters[lpdis->itemID]);
+				// FIX [FilterHScroll]: no DT_END_ELLIPSIS - the column can be wider than the
+				// client and is horizontally scrollable, so long rows must stay readable by
+				// scrolling instead of being truncated with "..." at the visible edge.
+				// TRANSPARENT background so the glyphs draw over the FillRect colour cleanly
+				// (the DC bk colour is the list background, not the per-row selection fill).
+				SetBkMode(lpdis->hDC, TRANSPARENT);
+				DrawText(lpdis->hDC, szTEMP, strlen(szTEMP), &rect, DT_SINGLELINE | DT_LEFT | DT_NOPREFIX);
 
-				if (ListView_GetItemState(hListView, lpdis->itemID, LVIS_FOCUSED))
-				{
-					DrawFocusRect(lpdis->hDC, &rect) ;
-				}
+				// FIX [FilterHScroll]: do not draw the dotted focus rectangle. It uses XOR,
+				// and with the column wider than the client the horizontal scroll blit leaves
+				// the previous dotted edges behind (visible as stray vertical dashes) because
+				// XOR erase needs a redraw at the exact same spot. The blue selection fill
+				// already indicates the focused/selected row.
 			}
 			if (lpdis->itemAction == ODA_SELECT)
 			{
-				DrawFocusRect(lpdis->hDC, &rect) ;
+				// FIX [FilterHScroll]: focus rectangle removed (see above) - no XOR artifacts.
 			}
 
 			return(TRUE) ;
@@ -7100,9 +7133,10 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
    
 		for (index=0; index<Profile.filters.size(); index++)
 		{
-			BuildFilterString(szTEMP, Profile.filters[index]);
+			BuildFilterString(szTEMP, sizeof(szTEMP), Profile.filters[index]);
 			InsertListViewItem(szTEMP, index);
 		}
+		FilterAutoSizeColumn();	// FIX [FilterHScroll]: enable H-scroll for long filter rows
 		ListView_SetItemState(hListView, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 
 		return (TRUE);
@@ -7498,9 +7532,10 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
    
 				for (index=0; index<Profile.filters.size(); index++)
 				{
-					BuildFilterString(szTEMP, Profile.filters[index]);
+					BuildFilterString(szTEMP, sizeof(szTEMP), Profile.filters[index]);
 					InsertListViewItem(szTEMP, index);
 				}
+				FilterAutoSizeColumn();	// FIX [FilterHScroll]: enable H-scroll for long filter rows
 				ListView_SetItemState(hListView, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 				iFiltersColors ^= 0x01;
 			}
@@ -7973,7 +8008,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 	int telegram=0, pushover=0;	// FIX [Telegram]: multi-edit "don't change" trackers
 
 	char temp_cap[FILTER_CAPCODE_LEN+1]="",
-		 temp[MAX_PATH],
+		 temp[MAX_STR_LEN],	// FIX [FilterTextLen]: was MAX_PATH (260); holds BuildFilterString output (label+text up to ~560 bytes)
 		 tmp_text[FILTER_TEXT_LEN+1],
 		 tmp_sepfile[3][MAX_PATH];
 
@@ -8546,7 +8581,21 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 		if (type != MOBITEX_FILTER)
 		{
-			EnableWindow(GetDlgItem(hDlg, IDC_FILTERMATCHEXACT), (text && temp[0] != '^'));
+			// FIX [FilterOR]: advanced filter syntax ('|' OR / '&' AND) is incompatible with
+			// the "match exact text" option (it does a whole-message compare). Grey the
+			// checkbox out, make it non-interactive, and force it OFF so a stale check from
+			// before the advanced syntax was typed can never be applied. When the field is
+			// cleared or no longer contains '|'/'&' the checkbox returns to its normal state.
+			{
+				BOOL bAdvanced = (strchr(temp, '|') != 0) || (strchr(temp, '&') != 0);
+
+				if (bAdvanced && IsDlgButtonChecked(hDlg, IDC_FILTERMATCHEXACT) == BST_CHECKED)
+				{
+					CheckDlgButton(hDlg, IDC_FILTERMATCHEXACT, BST_UNCHECKED);
+				}
+
+				EnableWindow(GetDlgItem(hDlg, IDC_FILTERMATCHEXACT), (text && temp[0] != '^' && !bAdvanced));
+			}
 
 			{	// FIX [FilterCapResize]: De Address/capcode-edit wisselt van breedte: smal
 				// naast de Fnu-combo (POCSAG) versus breed (overige types). Twee bugs opgelost:
@@ -9207,23 +9256,32 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 						strcpy(Profile.filters[index].lasthit_time, filter.lasthit_time);
 					}
 					Copy_Filter_Fields(&filter, Profile.filters[index]);
-					BuildFilterString(temp, filter);
+					BuildFilterString(temp, sizeof(temp), filter);
 					ListView_DeleteItem(hListView, index) ;
 					InsertListViewItem(temp, index) ;
+					FilterAutoSizeColumn();	// FIX [FilterHScroll]: row text may have grown, re-fit column
 					SendMessage(hListView, LVM_SETSELECTIONMARK, 0, index);
 				}
 				else
 				{
 					Copy_Filter_Fields(&filter, Profile.filters[index]);
-					BuildFilterString(temp, filter);
+					BuildFilterString(temp, sizeof(temp), filter);
 					InsertListViewItem(temp, index) ;
+					FilterAutoSizeColumn();	// FIX [FilterHScroll]: row text may have grown, re-fit column
 					ListView_SetItemState(hListView, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 					SendMessage(hListView, LVM_SETSELECTIONMARK, 0, index);
 					break;
 				}
 				ListView_SetItemState(hListView, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 			}
-			ListView_SetItemState(hListView, index+1, 0, LVIS_SELECTED | LVIS_FOCUSED); // Deselect current
+			// FIX [FilterApplyReselect]: only deselect when 'index' is valid. After an
+			// edit the while-loop above leaves index at -1 (GetNextItem found no more
+			// selected rows), so index+1 used to deselect row 0 - which silently broke
+			// a second Apply on the first filter. The add path breaks out with a valid index.
+			if (index >= 0)
+			{
+				ListView_SetItemState(hListView, index+1, 0, LVIS_SELECTED | LVIS_FOCUSED); // Deselect current
+			}
 
 			SetCursor(LoadCursor(NULL, IDC_ARROW));
 
@@ -12416,6 +12474,31 @@ void InitListControl(HWND hDlg)
 }
 
 
+// FIX [FilterHScroll]: size the single column to the widest filter row so a
+// horizontal scrollbar appears for long entries. Never shrink below the client
+// width, so short filters keep their full-width row background fill.
+void FilterAutoSizeColumn(void)
+{
+	RECT rc;
+
+	if (!hListView) return;
+
+	ListView_SetColumnWidth(hListView, 0, LVSCW_AUTOSIZE);
+
+	GetClientRect(hListView, &rc);
+
+	if (ListView_GetColumnWidth(hListView, 0) < rc.right)
+	{
+		ListView_SetColumnWidth(hListView, 0, rc.right);
+	}
+	else
+	{
+		// small pad so the longest row is not clipped / ellipsized
+		ListView_SetColumnWidth(hListView, 0, ListView_GetColumnWidth(hListView, 0) + 16);
+	}
+}
+
+
 bool WINAPI InsertListViewItem(char *szLine, int nItem)
 { 
 	LVITEM lvitem = { 0 } ;
@@ -12832,7 +12915,7 @@ void SortFilter(HWND hDlg, bool bAddress)
 			ListView_EnsureVisible(hListView, index, TRUE);
 
 			Copy_Filter_Fields(&filter, Profile.filters[index]);
-			BuildFilterString(szTEMP, Profile.filters[index]);
+			BuildFilterString(szTEMP, sizeof(szTEMP), Profile.filters[index]);
 
 			Profile.filters.erase (Profile.filters.begin() + index);
 			Profile.filters.insert(Profile.filters.begin() + i, filter);
@@ -12910,7 +12993,7 @@ void PasteFilter(void)
 		{
 			FILTER f;
 			Copy_Filter_Fields(&f, g_copyBuffer[i]);
-			BuildFilterString(szTEMP, f);
+			BuildFilterString(szTEMP, sizeof(szTEMP), f);
 			Profile.filters.insert(Profile.filters.begin() + nIndex, f);
 			InsertListViewItem(szTEMP, nIndex);
 			ListView_SetItemState(hListView, nIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);

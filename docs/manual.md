@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 3.6.2** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 3.6.3** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -25,6 +25,7 @@
 9. [Filters](#9-filters)
    - 9.1 [Filter fields](#91-filter-fields)
    - 9.2 [Filter actions](#92-filter-actions)
+   - 9.3 [Message text matching](#93-message-text-matching)
    - 9.3 [Search while typing](#93-search-while-typing)
 10. [Options menu](#10-options-menu)
     - 10.1 [SMTP e-mail alerts](#101-smtp-e-mail-alerts)
@@ -61,7 +62,7 @@
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (3.6.2) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
+This version (3.6.3) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
 
 ---
 
@@ -232,9 +233,26 @@ Each filter can independently trigger any combination of the following:
 | **Monitor only** | Show on screen but exclude from main log and feed outputs |
 | **Reject** | Suppress this message entirely — do not show or log |
 
-Filter labels can be up to **256 characters** long.
+Filter labels and filter text patterns can each be up to **256 characters** long.
 
-### 9.3 Search while typing
+### 9.3 Message text matching
+
+When a filter has a **Text** value, the message must contain that text for the filter to match. Matching is case-insensitive. The text field accepts up to **256 characters** and understands the following operators:
+
+| Operator | Meaning | Example | Matches when |
+|----------|---------|---------|--------------|
+| (plain)  | Substring match | `BR` | the message contains `BR` anywhere |
+| `&`      | AND - all parts must be present, in order | `P 1&BR` | the message contains `P 1` **and**, after it, `BR` |
+| `\|`      | OR - any one term may match (lowest precedence) | `P 1&BR\|P 1&HV` | the message matches `P 1` AND `BR`, **or** `P 1` AND `HV` |
+| `^`      | Anchor - message must *start* with the text | `^ALARM` | the message begins with `ALARM` |
+
+`&` binds tighter than `|`, so `A&B|C&D` reads as `(A AND B) OR (C AND D)`, just like normal arithmetic precedence. An OR list such as `Zeist|Bunnik|Huis ter Heide` matches if **any** of the three terms appears. Empty terms are ignored, so `|alpha` and `alpha|` both behave like plain `alpha`.
+
+The **Match exact text** checkbox compares the whole message against the filter text instead of doing a substring search. Because exact-whole-message matching is incompatible with the `&`, `|`, and `^` operators, the checkbox is automatically greyed out (and cleared) as soon as the filter text contains `&` or `|`. It becomes available again when the text no longer uses those operators.
+
+> Note: `^` anchoring is not combined with `|`. When a filter text contains `|`, a leading `^` on a term is ignored and the term is treated as a plain substring.
+
+### 9.4 Search while typing
 
 In the filter editor, start typing in the search box to filter the displayed entries in real time. This is useful when you have hundreds of filters.
 

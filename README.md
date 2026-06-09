@@ -4,7 +4,7 @@
 
 ---
 
-**Version 3.6.2** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.6.3** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -57,7 +57,9 @@ Each filter entry matches on **capcode**, **label**, or **message text** and can
 - Write to a separate log file (up to 3 per filter)
 - Mark as monitor-only or reject
 
-Filter labels support up to 256 characters; COM ports ≥ 10 are supported. Search-while-typing is available in the filter list. The filter list font follows the main window font setting.
+Message-text matching supports substring search, `&` (AND, all parts present in order), `|` (OR, any term matches — e.g. `P 1&BR|P 1&HV`), and a leading `^` (anchor to the start of the message). `&` binds tighter than `|`. The *Match exact text* option is disabled automatically while the filter text uses `&` or `|`.
+
+Filter labels and filter text each support up to 256 characters; COM ports ≥ 10 are supported. Search-while-typing is available in the filter list. The filter list font follows the main window font setting.
 
 ---
 
@@ -502,6 +504,11 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v3.6.3 (June 2026)
+- **OR operator in filter text** — message-text filters now support `|` (OR) alongside `&` (AND), e.g. `P 1&BR|P 1&HV`; `&` binds tighter than `|`. The *Match exact text* option is greyed out automatically while the text uses `&` or `|`
+- **Filter text length raised to 256** — message-text patterns now accept up to 256 characters (was 120), matching the label field; existing `filters.ini` files load unchanged
+- **Hardening** — the two fixed-size buffers that build strings from the longer filter text (the filter-row display string and the per-filter wave-file name) are now bounds-checked so a long text cannot overflow them
 
 ### v3.6.2 (June 2026)
 - **Telegram long-message split fixed** — splitting a message over 4096 characters no longer cuts through a UTF-8 character (which made Telegram silently drop the whole message) or an HTML tag; the split now backs off to the nearest safe boundary

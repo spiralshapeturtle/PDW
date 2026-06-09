@@ -2322,9 +2322,13 @@ bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay)
 		{
 			if (Profile.filters[iMatch].text[0])
 			{
-				sprintf(szText, "-%s", Profile.filters[iMatch].text);
+				// FIX [FilterTextLen]: filter text is now up to 256 chars; bound every
+				// filename build so a long text can never overflow szText / szWavefileTMP
+				// (both fixed buffers). An over-long name simply will not exist on disk and
+				// FileExists() falls through to the SoundX.wav / monitor_only.wav fallback.
+				_snprintf_s(szText, sizeof(szText), _TRUNCATE, "-%s", Profile.filters[iMatch].text);
 			}
-			sprintf(szWavefileTMP[CURRENT], "%s\\%s%s.wav", szWavePathName, Current_MSG[MSG_CAPCODE], szText);
+			_snprintf_s(szWavefileTMP[CURRENT], sizeof(szWavefileTMP[CURRENT]), _TRUNCATE, "%s\\%s%s.wav", szWavePathName, Current_MSG[MSG_CAPCODE], szText);
 
 			if ((!FileExists(szWavefileTMP[CURRENT])) && (strstr(Profile.filters[iMatch].capcode, "?")))
 			{
@@ -2335,13 +2339,13 @@ bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay)
 					*p='X';
 					PrioTMP[CURRENT]++;
 				}
-				sprintf(szWavefileTMP[CURRENT], "%s\\%s%s.wav", szWavePathName, szCapcode, szText);
+				_snprintf_s(szWavefileTMP[CURRENT], sizeof(szWavefileTMP[CURRENT]), _TRUNCATE, "%s\\%s%s.wav", szWavePathName, szCapcode, szText);	// FIX [FilterTextLen]: bounded
 			}
 			if (Profile.filters[iMatch].text[0]) PrioTMP[CURRENT]--;
 		}
 		else if (Profile.filters[iMatch].text[0])
 		{
-			sprintf(szWavefileTMP[CURRENT], "%s\\%s.wav", szWavePathName, Profile.filters[iMatch].text);
+			_snprintf_s(szWavefileTMP[CURRENT], sizeof(szWavefileTMP[CURRENT]), _TRUNCATE, "%s\\%s.wav", szWavePathName, Profile.filters[iMatch].text);	// FIX [FilterTextLen]: bounded (text up to 256 chars)
 		}
 
 		if (!FileExists(szWavefileTMP[CURRENT]))		// PH: If code.wav is not found
@@ -2565,6 +2569,87 @@ int Check_4_Filtermatch()
 				{
 					iTextMatch = 0;
 					iTextLength = txt_len;
+				}
+			}
+			else if (strstr(Profile.filters[iFilter].text, "|") != 0)
+			{
+				// FIX [FilterOR]: top-level '|' = OR (lowest precedence); '&' stays AND
+				// within each OR-term (binds tighter, like standard operator precedence).
+				// Split the filtertext on '|' and match each term with the existing
+				// AND/substring logic; the FIRST matching term wins and sets the highlight
+				// state. '^' anchoring is NOT supported together with '|': a leading '^' on
+				// a term is ignored and the term is matched as a plain substring. This
+				// branch sits before the 'txt_len <= msg_len' guard on purpose: the full
+				// filtertext (sum of all OR-terms) may legitimately be longer than the
+				// message even when an individual term fits.
+				const char* pOr = Profile.filters[iFilter].text;
+				char  szTerm[FILTER_TEXT_LEN+1];
+
+				while (*pOr != 0 && iTextMatch == -1)
+				{
+					// extract next OR-term (up to next '|' or end of string)
+					int ti = 0;
+					while (*pOr != '|' && *pOr != 0)
+					{
+						if (ti < FILTER_TEXT_LEN) szTerm[ti++] = *pOr;
+						pOr++;
+					}
+					szTerm[ti] = '\0';
+					if (*pOr == '|') pOr++;					// step over the '|' separator
+
+					char* pTerm = szTerm;
+					if (*pTerm == '^') pTerm++;				// '^' ignored in OR mode
+					if (*pTerm == 0) continue;				// empty OR-term -> ignored
+
+					// clear any highlight state left by a previous (failed) term
+					for (m=0; m<10; m++) { iTextPositions[m]=0; iTextLengths[m]=0; }
+
+					if (strstr(pTerm, "&") != 0)
+					{
+						// AND across '&'-substrings (mirror of the legacy '&' loop below)
+						i=0; j=0; k=0; l=0; pSearch=0;
+						while (pTerm[i] != 0 && l < 10)
+						{
+							while (pTerm[i] != '&' && pTerm[i] != 0)
+							{
+								szTextTMP[j++] = pTerm[i++];
+							}
+							szTextTMP[j]='\0';
+
+							pSearch = stristr_local(&Current_MSG[MSG_MESSAGE][k], szTextTMP);
+
+							if (!pSearch) break;
+
+							if (pTerm[i] == '&') { i++; j=0; }
+							k = (pSearch - Current_MSG[MSG_MESSAGE]);
+
+							iTextPositions[l]=k;
+							iTextLengths[l++]=strlen(szTextTMP);
+
+							k += strlen(szTextTMP);
+						}
+						if (pSearch)
+						{
+							iTextMatch = iFilter;			// arrays drive the highlight (legacy semantics)
+						}
+						else
+						{
+							for (m=0; m<10; m++) { iTextPositions[m]=0; iTextLengths[m]=0; }
+						}
+					}
+					else
+					{
+						// plain single substring (no '&' in this OR-term)
+						if ((int)strlen(pTerm) <= msg_len)
+						{
+							pSearch = stristr_local(Current_MSG[MSG_MESSAGE], pTerm);
+							if (pSearch)
+							{
+								iTextMatch  = (int)(pSearch - Current_MSG[MSG_MESSAGE]);
+								iTextLength = strlen(pTerm);
+							}
+						}
+					}
 				}
 			}
 			else if (txt_len <= msg_len)	// Text string has to be shorter than message
