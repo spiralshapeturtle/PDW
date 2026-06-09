@@ -6945,17 +6945,16 @@ void BuildFilterString(char *temp_str, FILTER filter)
 		strcat(temp_str, filter.label_enabled ? "LAB" : "lab");
 		strcat(temp_str, " | ");
 		strcat(temp_str, filter.sep_filterfile_en ? "SEP" : "sep");
-	}
+		strcat(temp_str, " | ");
 
-	// FIX [FilterSound]: always show the sound setting, regardless of FilterWindowExtra
-	strcat(temp_str, " | ");
-	if (filter.monitor_only)
-	{
-		strcat(temp_str, filter.wave_number ? "M-ONLY " : "NoSound");
-	}
-	else
-	{
-		strcat(temp_str, filter.wave_number == -1 ? "NoSound" : wave_names[filter.wave_number]);
+		if (filter.monitor_only)
+		{
+			strcat(temp_str, filter.wave_number ? "M-ONLY " : "NoSound");
+		}
+		else
+		{
+			strcat(temp_str, filter.wave_number == -1 ? "NoSound" : wave_names[filter.wave_number]);
+		}
 	}
 
 	if (filter.label[0])
