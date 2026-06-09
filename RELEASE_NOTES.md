@@ -15,6 +15,11 @@
   UTF-8 character (making the request invalid UTF-8, so Telegram silently dropped the whole message)
   or split an HTML tag/entity. The split now backs off to the nearest safe boundary, so every chunk is
   valid UTF-8 with intact markup.
+- **Shutdown teardown race closed (FIX [TgCsTeardown] / [PoCsTeardown]):** `TelegramNotify`/
+  `PushoverNotify` test the lock-free run flag and *then* take the critical section, while
+  `*Destroy` (called at app exit) used to `DeleteCriticalSection`. A decoder thread that passed the
+  flag test just before shutdown could enter an already-deleted section (crash). `*Destroy` no longer
+  deletes the section - it is process exit, so the OS reclaims it - removing the window entirely.
 - **MOBITEX clock recovery fix (FIX [ModemResync]):** the inter-crossing sample counter (`atb_len`)
   was reset after both transition branches, so it was always 1 when a crossing fired and the bit-clock
   resync guard never accumulated. The reset now happens inside each branch (mirroring `Audio_To_Bits`),

@@ -708,7 +708,12 @@ void TelegramShutdown(void)
 void TelegramDestroy(void)
 {
     TelegramShutdown();
-    if (g_csInit) { DeleteCriticalSection(&g_cs); g_csInit = FALSE; }
+    // FIX [TgCsTeardown]: do NOT DeleteCriticalSection here. TelegramNotify/FlushGroup test the
+    // lock-free g_bRunning flag and THEN take g_cs; a decoder thread that passed the test before
+    // shutdown cleared the flag could otherwise enter an already-deleted section (UB/crash). This
+    // is only ever called at process exit (WM_DESTROY), so leaving g_cs intact and letting the OS
+    // reclaim it on termination closes that window with no leak that outlives the process. g_csInit
+    // stays TRUE so any late call still hits a valid section.
 }
 
 // Enqueue a fully built job (caller holds nothing; takes g_cs internally).

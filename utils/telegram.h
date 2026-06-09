@@ -26,7 +26,7 @@
 
 void TelegramInit(void);
 void TelegramShutdown(void);
-void TelegramDestroy(void);   // full teardown incl. DeleteCriticalSection
+void TelegramDestroy(void);   // process-exit teardown (keeps g_cs; OS reclaims it) - FIX [TgCsTeardown]
 void TelegramNotify(const char *capcode, const char *message, const char *label,
                     const char *szTime, const char *szDate,
                     const char *szMode, const char *szType, const char *szBitrate,

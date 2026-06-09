@@ -2123,8 +2123,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// HWi, stop Mail thread.....
 		MailInit(NULL, NULL, NULL, NULL, NULL, NULL, 0, 0);
 		WebhookDestroy();  // FIX [L3]: shutdown + DeleteCriticalSection
-		TelegramDestroy(); // FIX [Telegram]: shutdown + DeleteCriticalSection
-		PushoverDestroy(); // FIX [Pushover]: shutdown + DeleteCriticalSection
+		TelegramDestroy(); // FIX [Telegram]: shutdown (keeps g_cs at process exit, FIX [TgCsTeardown])
+		PushoverDestroy(); // FIX [Pushover]: shutdown (keeps g_cs at process exit, FIX [PoCsTeardown])
 		MqttDestroy();     // FIX [L4]: shutdown + DeleteCriticalSection
 		MysqlDestroy();    // FIX [MySQLFeed]: shutdown + DeleteCriticalSection
 		SqliteDestroy();   // FIX [SqliteFeed]: shutdown + DeleteCriticalSection
