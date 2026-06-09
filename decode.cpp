@@ -492,18 +492,28 @@ void pdw_decode(void)
 	{
 		// FIX [E1]: static locals vervangen door file-scope rec_tmp/rec_last_write (gereset in Start_Recording)
 		// FIX [H2]: fwrite-retourwaarden worden gecontroleerd; bij schijffout opname stoppen
-		while (rec_tmp != *cpstn)
+		// FIX [RecBatch]: was two fwrite() calls per sample (2+1 bytes); at 19200 baud
+		// that is ~38k syscalls/sec. Batch up to 256 samples into a local byte array
+		// and flush once per batch. On-disk layout is identical: [lo,hi,line] per sample.
+		BOOL writeOk = TRUE;
+		while (rec_tmp != *cpstn && writeOk)
 		{
-			rec_last_write -= freqdata[rec_tmp];
-			if (fwrite(&rec_last_write,    2, 1, pRecording) != 1 ||
-			    fwrite(&linedata[rec_tmp], 1, 1, pRecording) != 1)
+			BYTE batch[256 * 3];
+			int  n = 0;
+			while (rec_tmp != *cpstn && n < (int)sizeof(batch))
+			{
+				rec_last_write -= freqdata[rec_tmp];
+				batch[n++] = (BYTE)( rec_last_write        & 0xFF);
+				batch[n++] = (BYTE)((rec_last_write >>  8) & 0xFF);
+				batch[n++] = linedata[rec_tmp];
+				rec_tmp++;
+				if (rec_tmp == bufsize) rec_tmp = 0;
+			}
+			if (fwrite(batch, 1, n, pRecording) != (size_t)n)
 			{
 				Stop_Recording();
-				break;
+				writeOk = FALSE;
 			}
-			rec_tmp++;
-
-			if (rec_tmp == bufsize) rec_tmp = 0;
 		}
 	}
 

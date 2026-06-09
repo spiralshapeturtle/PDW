@@ -1,4 +1,40 @@
-# PDW 3.6.1 - Release Notes
+# PDW 3.6.2 - Release Notes
+
+## New in 3.6.2
+
+### Stability fixes
+
+- **Run-flag made atomic (FIX [AtomicRunning]):** the worker run flag in both the Telegram and
+  Pushover sinks was a `volatile BOOL`, which provides neither atomicity nor cross-thread memory
+  ordering. It is written by the GUI thread (Init/Shutdown) and read lock-free by the decoder thread
+  and the worker, so it is now a `std::atomic<bool>`. Behaviour is unchanged; this removes an
+  undefined-behaviour data race that could, in theory, let a worker miss a shutdown request and delay
+  a clean stop.
+- **Telegram long-message split no longer corrupts text (FIX [TgSplitBoundary]):** with Telegram
+  **Split** on, a message over 4096 characters was cut at an exact byte offset. That could sever a
+  UTF-8 character (making the request invalid UTF-8, so Telegram silently dropped the whole message)
+  or split an HTML tag/entity. The split now backs off to the nearest safe boundary, so every chunk is
+  valid UTF-8 with intact markup.
+- **MOBITEX clock recovery fix (FIX [ModemResync]):** the inter-crossing sample counter (`atb_len`)
+  was reset after both transition branches, so it was always 1 when a crossing fired and the bit-clock
+  resync guard never accumulated. The reset now happens inside each branch (mirroring `Audio_To_Bits`),
+  and the low->high transition also participates in clock recovery.
+
+### Performance
+
+- **Batched recording writes (FIX [RecBatch]):** the raw recorder issued two `fwrite()` calls per
+  sample (~38k syscalls/sec at 19200 baud). Samples are now batched (up to 256 at a time) and flushed
+  once per batch. The on-disk layout is byte-for-byte identical.
+- **Log writes grouped by file (FIX [LogWriteSort]):** the LogManager drain buffer is sorted by path
+  before writing, so interleaved channels (Telegram/MQTT/Telegram...) no longer cause redundant
+  fopen/fclose pairs.
+- **RS232 four-level flag hoisted (FIX [Rs232FourLevel]):** `Profile.fourlevel` is read once per read
+  instead of on every bit in the inner loop.
+
+### Dialog fixes
+
+- **Telegram dialog converted to DIALOGEX** with corrected label layout; minor control-style tidy-ups
+  in the Telegram/Pushover/log settings dialogs.
 
 ## New in 3.6.1
 
@@ -28,6 +64,11 @@
   (each feed posts only to its own dialog), but the duplicate ids are now unique (`+54` / `+55`).
 - **Event-handle guard (FIX [TgEventGuard] / [PoEventGuard]):** the queue wake-up no longer signals a
   handle that shutdown may have just closed.
+- **Shutdown/enqueue race closed (FIX [TgEventRace] / [PoEventRace]):** the event-handle guard still
+  left a small window where a decoder-thread enqueue could call `SetEvent` after the GUI-thread
+  shutdown had closed the handle (and could tear the ring-buffer indices). The wake-up now signals the
+  event while holding the lock, and shutdown clears/closes the event and resets the queue under the
+  same lock, so the two can no longer interleave.
 
 ## New in 3.5.9
 

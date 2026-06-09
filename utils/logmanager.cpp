@@ -408,6 +408,15 @@ void LogManager::DrainAll()
 // Groups consecutive entries with the same path to minimise open/close calls.
 void LogManager::WriteEntries(Entry* entries, int count)
 {
+    // FIX [LogWriteSort]: sort by path first so interleaved log channels (e.g. Telegram
+    // followed by MQTT followed by Telegram) don't cause redundant fopen/fclose pairs.
+    // The drain buffer is a scratch copy owned solely by the worker thread, so in-place
+    // sorting is safe. Entry is private so use a lambda comparator (C++11).
+    qsort(entries, count, sizeof(Entry), [](const void* a, const void* b) -> int {
+        return strcmp(static_cast<const Entry*>(a)->path,
+                      static_cast<const Entry*>(b)->path);
+    });
+
     int i = 0;
     while (i < count) {
         const char* p = entries[i].path;

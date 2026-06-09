@@ -701,8 +701,14 @@ void MOBITEX_To_Bits(char *lpAudioBuffer, long LenAudioBuffer)
 
 		// Resync on 0/1 and 1/0 crossings.
 		// Only resync if last sample count was equal to a single 1/0 bit.
+		// FIX [ModemResync]: atb_len=0 was unconditionally placed after both branches,
+		// so atb_len was always 1 when a crossing fired — the inter-crossing sample count
+		// never accumulated. The resync guard (atb_len/WatchStep in [clkt_lo, clkt_hi])
+		// was therefore meaningless. Moved atb_len=0 inside each branch (matches
+		// Audio_To_Bits). Added WatchCtr update to the low->high branch so both
+		// transition polarities participate in clock recovery.
 		if ((atb_value < -1) && (atb_bit == high_audio))
-		{    
+		{
 			atb_bit = low_audio;
 
 			if (((atb_len < WatchStep * 2) &&
@@ -711,12 +717,20 @@ void MOBITEX_To_Bits(char *lpAudioBuffer, long LenAudioBuffer)
 			{
 				WatchCtr = atb_ctr + (WatchStep / 2);		// center of bit == 1/2 data bit.
 			}
+			atb_len=0;
 		}
 		else if ((atb_value > -1) && (atb_bit == low_audio))
 		{
 			atb_bit = high_audio;
+
+			if (((atb_len < WatchStep * 2) &&
+				((atb_len / WatchStep) > clkt_lo) &&
+				((atb_len / WatchStep) < clkt_hi)))
+			{
+				WatchCtr = atb_ctr + (WatchStep / 2);		// center of bit == 1/2 data bit.
+			}
+			atb_len=0;
 		}
-		atb_len=0;
       
 		// Get sample value and process it if on WatchStep
 		if (WatchCtr - atb_ctr < 1 && WatchCtr != -1)

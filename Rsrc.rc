@@ -278,7 +278,8 @@ BEGIN
     EDITTEXT        IDC_LOGFILE,51,23,136,13,ES_AUTOHSCROLL
     CONTROL         "Use date as filename",IDC_LOGFILEDATE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,13,44,81,8
     GROUPBOX        "Columns to be logged",IDC_STATIC,5,66,191,55
-    CONTROL         "ISO tijdstip (YYYY-MM-DD HH:MM:SS)",IDC_LOG_ISO_DATETIME,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,13,76,155,8
+    CONTROL         "ISO tijdstip (YYYY-MM-DD HH:MM:SS)",IDC_LOG_ISO_DATETIME,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,13,76,155,8
     CONTROL         "Time",622,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,13,90,29,8
     CONTROL         "Date",623,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,50,90,30,8
     CONTROL         "Capcode",621,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,88,90,42,8
@@ -881,21 +882,21 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,208,224,44,14
 END
 
-TELEGRAM_DLGBOX DIALOG 10, 10, 264, 286
+TELEGRAM_DLGBOX DIALOGEX 10, 10, 264, 286
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Telegram Settings"
-FONT 8, "Verdana"
+FONT 8, "Verdana", 0, 0, 0x0
 BEGIN
     CONTROL         "Enable Telegram output",IDC_TG_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,120,10
     LTEXT           "Bot token",IDC_STATIC,8,26,40,8
-    EDITTEXT        IDC_TG_TOKEN,52,24,204,13,ES_AUTOHSCROLL | ES_PASSWORD
+    EDITTEXT        IDC_TG_TOKEN,52,24,204,13,ES_PASSWORD | ES_AUTOHSCROLL
     LTEXT           "Chat IDs",IDC_STATIC,8,44,40,8
     EDITTEXT        IDC_TG_CHATIDS,52,42,148,13,ES_AUTOHSCROLL
     PUSHBUTTON      "Discover...",IDC_TG_DISCOVER,204,42,52,13
     LTEXT           "Numeric chat_id's, ';'-separated. Send /start to the bot first, then Discover.",IDC_STATIC,8,58,248,8
     LTEXT           "Title",IDC_STATIC,8,76,40,8
     EDITTEXT        IDC_TG_TITLE,52,74,204,13,ES_AUTOHSCROLL
-    LTEXT           "Optional, shown above the body (blank line between). Empty = body only.",IDC_STATIC,52,90,204,8
+    LTEXT           "Optional, shown above the body (blank line between). Empty = body only.",IDC_STATIC,8,90,247,10
     LTEXT           "Body",IDC_STATIC,8,104,40,8
     EDITTEXT        IDC_TG_BODY,52,102,204,13,ES_AUTOHSCROLL
     LTEXT           "Placeholders: {message} {label} {capcode} {time} {date} {mode} {type} {bitrate}.  \\n = new line,  <b>..</b> = bold.",IDC_STATIC,8,118,248,16
@@ -904,7 +905,8 @@ BEGIN
     LTEXT           "(supergroup topic, 0 = none)",IDC_STATIC,98,140,140,8
     CONTROL         "Silent (no notification sound)",IDC_TG_SILENT,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,156,140,10
     CONTROL         "Disable link preview",IDC_TG_NOPREVIEW,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,150,156,106,10
-    CONTROL         "Split messages over 4096 chars (off = truncate)",IDC_TG_SPLIT,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,170,248,10
+    CONTROL         "Split messages over 4096 chars (off = truncate)",IDC_TG_SPLIT,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,170,248,10
     CONTROL         "Log to file (pdw_telegram.log)",IDC_TG_LOG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,184,160,10
     LTEXT           "Send notifications for:",IDC_STATIC,8,202,80,8
     COMBOBOX        IDC_TG_SEND_IN,92,200,164,62,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
@@ -922,9 +924,9 @@ FONT 8, "Verdana"
 BEGIN
     CONTROL         "Enable Pushover output",IDC_PO_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,120,10
     LTEXT           "App token",IDC_STATIC,8,26,44,8
-    EDITTEXT        IDC_PO_APPTOKEN,56,24,200,13,ES_AUTOHSCROLL | ES_PASSWORD
+    EDITTEXT        IDC_PO_APPTOKEN,56,24,200,13,ES_PASSWORD | ES_AUTOHSCROLL
     LTEXT           "User/Group key",IDC_STATIC,8,44,46,8
-    EDITTEXT        IDC_PO_USERKEY,56,42,200,13,ES_AUTOHSCROLL | ES_PASSWORD
+    EDITTEXT        IDC_PO_USERKEY,56,42,200,13,ES_PASSWORD | ES_AUTOHSCROLL
     LTEXT           "Title",IDC_STATIC,8,62,44,8
     EDITTEXT        IDC_PO_TITLE,56,60,200,13,ES_AUTOHSCROLL
     LTEXT           "Optional, shown above the body. Empty = body only.",IDC_STATIC,56,76,200,8
@@ -1398,6 +1400,10 @@ BEGIN
     END
 
     DISPLAYOPTIONSDLGBOX, DIALOG
+    BEGIN
+    END
+
+    TELEGRAM_DLGBOX, DIALOG
     BEGIN
     END
 

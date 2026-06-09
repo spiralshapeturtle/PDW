@@ -561,10 +561,13 @@ int rs232_read(void)
 		return(0);
 	}
 	g_lastReadError = 0;
+	// FIX [Rs232FourLevel]: Profile.fourlevel is constant per session; hoisting it out
+	// of the per-bit inner loop avoids re-reading the global struct on every iteration.
+	const BOOL bFourLevel = Profile.fourlevel;
 	for (DWORD i = 0; i < dwRead; i++) {
 		for (int j = 7; j >= 0; j--)
 		{
-			if (Profile.fourlevel) {
+			if (bFourLevel) {
 				j--;
 				bit = (byData[i] >> j) & 3;
 			}

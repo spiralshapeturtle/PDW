@@ -4,7 +4,7 @@
 
 ---
 
-**Version 3.6.1** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.6.2** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -502,6 +502,12 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v3.6.2 (June 2026)
+- **Telegram long-message split fixed** — splitting a message over 4096 characters no longer cuts through a UTF-8 character (which made Telegram silently drop the whole message) or an HTML tag; the split now backs off to the nearest safe boundary
+- **Stability** — the Telegram/Pushover worker run-flag is now `std::atomic` (removes a data race on shutdown)
+- **Performance** — recording writes are batched (fewer disk syscalls), the log manager groups writes by file, and the RS232 four-level flag is hoisted out of the per-bit loop
+- **MOBITEX clock recovery fix** — the resync sample counter is now reset per transition so the bit-clock guard works as intended
 
 ### v3.6.1 (June 2026)
 - **Telegram & Pushover output sinks** with separate Title/Body templates (`{message}` placeholder, `\n` line breaks), a Test button that previews the real formatting, SMTP-style send-in modes, and one-message-per-group-call batching (one label per line)

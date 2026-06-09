@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <atomic>      // FIX [AtomicRunning]: std::atomic<bool> for the cross-thread run flag
 
 #include "..\headers\pdw.h"
 #include "..\headers\initapp.h"
@@ -130,7 +131,12 @@ static BOOL inline QueueEmpty(void) { return g_qHead == g_qTail; }
 
 static HANDLE          g_hThread  = NULL;
 static HANDLE          g_hEvent   = NULL;
-static volatile BOOL   g_bRunning = FALSE;
+// FIX [AtomicRunning]: was `volatile BOOL`. volatile gives neither atomicity nor cross-thread
+// memory ordering in the C++ model, yet this flag is written by the GUI thread (Init/Shutdown)
+// and read lock-free by the decoder thread (Notify/FlushGroup) and the worker (loop + sleep).
+// std::atomic<bool> makes those reads/writes well-defined; assignment from BOOL TRUE/FALSE and
+// use in boolean context are unchanged, so no call site needs to change.
+static std::atomic<bool> g_bRunning(false);
 static CRITICAL_SECTION g_cs;
 static BOOL            g_csInit   = FALSE;
 static HWND            g_hStatusWnd = NULL;   // protected by g_cs
@@ -561,6 +567,32 @@ static void DoSend(const TelegramJob *job)
         {
             if (g_bSplitLong) take = TG_MAX_TEXT;
             else { take = TG_MAX_TEXT - 3; }  // truncate
+            // FIX [TgSplitBoundary]: never cut inside a UTF-8 multibyte sequence, an HTML tag
+            // (<...>) or an escaped entity (&...;). A severed sequence makes the JSON invalid UTF-8
+            // (Telegram drops the whole message -> silent loss) or breaks parse_mode=HTML markup.
+            // Back the cut off to the last safe boundary; keep at least 1 byte so we always progress.
+            {
+                int safe = take;
+                while (safe > 1)
+                {
+                    unsigned char c = (unsigned char)szText[chunkStart + safe];
+                    if ((c & 0xC0) == 0x80) { safe--; continue; }   // mid UTF-8 continuation byte
+                    // don't end while still inside an unfinished '<...>' tag or '&...;' entity
+                    int j = chunkStart, openTag = 0, openAmp = 0;
+                    for (; j < chunkStart + safe; j++)
+                    {
+                        char k = szText[j];
+                        if      (k == '<') openTag = 1;
+                        else if (k == '>') openTag = 0;
+                        else if (k == '&') { openAmp = 1; }
+                        else if (k == ';') openAmp = 0;
+                        else if (openAmp && (k == ' ' || k == '<' || k == '&')) openAmp = 0;
+                    }
+                    if (openTag || openAmp) { safe--; continue; }
+                    break;
+                }
+                take = safe;
+            }
         }
         memcpy(chunk, szText + chunkStart, take);
         chunk[take] = '\0';
@@ -662,9 +694,15 @@ void TelegramShutdown(void)
         CloseHandle(g_hThread);
         g_hThread = NULL;
     }
-    if (g_hEvent) { CloseHandle(g_hEvent); g_hEvent = NULL; }
+    // FIX [TgEventRace]: tear down the event and queue under g_cs so a decoder-thread EnqueueJob
+    // can't be mid-SetEvent on this handle, nor tear the ring indices, while we close them.
+    HANDLE ev = NULL;
+    if (g_csInit) EnterCriticalSection(&g_cs);
+    ev = g_hEvent; g_hEvent = NULL;
     g_qHead = g_qTail = 0;
     ZeroMemory(g_groupAcc, sizeof(g_groupAcc));   // FIX [TgGroupBatch]
+    if (g_csInit) LeaveCriticalSection(&g_cs);
+    if (ev) CloseHandle(ev);
 }
 
 void TelegramDestroy(void)
@@ -687,9 +725,12 @@ static void EnqueueJob(const TelegramJob *job)
         g_queue[g_qTail] = *job;
         g_qTail = (g_qTail + 1) % TG_QUEUE_SIZE;
     }
-    HANDLE hEv = g_hEvent;   // FIX [TgEventGuard]: snapshot under the lock; guard against a NULL handle
+    // FIX [TgEventRace]: signal WHILE holding the lock. Previously the event was snapshotted under
+    // the lock but SetEvent ran after LeaveCriticalSection, so a concurrent TelegramShutdown (GUI
+    // thread) could CloseHandle(g_hEvent) in the gap, leaving this SetEvent to hit a closed/recycled
+    // handle. Shutdown now also clears the handle under g_cs, closing the window completely.
+    if (g_hEvent) SetEvent(g_hEvent);
     LeaveCriticalSection(&g_cs);
-    if (hEv) SetEvent(hEv);   // skip if Shutdown already closed/cleared the event
 }
 
 void TelegramNotify(const char *capcode, const char *message, const char *label,

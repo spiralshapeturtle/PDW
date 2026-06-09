@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
 #define PDW_VERSION_MINOR  6
-#define PDW_VERSION_PATCH  1
-#define PDW_VERSION_STR    "3.6.1"
+#define PDW_VERSION_PATCH  2
+#define PDW_VERSION_STR    "3.6.2"
 
 #define IDC_STATIC             -1
 
