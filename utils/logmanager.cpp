@@ -412,9 +412,20 @@ void LogManager::WriteEntries(Entry* entries, int count)
     // followed by MQTT followed by Telegram) don't cause redundant fopen/fclose pairs.
     // The drain buffer is a scratch copy owned solely by the worker thread, so in-place
     // sorting is safe. Entry is private so use a lambda comparator (C++11).
+    //
+    // FIX [LogWriteOrder]: qsort is NOT stable, so sorting purely on 'path' silently
+    // reordered lines that share the same file (every monitor.log line has the same path).
+    // That scrambled multi-line entries on disk - most visibly FlexGroupMode group calls,
+    // where a header line and its indented subscriber lines are separate writes that must
+    // stay in order. Callers pass 'entries' in FIFO order, so stamp each with its incoming
+    // index and break path-ties on that index: same grouping, original order preserved.
+    for (int s = 0; s < count; s++) entries[s].seq = s;
     qsort(entries, count, sizeof(Entry), [](const void* a, const void* b) -> int {
-        return strcmp(static_cast<const Entry*>(a)->path,
-                      static_cast<const Entry*>(b)->path);
+        const Entry* ea = static_cast<const Entry*>(a);
+        const Entry* eb = static_cast<const Entry*>(b);
+        int c = strcmp(ea->path, eb->path);
+        if (c != 0) return c;
+        return (ea->seq < eb->seq) ? -1 : (ea->seq > eb->seq) ? 1 : 0;
     });
 
     int i = 0;

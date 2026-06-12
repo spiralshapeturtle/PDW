@@ -90,6 +90,8 @@ private:
         char path[MAX_PATH];     // destination file path (computed at write time)
         char line[LM_LINE_MAX];  // formatted line including '\n'
         int  lineLen;
+        int  seq;                // FIX [LogWriteOrder]: FIFO index, used as stable tiebreaker when
+                                 // grouping the drain batch by path (qsort is not stable).
     };
 
     // Ring buffer state (protected by m_cs)
