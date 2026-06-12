@@ -554,6 +554,8 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 						int  lmLen2 = _snprintf_s(lmBuf2, sizeof(lmBuf2), _TRUNCATE,
 						                           "%i %s %s  %s\n",
 						                           2029568+groupbit, szCurrentTime, szCurrentDate, message_buffer);
+						// FIX [LogLineSplit]: keep truncated line + force '\n' instead of dropping.
+						if (lmLen2 < 0) { lmLen2 = (int)strlen(lmBuf2); lmBuf2[lmLen2-1] = '\n'; }
 						if (lmLen2 > 0) LogManager::Get().WriteLineTo(blkPath, lmBuf2, lmLen2);
 					}
 					nCount_Blocked++;
@@ -639,6 +641,8 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 							                          szCurrentDate, szCurrentTime,
 							                          capcode, iCurrentFrame,
 							                          szReason, message_buffer);
+							// FIX [LogLineSplit]: keep truncated line + force '\n' instead of dropping.
+							if (lmLen < 0) { lmLen = (int)strlen(lmBuf); lmBuf[lmLen-1] = '\n'; }
 							if (lmLen > 0) LogManager::Get().WriteLineTo(szFile, lmBuf, lmLen);
 						}
 					}
@@ -775,9 +779,9 @@ void Remove_MissedGroupcall(int groupbit)
 	EnsureGroupcallLogHeader(szFile);
 
 	// Accumulate full MISSED line. Worst case: MAXIMUM_GROUPSIZE (1000) members ×
-	// 8 bytes each + ~80-byte header = ~8080 bytes.  WriteLineTo caps at LM_LINE_MAX
-	// (1024), so we write directly to avoid silently dropping member capcodes.
-	// Missed-groupcall events are rare; per-call fopen/fwrite/fclose is acceptable.
+	// 8 bytes each + ~80-byte header = ~8080 bytes.  Written directly (not via the
+	// ring buffer); FIX [LogLineSplit] removed the old LM_LINE_MAX cap in WriteLineTo,
+	// but missed-groupcall events are rare so per-call fopen/fwrite/fclose stays fine.
 	const int kMissedBufSize = MAXIMUM_GROUPSIZE * 8 + 128;
 	char *lmBuf = new (std::nothrow) char[kMissedBufSize];
 	if (!lmBuf) return;   // out-of-memory — skip log, don't crash
@@ -1065,10 +1069,11 @@ void ShowMessage()
 								            Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
 								            szGroupType, Current_MSG[MSG_MESSAGE]);
 							}
-							char lmBufHdr[LM_LINE_MAX];
-							int  lmLenHdr = _snprintf_s(lmBufHdr, sizeof(lmBufHdr), _TRUNCATE,
-							                             "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-							if (lmLenHdr > 0) LogManager::Get().WriteLineTo(szFilename, lmBufHdr, lmLenHdr);
+							// FIX [LogLineSplit]: write separator + full line directly. The old
+							// 1 KB lmBuf squeeze made _snprintf_s return -1 on long lines and the
+							// lmLen>0 guard then silently dropped the whole header from the log.
+							if (bNewLine) LogManager::Get().WriteLineTo(szFilename, "\n", 1);
+							LogManager::Get().WriteLineTo(szFilename, szLogFileLine, -1);
 							bLogged[MONITOR] = true;
 							bNewLine = false;
 						}
@@ -1117,10 +1122,10 @@ void ShowMessage()
 
 						strcat(szLogFileLine, "\n");
 
-						char lmBuf[LM_LINE_MAX];
-						int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-						                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-						if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+						// FIX [LogLineSplit]: write separator + full line directly (no 1 KB squeeze
+						// that silently dropped long lines — see FlexGroup branch above).
+						if (bNewLine) LogManager::Get().WriteLineTo(szFilename, "\n", 1);
+						LogManager::Get().WriteLineTo(szFilename, szLogFileLine, -1);
 					}
 
 					LogFileHandling(NULL, NULL, CLOSE_FILES);  // reject path returns early; reset handle
@@ -1169,6 +1174,9 @@ void ShowMessage()
 					                          Current_MSG[MSG_TIME],
 					                          Current_MSG[MSG_DATE],
 					                          Current_MSG[MSG_MESSAGE]);
+					// FIX [LogLineSplit]: on truncation (-1) keep the truncated line instead of
+					// dropping it, and force the trailing '\n' so the next entry cannot glue on.
+					if (lmLen < 0) { lmLen = (int)strlen(lmBuf); lmBuf[lmLen-1] = '\n'; }
 					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
 				}
 				nCount_Blocked++;
@@ -1648,10 +1656,13 @@ void ShowMessage()
 				// the correct (legacy or ISO) timestamp at the group-header sprintf above.
 				if (isdigit(szLogFileLine[0]) && !bLogged[MONITOR] && !bCombine[MONITOR])
 				{
-					char lmBuf[LM_LINE_MAX];
-					int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-					                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+					// FIX [LogLineSplit]: write separator + full header directly. szLogFileLine
+					// holds the group header INCLUDING the message text (up to MAX_STR_LEN);
+					// squeezing it through a 1 KB lmBuf made _snprintf_s return -1 on long
+					// messages and the lmLen>0 guard silently dropped the header — the indented
+					// capcode/label lines below then appeared under the PREVIOUS message's text.
+					if (bNewLine) LogManager::Get().WriteLineTo(szFilename, "\n", 1);
+					LogManager::Get().WriteLineTo(szFilename, szLogFileLine, -1);
 					bNewLine = false;
 				}
 				{
@@ -1690,10 +1701,10 @@ void ShowMessage()
 				}
 				strcat(szLogFileLine, "\n");
 
-				char lmBuf[LM_LINE_MAX];
-				int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-				                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-				if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+				// FIX [LogLineSplit]: write separator + full line directly — the 1 KB
+				// squeeze silently dropped lines whose message+label exceeded LM_LINE_MAX.
+				if (bNewLine) LogManager::Get().WriteLineTo(szFilename, "\n", 1);
+				LogManager::Get().WriteLineTo(szFilename, szLogFileLine, -1);
 			}
 		}
 
@@ -1742,10 +1753,9 @@ void ShowMessage()
 					{
 						if (isdigit(szLogFileLine[0]) && !bLogged[FILTER] && !bCombine[FILTER])
 						{
-							char lmBuf[LM_LINE_MAX];
-							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-							                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-							if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+							// FIX [LogLineSplit]: full header directly — see monitor-log comment.
+							if (bNewLine) LogManager::Get().WriteLineTo(szFilename, "\n", 1);
+							LogManager::Get().WriteLineTo(szFilename, szLogFileLine, -1);
 							bLogged[FILTER] = true;
 							bNewLine = false;
 						}
@@ -1758,10 +1768,9 @@ void ShowMessage()
 					}
 					else
 					{
-						char lmBuf[LM_LINE_MAX];
-						int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-						                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-						if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+						// FIX [LogLineSplit]: full line directly — see monitor-log comment.
+						if (bNewLine) LogManager::Get().WriteLineTo(szFilename, "\n", 1);
+						LogManager::Get().WriteLineTo(szFilename, szLogFileLine, -1);
 					}
 				}
 			}
@@ -1798,10 +1807,9 @@ void ShowMessage()
 						{
 							if (!bLogged[SEPARATE] && isdigit(szLogFileLine[0]))
 							{
-								char lmBuf[LM_LINE_MAX];
-								int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-								                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-								if (lmLen > 0) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], lmBuf, lmLen);
+								// FIX [LogLineSplit]: full header directly — see monitor-log comment.
+								if (bNewLine) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], "\n", 1);
+								LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], szLogFileLine, -1);
 							}
 							char lmBuf[LM_LINE_MAX];
 							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
@@ -1812,10 +1820,9 @@ void ShowMessage()
 						}
 						else
 						{
-							char lmBuf[LM_LINE_MAX];
-							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-							                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-							if (lmLen > 0) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], lmBuf, lmLen);
+							// FIX [LogLineSplit]: full line directly — see monitor-log comment.
+							if (bNewLine) LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], "\n", 1);
+							LogManager::Get().WriteLineTo(szSepfilenames[CURRENT], szLogFileLine, -1);
 						}
 					}
 				}

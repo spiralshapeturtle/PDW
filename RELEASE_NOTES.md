@@ -15,6 +15,21 @@
   rejected line. Both issues are now fixed: intra-group separators are suppressed for rejected
   subscribers exactly as for non-rejected ones, and FlexGroupMode logging writes rejected subscribers
   in the correct indented format under the group header.
+- **Long log lines no longer dropped or glued together (FIX [LogLineSplit]):** every message-log write
+  squeezed the formatted line through a fixed 1 KB buffer before handing it to the log manager. A line
+  longer than that - easily reached by a long message plus label, and even faster when linefeed
+  characters add per-line alignment padding - hit two failure modes: (1) the truncating formatter
+  returns -1 and the write guard then silently **dropped the entire line**, so in FlexGroupMode the
+  group header (which carries the message text) vanished while the short indented capcode+label lines
+  still appeared - those labels then showed up under the *previous* message's text; (2) where a clamped
+  write did go through, the trailing newline was cut off, so the **next** entry was glued onto the same
+  line - capcodes and labels of one message appearing in the middle of another message's text. Message
+  texts and capcode labels therefore appeared to mix and jump between entries. Fixed end-to-end: the
+  log manager now splits long lines across consecutive ring-buffer slots under a single lock (so they
+  are reassembled byte-exact on disk, with FIFO order already guaranteed since the 3.6.5 stable-sort
+  fix), the monitor/filter/separate-file writers pass the full line without the 1 KB squeeze, and the
+  remaining fixed-size writers (blocked/missed logs) keep a truncated line with a forced newline
+  instead of dropping it. Message text and its label now always stay together on one record.
 
 ---
 

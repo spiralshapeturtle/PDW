@@ -228,12 +228,19 @@ void LogManager::Write(LogCat cat, const char* fmt, ...)
     va_start(ap, fmt);
     int written = _vsnprintf_s(line + pos, sizeof(line) - pos, _TRUNCATE, fmt, ap);
     va_end(ap);
-    if (written < 0) written = 0;
+    // FIX [LogLineSplit]: _vsnprintf_s returns -1 on truncation but the buffer DOES
+    // hold the truncated content. The old 'written = 0' discarded that content and
+    // logged a bare timestamp. Recover the actual length instead.
+    if (written < 0) written = (int)strlen(line + pos);
     pos += written;
 
-    // Ensure newline.
-    if (pos < (int)sizeof(line) - 1 && (pos == 0 || line[pos-1] != '\n'))
-        line[pos++] = '\n';
+    // Ensure newline — when the buffer is full, sacrifice the last content char
+    // so the line stays newline-terminated and the next entry cannot glue onto it.
+    if (pos == 0 || line[pos-1] != '\n')
+    {
+        if (pos < (int)sizeof(line) - 1) line[pos++] = '\n';
+        else                             line[pos-1] = '\n';
+    }
     line[pos] = '\0';
 
     char path[MAX_PATH];
@@ -250,7 +257,7 @@ void LogManager::WriteRaw(LogCat cat, const char* line, int len)
 
     if (len < 0) len = (int)strlen(line);
     if (len == 0) return;
-    if (len >= LM_LINE_MAX) len = LM_LINE_MAX - 1;
+    // FIX [LogLineSplit]: no clamp — Emit() splits long lines (see WriteLineTo).
 
     SYSTEMTIME st;
     GetLocalTime(&st);
@@ -266,7 +273,10 @@ void LogManager::WriteLineTo(const char* path, const char* line, int len)
     if (!m_initialized || !path || !line) return;
     if (len < 0) len = (int)strlen(line);
     if (len == 0) return;
-    if (len >= LM_LINE_MAX) len = LM_LINE_MAX - 1;
+    // FIX [LogLineSplit]: no LM_LINE_MAX clamp here. Clamping cut the trailing '\n'
+    // off long lines, gluing the next log entry onto the same line (capcode/label
+    // of the next message appeared behind foreign message text). Emit() now splits
+    // long lines across consecutive ring-buffer entries instead.
     Emit(path, line, len);
 }
 
@@ -366,20 +376,34 @@ void LogManager::Emit(const char* path, const char* line, int len)
         return;
     }
 
-    if (m_count >= m_slots) {
-        // Ring buffer full — drop the oldest entry (oldest = head).
-        m_head  = (m_head + 1) % m_slots;
-        m_count--;
-    }
+    // FIX [LogLineSplit]: a line longer than one slot is split across consecutive
+    // entries, pushed under this single lock hold so no other thread's entry can
+    // interleave between the chunks. The drain path groups by path and preserves
+    // FIFO order within a path (FIX [LogWriteOrder]), so the chunks are written
+    // back-to-back and the line is reassembled byte-exact on disk. Previously the
+    // line was cut at LM_LINE_MAX-1: the trailing '\n' vanished and the next log
+    // entry was glued onto the truncated text (message texts and capcode labels
+    // of different messages ran together on one line).
+    int off = 0;
+    do {
+        int copy = len - off;
+        if (copy > LM_LINE_MAX - 1) copy = LM_LINE_MAX - 1;
 
-    Entry& e = m_buf[m_tail];
-    strncpy_s(e.path, sizeof(e.path), path, _TRUNCATE);
-    int copy = (len < LM_LINE_MAX - 1) ? len : LM_LINE_MAX - 1;
-    memcpy(e.line, line, copy);
-    e.line[copy] = '\0';
-    e.lineLen    = copy;
-    m_tail  = (m_tail + 1) % m_slots;
-    m_count++;
+        if (m_count >= m_slots) {
+            // Ring buffer full — drop the oldest entry (oldest = head).
+            m_head  = (m_head + 1) % m_slots;
+            m_count--;
+        }
+
+        Entry& e = m_buf[m_tail];
+        strncpy_s(e.path, sizeof(e.path), path, _TRUNCATE);
+        memcpy(e.line, line + off, copy);
+        e.line[copy] = '\0';
+        e.lineLen    = copy;
+        m_tail  = (m_tail + 1) % m_slots;
+        m_count++;
+        off += copy;
+    } while (off < len);
 
     bool halfFull = (m_count >= m_slots / 2);
 
