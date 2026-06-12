@@ -1,3 +1,23 @@
+# PDW 3.6.6 - Release Notes
+
+## New in 3.6.6
+
+### Bug fixes
+
+- **Reject log formatting inside group calls (FIX [LogRejected]):** when "Also log rejected messages"
+  was enabled and a rejected capcode was part of a FLEX group call, the on-disk monitor log became
+  garbled: a spurious blank separator line appeared before every rejected subscriber entry (caused by
+  the local `bSeparator` always defaulting to `true` in the early-return path, missing the
+  `bShown[MONITOR]` suppression the normal pane-loop applies). Additionally, with FlexGroupMode compact
+  logging active, the rejected subscriber was written as a full standalone timestamp+capcode line instead
+  of an indented capcode-only line under the shared group header, and `bLogged[MONITOR]` was never set,
+  so a subsequent non-rejected subscriber would re-emit the group header after the mis-formatted
+  rejected line. Both issues are now fixed: intra-group separators are suppressed for rejected
+  subscribers exactly as for non-rejected ones, and FlexGroupMode logging writes rejected subscribers
+  in the correct indented format under the group header.
+
+---
+
 # PDW 3.6.5 - Release Notes
 
 ## New in 3.6.5
@@ -49,8 +69,8 @@
   message log itself is enabled, and the setting persists in PDW.ini (`LogRejectedMessages`). It is
   off by default, so existing behaviour is unchanged unless you turn it on. If the reject filter carries
   a label, the logged line includes that label just like a normal monitored entry (honouring the "Log
-  labels" option). Note: when FlexGroupMode is active the rejected line is written as a standalone
-  column-format row and does not fold into the compact GROUP-N group layout.
+  labels" option). When FlexGroupMode compact logging is active, rejected subscribers appear as indented
+  capcode lines under the shared group header, matching the format of non-rejected subscribers.
 
 ### Filter improvements
 

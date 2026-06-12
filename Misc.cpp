@@ -1025,46 +1025,103 @@ void ShowMessage()
 					// sentinel because this reject path returns early.
 					LogFileHandling(MONITOR, szFilename, OPEN_FILE);
 					bNewFile = (!FileExists(szFilename)) ? true : false;
+
+					// FIX [LogRejected]: suppress intra-group-call separator — mirrors the
+					// pane-loop check (bShown[pane] -> bSeparator=false at line ~1228).
+					// Without this, bSeparator[MONITOR] defaults to true and inserts a spurious
+					// blank line before every rejected subscriber entry inside a group call.
+					if (iConvertingGroupcall && bShown[MONITOR])
+						bSeparator[MONITOR] = false;
 					bNewLine = (bSeparator[MONITOR] && !bNewFile) ? true : false;
 
-					CollectLogfileLine(Profile.ColLogfile, false);
-
-					if (bFragment) { strcat(szLogFileLine, " "); strcat(szLogFileLine, szFragment); }
-
-					// FIX [LogRejected]: append the filter label exactly as a normal monitored line
-					// would, so the rejected entry is a complete record. szCurrentLabel[1] (the
-					// "- label -" form) is only built later in the normal display path - after this
-					// reject early-return - so build it here from szCurrentLabel[0], which is already
-					// set near the top of ShowMessage() when the matched filter carries a label. For a
-					// reject filter without a label this is a no-op and the line stays a clean column row.
-					if (szCurrentLabel[0][0] && !szCurrentLabel[1][0])
-						sprintf(szCurrentLabel[1], "- %s -", szCurrentLabel[0]);
-
-					if (szCurrentLabel[1][0] && Profile.LabelLog)
+					if (iConvertingGroupcall && (Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING))
 					{
-						if (Profile.LabelNewline)
+						// FIX [LogRejected]: in FlexGroupMode logging, rejected group-call
+						// subscribers must use the same indented capcode format as non-rejected
+						// ones, not a full CollectLogfileLine timestamp line. Write the group
+						// header once (mirrors pane-loop lines ~1392-1412), then the subscriber
+						// as an indented capcode line. Also set bLogged[MONITOR] so a later
+						// non-rejected subscriber does not re-emit the group header after the
+						// rejected subscriber's entry has already appeared in the log.
+						if (!bLogged[MONITOR])
 						{
-							strcat(szLogFileLine, "\n");
-							memset(szLabelspacing, 0, sizeof(szLabelspacing));
+							char szGroupType[16];
+							sprintf(szGroupType, "GROUP%s", aGroupnumbers[iConvertingGroupcall - 1]);
+							if (Profile.logISO8601)
 							{
-								int nSp = iLabelspace_Logfile[MONITOR] + 1;
-								if (nSp < 0) nSp = 0;
-								if (nSp > (int)sizeof(szLabelspacing) - 1)
-									nSp = (int)sizeof(szLabelspacing) - 1;
-								if (nSp > 0) memset(szLabelspacing, ' ', (size_t)nSp);
+								SYSTEMTIME ist; GetLocalTime(&ist);
+								char isoBuf[22];
+								_snprintf_s(isoBuf, sizeof(isoBuf), _TRUNCATE,
+								            "%04d-%02d-%02d %02d:%02d:%02d",
+								            ist.wYear, ist.wMonth, ist.wDay,
+								            ist.wHour, ist.wMinute, ist.wSecond);
+								_snprintf_s(szLogFileLine, sizeof(szLogFileLine), _TRUNCATE,
+								            "%s  %s  %s\n", isoBuf, szGroupType, Current_MSG[MSG_MESSAGE]);
 							}
-							strcat(szLogFileLine, szLabelspacing);
+							else
+							{
+								_snprintf_s(szLogFileLine, sizeof(szLogFileLine), _TRUNCATE,
+								            "%s %s  %s  %s\n",
+								            Current_MSG[MSG_TIME], Current_MSG[MSG_DATE],
+								            szGroupType, Current_MSG[MSG_MESSAGE]);
+							}
+							char lmBufHdr[LM_LINE_MAX];
+							int  lmLenHdr = _snprintf_s(lmBufHdr, sizeof(lmBufHdr), _TRUNCATE,
+							                             "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+							if (lmLenHdr > 0) LogManager::Get().WriteLineTo(szFilename, lmBufHdr, lmLenHdr);
+							bLogged[MONITOR] = true;
+							bNewLine = false;
 						}
-						else strcat(szLogFileLine, " ");
-						strcat(szLogFileLine, szCurrentLabel[1]);
+						{
+							char lmBuf[LM_LINE_MAX];
+							int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+							                         "%s    %s  %s\n",
+							                         bFragment ? szFragment : (Profile.logISO8601 ? "                 " : "               "),
+							                         Current_MSG[MSG_CAPCODE], szCurrentLabel[0]);
+							if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+						}
 					}
+					else
+					{
+						CollectLogfileLine(Profile.ColLogfile, false);
 
-					strcat(szLogFileLine, "\n");
+						if (bFragment) { strcat(szLogFileLine, " "); strcat(szLogFileLine, szFragment); }
 
-					char lmBuf[LM_LINE_MAX];
-					int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
-					                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
-					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+						// FIX [LogRejected]: append the filter label exactly as a normal monitored line
+						// would, so the rejected entry is a complete record. szCurrentLabel[1] (the
+						// "- label -" form) is only built later in the normal display path - after this
+						// reject early-return - so build it here from szCurrentLabel[0], which is already
+						// set near the top of ShowMessage() when the matched filter carries a label. For a
+						// reject filter without a label this is a no-op and the line stays a clean column row.
+						if (szCurrentLabel[0][0] && !szCurrentLabel[1][0])
+							sprintf(szCurrentLabel[1], "- %s -", szCurrentLabel[0]);
+
+						if (szCurrentLabel[1][0] && Profile.LabelLog)
+						{
+							if (Profile.LabelNewline)
+							{
+								strcat(szLogFileLine, "\n");
+								memset(szLabelspacing, 0, sizeof(szLabelspacing));
+								{
+									int nSp = iLabelspace_Logfile[MONITOR] + 1;
+									if (nSp < 0) nSp = 0;
+									if (nSp > (int)sizeof(szLabelspacing) - 1)
+										nSp = (int)sizeof(szLabelspacing) - 1;
+									if (nSp > 0) memset(szLabelspacing, ' ', (size_t)nSp);
+								}
+								strcat(szLogFileLine, szLabelspacing);
+							}
+							else strcat(szLogFileLine, " ");
+							strcat(szLogFileLine, szCurrentLabel[1]);
+						}
+
+						strcat(szLogFileLine, "\n");
+
+						char lmBuf[LM_LINE_MAX];
+						int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+						                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+						if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+					}
 
 					LogFileHandling(NULL, NULL, CLOSE_FILES);  // reject path returns early; reset handle
 				}

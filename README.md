@@ -4,7 +4,7 @@
 
 ---
 
-**Version 3.6.5** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.6.6** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -507,6 +507,9 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v3.6.6 (June 2026)
+- **Reject log formatting inside group calls fixed** — when "Also log rejected messages" was on and a rejected capcode appeared inside a FLEX group call, the monitor log got garbled: a spurious blank line appeared before every rejected subscriber entry, and with FlexGroupMode compact logging the rejected subscriber was written as a standalone timestamp line instead of the correct indented capcode line under the group header. Both issues are fixed; rejected group-call subscribers now integrate cleanly into the log in the same format as non-rejected ones.
 
 ### v3.6.5 (June 2026)
 - **Whole-word matching with `=`** — prefix a filter term with `=` to match it only as a complete word, not inside a longer word, e.g. `alpha&=cat` matches the word `cat` but no longer false-matches on `category`. A word boundary is any non-alphanumeric character or the start/end of the message; the `=` applies per term so substring and whole-word terms can be mixed. This completes the filter-text operator set: `^` (starts with), `&` (AND), `|` (OR) and `=` (whole word) — all documented with examples in the manual (section 9.3)
