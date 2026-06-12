@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
 #define PDW_VERSION_MINOR  6
-#define PDW_VERSION_PATCH  3
-#define PDW_VERSION_STR    "3.6.3"
+#define PDW_VERSION_PATCH  5
+#define PDW_VERSION_STR    "3.6.5"
 
 #define IDC_STATIC             -1
 
@@ -634,3 +634,5 @@
 #define IDC_LOG_FLUSH_MS          1501   // edit       flush interval in ms
 #define IDC_LOG_BUFFER_SLOTS      1502   // edit       ring-buffer slot count
 #define IDC_LOG_ISO_DATETIME      1503   // checkbox  "ISO date format in log content"
+// FIX [LogRejected]: global option to also write reject-filtered messages to the message log
+#define IDC_LOG_REJECTED          1504   // checkbox  "Also log rejected messages"

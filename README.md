@@ -4,7 +4,7 @@
 
 ---
 
-**Version 3.6.3** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.6.5** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -31,6 +31,7 @@ If you already know PDW, here is what you get over the original 3.2 release:
 | **x64 build** | 64-bit binary for modern systems |
 | **Central log manager** | All log output through one path; uniform timestamps; write buffering reduces SSD write amplification on busy POCSAG/FLEX networks — configure flush interval and buffer size in the Logfile dialog |
 | **ISO timestamps in logs** | Optional `YYYY-MM-DD HH:MM:SS` format inside monitor/filter log lines (sortable); all log files now date-rotate daily |
+| **Log rejected messages** | Optional global Logfile setting that keeps reject-filtered messages in the on-disk message log while they stay suppressed on screen and in every feed |
 
 ---
 
@@ -57,7 +58,9 @@ Each filter entry matches on **capcode**, **label**, or **message text** and can
 - Write to a separate log file (up to 3 per filter)
 - Mark as monitor-only or reject
 
-Message-text matching supports substring search, `&` (AND, all parts present in order), `|` (OR, any term matches — e.g. `P 1&BR|P 1&HV`), and a leading `^` (anchor to the start of the message). `&` binds tighter than `|`. The *Match exact text* option is disabled automatically while the filter text uses `&` or `|`.
+A **reject** filter can be narrowed by combining a capcode with a Text value, so it only rejects messages from that capcode that also contain the text. A reject filter normally suppresses its messages everywhere, including the on-disk log. The global **"Also log rejected messages"** option in the Logfile dialog optionally keeps them in the monitor log file while they stay hidden on screen and out of every feed.
+
+Message-text matching supports substring search, `&` (AND, all parts present in order), `|` (OR, any term matches — e.g. `alpha&bravo|alpha&charlie`), a leading `^` (anchor to the start of the message, e.g. `^ALARM` matches only messages that begin with `ALARM`), and `=` before a word for whole-word matching (e.g. `=cat` matches `cat` but not `category`). `&` binds tighter than `|`. The *Match exact text* option is disabled automatically while the filter text uses `&` or `|`.
 
 Filter labels and filter text each support up to 256 characters; COM ports ≥ 10 are supported. Search-while-typing is available in the filter list. The filter list font follows the main window font setting.
 
@@ -505,8 +508,14 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 
 ## Changelog highlights
 
+### v3.6.5 (June 2026)
+- **Whole-word matching with `=`** — prefix a filter term with `=` to match it only as a complete word, not inside a longer word, e.g. `alpha&=cat` matches the word `cat` but no longer false-matches on `category`. A word boundary is any non-alphanumeric character or the start/end of the message; the `=` applies per term so substring and whole-word terms can be mixed. This completes the filter-text operator set: `^` (starts with), `&` (AND), `|` (OR) and `=` (whole word) — all documented with examples in the manual (section 9.3)
+
+### v3.6.4 (June 2026)
+- **Command file runs from its own folder** — an external command file triggered by a filter now starts with its working directory set to the folder it lives in, so a helper that keeps its config and log files next to itself works again even when it sits in a separate folder; previously it inherited PDW's working directory and could fail to find its config or write its logs into the PDW folder
+
 ### v3.6.3 (June 2026)
-- **OR operator in filter text** — message-text filters now support `|` (OR) alongside `&` (AND), e.g. `P 1&BR|P 1&HV`; `&` binds tighter than `|`. The *Match exact text* option is greyed out automatically while the text uses `&` or `|`
+- **OR operator in filter text** — message-text filters now support `|` (OR) alongside `&` (AND), e.g. `alpha&bravo|alpha&charlie`; `&` binds tighter than `|`. The *Match exact text* option is greyed out automatically while the text uses `&` or `|`
 - **Filter text length raised to 256** — message-text patterns now accept up to 256 characters (was 120), matching the label field; existing `filters.ini` files load unchanged
 - **Hardening** — the two fixed-size buffers that build strings from the longer filter text (the filter-row display string and the per-filter wave-file name) are now bounds-checked so a long text cannot overflow them
 

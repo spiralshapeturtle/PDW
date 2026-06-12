@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 3.6.3** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 3.6.5** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -62,7 +62,7 @@
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (3.6.3) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
+This version (3.6.5) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
 
 ---
 
@@ -233,6 +233,12 @@ Each filter can independently trigger any combination of the following:
 | **Monitor only** | Show on screen but exclude from main log and feed outputs |
 | **Reject** | Suppress this message entirely — do not show or log |
 
+A reject filter can be narrowed to a specific message by combining the capcode with a **Text** value: the message is only rejected when **both** the capcode **and** the text match. This lets you reject, for example, only the messages from a capcode that contain a given word, while letting all other messages from the same capcode through normally.
+
+When **Reject** is checked, the action controls that have no effect on a rejected message - Sound, E-mail, Telegram, Pushover, Monitor only, Command and separate filter files - are greyed out, because a rejected message is suppressed before any of those run. The **Label** field stays available: a reject filter is never shown on screen, but if you give it a label it is written next to the message in the rejected line of the on-disk log (when "Also log rejected messages" is enabled), which makes that record easier to read.
+
+A rejected message is normally kept out of every output, including the on-disk message log. The global **"Also log rejected messages"** option in the Logfile dialog (see section 10.8) overrides only the message-log part: when it is on, rejected messages are still written to the monitor log file, while staying suppressed on screen, in the filter log and in all feeds.
+
 Filter labels and filter text patterns can each be up to **256 characters** long.
 
 ### 9.3 Message text matching
@@ -241,12 +247,27 @@ When a filter has a **Text** value, the message must contain that text for the f
 
 | Operator | Meaning | Example | Matches when |
 |----------|---------|---------|--------------|
-| (plain)  | Substring match | `BR` | the message contains `BR` anywhere |
-| `&`      | AND - all parts must be present, in order | `P 1&BR` | the message contains `P 1` **and**, after it, `BR` |
-| `\|`      | OR - any one term may match (lowest precedence) | `P 1&BR\|P 1&HV` | the message matches `P 1` AND `BR`, **or** `P 1` AND `HV` |
+| (plain)  | Substring match | `alpha` | the message contains `alpha` anywhere |
+| `&`      | AND - all parts must be present, in order | `alpha&bravo` | the message contains `alpha` **and**, after it, `bravo` |
+| `\|`      | OR - any one term may match (lowest precedence) | `alpha&bravo\|alpha&charlie` | the message matches `alpha` AND `bravo`, **or** `alpha` AND `charlie` |
 | `^`      | Anchor - message must *start* with the text | `^ALARM` | the message begins with `ALARM` |
+| `=`      | Whole word - the term matches only as a complete word, not inside a longer word | `alpha&=cat` | `cat` matches only as a standalone word, **not** inside `category` |
 
-`&` binds tighter than `|`, so `A&B|C&D` reads as `(A AND B) OR (C AND D)`, just like normal arithmetic precedence. An OR list such as `Zeist|Bunnik|Huis ter Heide` matches if **any** of the three terms appears. Empty terms are ignored, so `|alpha` and `alpha|` both behave like plain `alpha`.
+`&` binds tighter than `|`, so `A&B|C&D` reads as `(A AND B) OR (C AND D)`, just like normal arithmetic precedence. An OR list such as `alpha|bravo|charlie` matches if **any** of the three terms appears. Empty terms are ignored, so `|alpha` and `alpha|` both behave like plain `alpha`.
+
+Put `=` directly before a single word or term to require a **whole-word** match. A word boundary is any non-alphanumeric character (space, punctuation, dash) or the start/end of the message. This is the way to stop short codes from matching inside longer words: `=cat` matches `cat` and `the cat-1` but not `category`. The `=` applies per term, so you can mix it freely - e.g. `alpha&=cat` keeps `alpha` as a normal substring while requiring `cat` to be a whole word. Whole-word matching stays case-insensitive.
+
+**Worked examples** (all operators together):
+
+| Filter text | Matches |
+|-------------|---------|
+| `alpha` | any message containing `alpha` |
+| `alpha&bravo` | messages containing both `alpha` and `bravo` |
+| `alpha\|bravo` | messages containing `alpha` **or** `bravo` |
+| `alpha&bravo\|alpha&charlie` | `(alpha AND bravo)` **or** `(alpha AND charlie)` |
+| `^alpha` | messages that **start with** `alpha` |
+| `=cat` | the whole word `cat` only - not `category` or `vacate` |
+| `alpha&=cat` | `alpha` anywhere **and** `cat` as a whole word |
 
 The **Match exact text** checkbox compares the whole message against the filter text instead of doing a substring search. Because exact-whole-message matching is incompatible with the `&`, `|`, and `^` operators, the checkbox is automatically greyed out (and cleared) as soon as the filter text contains `&` or `|`. It becomes available again when the text no longer uses those operators.
 
@@ -723,6 +744,8 @@ All PDW log files use the date-stamped naming convention `YYMMDD_<type>.log` and
 
 Recommended for busy POCSAG/FLEX networks where many messages per second can cause high write amplification on an SSD. The maximum log loss on a hard crash equals the flush interval.
 
+**Also log rejected messages** — a global option in the Logfile dialog. By default a filter with the **Reject** action suppresses its messages everywhere, including the on-disk log. With this option enabled, rejected messages are still written to the monitor log file (with the same columns and timestamp as a normal entry) so the log stays a complete record, while remaining suppressed on screen, in the filter log and in every feed (SMTP, MQTT, webhook, etc.). The checkbox is only available when the message log itself is enabled.
+
 ### 10.9 Program options
 
 | Option | Description |
@@ -783,7 +806,7 @@ FLEX is a high-speed paging protocol developed by Motorola.
 
 PDW decodes all three rates simultaneously. Message types: **Alpha**, **Numeric**, **Tone**, **Short-Instruction**, **Frame-Info**, **Group calls**.
 
-**Multi-frame reassembly:** long FLEX alpha messages that span multiple frames are accumulated and displayed as a single complete string.
+**Multi-frame reassembly:** long FLEX alpha messages that span multiple frames are accumulated and displayed as a single complete string. A successfully reassembled message is marked on screen with an asterisk (`*`) directly after the capcode. A fragment that could not (yet) be completed is shown instead with a text marker next to the message - `[fragmented]`, or `[<type> fragment - incomplete]` for an orphan fragment with no prior chain - so you can tell a complete reassembly apart from a partial one.
 
 **Group calls:** a group capcode (range 2029568–2029583) addresses multiple individual pagers simultaneously. PDW displays all subscriber capcodes and their labels together with the group message.
 

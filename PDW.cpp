@@ -659,6 +659,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.logfile_enabled	 = 1;
 	Profile.logfile[0]		 = '\0';
 	Profile.logfile_use_date = 1;
+	Profile.logRejected		 = 0;	// FIX [LogRejected]: off by default - reject stays fully suppressed
 
 	Profile.edit_save_file[0] = '\0';
 	Profile.maximize_flg	  = 1;
@@ -3473,6 +3474,7 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 		CheckDlgButton(hDlg, IDC_LOGFILEEN,      Profile.logfile_enabled);
 		CheckDlgButton(hDlg, IDC_LOGFILEDATE,    Profile.logfile_use_date);
 		CheckDlgButton(hDlg, IDC_LOG_ISO_DATETIME, Profile.logISO8601);
+		CheckDlgButton(hDlg, IDC_LOG_REJECTED,    Profile.logRejected);	// FIX [LogRejected]
 		CheckDlgButton(hDlg, IDC_LOG_BUFFER_EN,   Profile.logBufferEnabled);
 		SetDlgItemInt (hDlg, IDC_LOG_FLUSH_MS,    Profile.logFlushIntervalMs, FALSE);
 		SetDlgItemInt (hDlg, IDC_LOG_BUFFER_SLOTS, Profile.logBufferSlots,    FALSE);
@@ -3506,6 +3508,7 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 		EnableWindow(GetDlgItem(hDlg, IDC_LOGFILEDATE), enabled);
 		EnableWindow(GetDlgItem(hDlg, IDC_LOGFILE),     enabled && !date);
 		EnableWindow(GetDlgItem(hDlg, IDC_LOGBROWSE),   enabled && !date);
+		EnableWindow(GetDlgItem(hDlg, IDC_LOG_REJECTED), enabled);	// FIX [LogRejected]: only when message log is enabled
 
 		if (date)
 		{
@@ -3568,6 +3571,7 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 			case IDC_LOGFILEEN:
 			case IDC_LOGFILEDATE:
 			case IDC_LOG_ISO_DATETIME:
+			case IDC_LOG_REJECTED:	// FIX [LogRejected]: refresh dialog state on toggle
 			case IDC_LOG_BUFFER_EN:
 			{
 				BOOL bBuf = IsDlgButtonChecked(hDlg, IDC_LOG_BUFFER_EN);
@@ -3582,6 +3586,7 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 			Profile.logfile_enabled      = IsDlgButtonChecked(hDlg, IDC_LOGFILEEN);
 			Profile.logfile_use_date     = IsDlgButtonChecked(hDlg, IDC_LOGFILEDATE);
 			Profile.logISO8601           = IsDlgButtonChecked(hDlg, IDC_LOG_ISO_DATETIME);
+			Profile.logRejected          = IsDlgButtonChecked(hDlg, IDC_LOG_REJECTED);	// FIX [LogRejected]
 			Profile.logBufferEnabled     = IsDlgButtonChecked(hDlg, IDC_LOG_BUFFER_EN);
 			{
 				int ms    = (int)GetDlgItemInt(hDlg, IDC_LOG_FLUSH_MS,     NULL, FALSE);
@@ -6943,11 +6948,21 @@ void BuildFilterString(char *temp_str, size_t bufsize, FILTER filter)
 	if (filter.reject)
 	{
 		bfs_cat(temp_str, bufsize, " | REJECT");
-		if (filter.text[0] && !filter.capcode[0])
+		// FIX [RejectText]: show the text criterion in the list for ANY reject filter, not just
+		// text-only ones. A capcode+text reject (e.g. capcode 1180000 only when the message
+		// contains "TEST") now displays as 'FLEX 1180000 | REJECT | "TEST"' so the word filter
+		// is visible in the overview, mirroring how a normal capcode+text filter shows its text.
+		if (filter.text[0])
 		{
 			bfs_cat(temp_str, bufsize, " | \"");
 			bfs_cat(temp_str, bufsize, filter.text);
 			bfs_cat(temp_str, bufsize, "\"");
+		}
+		// FIX [RejectLabel]: show label name in the Ctrl+F overview for reject filters
+		if (filter.label[0])
+		{
+			bfs_cat(temp_str, bufsize, " | ");
+			bfs_cat(temp_str, bufsize, filter.label);
 		}
 		return;
 	}
@@ -8088,7 +8103,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 			case IDC_FILTERTEXT :
 
-			strcpy(szFilterEditHelpText, " Text to filter. Use & for multiple texts, like 'ambulance&urgent'");
+			strcpy(szFilterEditHelpText, " Text to filter. & = AND, | = OR, ^ = starts with, = before a word = whole word");
 
 			break;
 
@@ -8577,7 +8592,9 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		GetDlgItemText(hDlg, IDC_FILTERTEXT, temp, FILTER_TEXT_LEN+1);
 
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTERREJECT), captxt);
-		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_MONITOR_ONLY), captxt);
+		// FIX [RejectActions]: monitor-only is mutually exclusive with reject (checking it clears
+		// reject), so disable it when reject is set instead of letting it silently flip the mode.
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_MONITOR_ONLY), (captxt && !reject));
 
 		if (type != MOBITEX_FILTER)
 		{
@@ -8670,9 +8687,11 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		}
 		else EnableWindow(GetDlgItem(hDlg, IDC_FILTERAUDIO), false);
 
-		EnableWindow(GetDlgItem(hDlg, IDC_FILTERLABEL),      (!reject && captxt));
-		EnableWindow(GetDlgItem(hDlg, IDC_FILTERLABELEN),    (!reject && label));
-		EnableWindow(GetDlgItem(hDlg, IDC_FILTERLABELCOLOR), (!reject && label));
+		// FIX [RejectLabel]: label controls stay available for reject filters - the label has no
+		// on-screen effect there but is written to the rejected line in the message log.
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTERLABEL),      captxt);
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTERLABELEN),    label);
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTERLABELCOLOR), label);
 		EnableWindow(GetDlgItem(hDlg, IDC_SEPFILTERFILEEN),  (!reject && captxt));
 
 		EnableWindow(GetDlgItem(hDlg, IDC_SEPFILTERFILEBROWSE1), sep_en ? true    : false);
@@ -8696,7 +8715,13 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		sep_filterfiles = (sep1!=0)+(sep2!=0)+(sep3!=0); // Number of sepfiles
 
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTERCMD),  multiple_edit ? true : (captxt && !reject));
-		EnableWindow(GetDlgItem(hDlg, IDC_FILTERSMTP), captxt ? true : false);
+		// FIX [RejectActions]: email/Telegram/Pushover never fire for a reject filter - the reject
+		// path returns in ShowMessage() before the feed dispatch (SendMail/TelegramNotify/
+		// PushoverNotify). Disable them when reject is set, mirroring the label/audio/cmd/sep gating
+		// above. The global-sink state is still honoured for Telegram/Pushover.
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTERSMTP),     (captxt && !reject) ? true : false);
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTERTELEGRAM), Profile.telegramEnabled && !reject);
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTERPUSHOVER), Profile.pushoverEnabled && !reject);
 
 		return (TRUE);
 
@@ -9149,6 +9174,56 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					Profile.filters[index].reject = filter.reject;
 				}
 
+				// FIX [RejectText]: the filter text is a match criterion (like the capcode), not an
+				// action, so save it regardless of the reject flag. Previously the text-save lived
+				// inside the "not rejecting" block below, which silently discarded the text on a
+				// reject filter - making a capcode+text reject (e.g. reject only when the message
+				// contains "TEST") impossible to create from the dialog. The matcher already supports
+				// capcode+text for any filter (see Check_4_Filtermatch).
+				if (strcmp(tmp_text, "Don't change"))	// If not "Don't change"
+				{
+					strcpy(Profile.filters[index].text, tmp_text);
+				}
+
+				// FIX [RejectText]: "Match EXACT message" is part of the text criterion (it decides
+				// whether the text must equal the whole message or be a substring), so persist it
+				// regardless of the reject flag - mirroring the text save above. Previously it lived
+				// in the "not rejecting" block below, so editing a reject filter could not change it.
+				// Tri-state aware so multiple-edit "don't change" is respected.
+				if (IsDlgButtonChecked(hDlg, IDC_FILTERMATCHEXACT) != BST_INDETERMINATE)
+				{
+					Profile.filters[index].match_exact_msg = IsDlgButtonChecked(hDlg, IDC_FILTERMATCHEXACT);
+				}
+
+				// FIX [RejectLabel]: the filter label is now allowed on reject filters too. It has no
+				// on-screen effect (a reject is never displayed) but appears in the rejected line in the
+				// message log (see "Also log rejected messages"), which makes that record readable. So
+				// persist label + enable-flag + colour regardless of the reject flag, mirroring the
+				// text/match_exact saves above. The label controls are no longer greyed for reject.
+				if (IsDlgButtonChecked(hDlg, IDC_FILTERLABELEN) != BST_INDETERMINATE)
+				{
+					Profile.filters[index].label_enabled = filter.label_enabled;
+				}
+
+				GetDlgItemText(hDlg, IDC_FILTERLABEL, filter.label, FILTER_LABEL_LEN+1);
+
+				if (!filter.label[0])
+				{
+					Profile.filters[index].label_color = 0;
+					strcpy(Profile.filters[index].label, "");
+				}
+				else
+				{
+					if (SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_GETCURSEL, 0, 0L) != 17)
+					{
+						Profile.filters[index].label_color = SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_GETCURSEL, 0, 0L);
+					}
+					if (strcmp(filter.label, "Don't change"))	// If not "Don't change"
+					{
+						strcpy(Profile.filters[index].label, filter.label);
+					}
+				}
+
 				if (IsDlgButtonChecked(hDlg, IDC_FILTERREJECT) != BST_CHECKED)
 				{
 					if (IsDlgButtonChecked(hDlg, IDC_FILTER_MONITOR_ONLY) != BST_INDETERMINATE)
@@ -9162,39 +9237,8 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 						}
 					}
 
-					if (strcmp(tmp_text, "Don't change"))	// If not "Don't change"
-					{
-						strcpy(Profile.filters[index].text, tmp_text);
-					}
-
-					if (IsDlgButtonChecked(hDlg, IDC_FILTERLABELEN) != BST_INDETERMINATE)
-					{
-						Profile.filters[index].label_enabled = filter.label_enabled;
-					}
-
-					GetDlgItemText(hDlg, IDC_FILTERLABEL, filter.label, FILTER_LABEL_LEN+1);
-
-					if (!filter.label[0])
-					{
-						Profile.filters[index].label_color = 0;
-						strcpy(Profile.filters[index].label, "");
-					}
-					else
-					{
-						if (SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_GETCURSEL, 0, 0L) != 17)
-						{
-							Profile.filters[index].label_color = SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, CB_GETCURSEL, 0, 0L);
-						}
-						if (strcmp(filter.label, "Don't change"))	// If not "Don't change"
-						{
-							strcpy(Profile.filters[index].label, filter.label);
-						}
-					}
-
-					if (IsDlgButtonChecked(hDlg, IDC_FILTERMATCHEXACT) != BST_INDETERMINATE)
-					{
-						Profile.filters[index].match_exact_msg = IsDlgButtonChecked(hDlg, IDC_FILTERMATCHEXACT);
-					}
+					// FIX [RejectText]: text + match_exact saved above; FIX [RejectLabel]: label +
+					// enable-flag + colour saved above - all outside the reject gate.
 
 					if (IsDlgButtonChecked(hDlg, IDC_FILTERCMD) != BST_INDETERMINATE)
 					{
@@ -11351,6 +11395,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	GetPrivateProfileString(lpszAppTitle, TEXT("LogFile"), "", pProfile->logfile, MAX_FILE_LEN, lpszIniPathName);
 	pProfile->logfile_enabled = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("LogFileEnabled"), pProfile->logfile_enabled, lpszIniPathName);
 	pProfile->logfile_use_date = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("LogFileUseDate"), pProfile->logfile_use_date, lpszIniPathName);
+	pProfile->logRejected = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("LogRejectedMessages"), pProfile->logRejected, lpszIniPathName);	// FIX [LogRejected]
 
 	pProfile->audioEnabled				= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("AudioEnabled"), pProfile->audioEnabled, lpszIniPathName);
 	pProfile->audioDevice				= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("AudioDevice"), pProfile->audioDevice, lpszIniPathName);
@@ -11963,6 +12008,7 @@ void WriteSettings()
 		fprintf(pFile, "LogFileEnabled=%i\n",			Profile.logfile_enabled);
 		fprintf(pFile, "LogFile=%s\n",					Profile.logfile);
 		fprintf(pFile, "LogFileUseDate=%i\n",			Profile.logfile_use_date);
+		fprintf(pFile, "LogRejectedMessages=%i\n",		Profile.logRejected);	// FIX [LogRejected]
 		fprintf(pFile, "AudioEnabled=%i\n",				Profile.audioEnabled);
 		fprintf(pFile, "AudioDevice=%i\n",				Profile.audioDevice);
 		fprintf(pFile, "AudioSampleRate=%i\n",			Profile.audioSampleRate);

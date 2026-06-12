@@ -1007,6 +1007,67 @@ void ShowMessage()
 					           Current_MSG[MSG_MODE], Current_MSG[MSG_TYPE], Current_MSG[MSG_BITRATE],
 					           iConvertingGroupcall > 0,
 					           iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+				// FIX [LogRejected]: global option to keep rejected messages in the on-disk message
+				// log. When enabled (and the message log itself is on) write the SAME monitor-log line
+				// (columns + timestamp, honouring logISO8601) as a normal message - but nothing else:
+				// no screen, no filter log, no feeds. Self-contained: opens the MONITOR log, writes via
+				// the central LogManager, and closes again because this reject path returns early and
+				// never reaches the end-of-function CLOSE_FILES.
+				if (Profile.logfile_enabled && Profile.logRejected)
+				{
+					// FIX [LogRejected]: always (re)derive szFilename here. In a group-call
+					// conversion an earlier subscriber iteration may have left the monitor log
+					// open (pLogFile != NULL: the end-of-function CLOSE_FILES is skipped while
+					// iConvertingGroupcall && !bGroupcode). Gating the open on !pLogFile would
+					// then leave this call's LOCAL szFilename (and bNewFile) uninitialised and
+					// pass garbage to WriteLineTo. LogManager is keyed by filename, so opening an
+					// already-open log only recomputes the name; the CLOSE_FILES below resets the
+					// sentinel because this reject path returns early.
+					LogFileHandling(MONITOR, szFilename, OPEN_FILE);
+					bNewFile = (!FileExists(szFilename)) ? true : false;
+					bNewLine = (bSeparator[MONITOR] && !bNewFile) ? true : false;
+
+					CollectLogfileLine(Profile.ColLogfile, false);
+
+					if (bFragment) { strcat(szLogFileLine, " "); strcat(szLogFileLine, szFragment); }
+
+					// FIX [LogRejected]: append the filter label exactly as a normal monitored line
+					// would, so the rejected entry is a complete record. szCurrentLabel[1] (the
+					// "- label -" form) is only built later in the normal display path - after this
+					// reject early-return - so build it here from szCurrentLabel[0], which is already
+					// set near the top of ShowMessage() when the matched filter carries a label. For a
+					// reject filter without a label this is a no-op and the line stays a clean column row.
+					if (szCurrentLabel[0][0] && !szCurrentLabel[1][0])
+						sprintf(szCurrentLabel[1], "- %s -", szCurrentLabel[0]);
+
+					if (szCurrentLabel[1][0] && Profile.LabelLog)
+					{
+						if (Profile.LabelNewline)
+						{
+							strcat(szLogFileLine, "\n");
+							memset(szLabelspacing, 0, sizeof(szLabelspacing));
+							{
+								int nSp = iLabelspace_Logfile[MONITOR] + 1;
+								if (nSp < 0) nSp = 0;
+								if (nSp > (int)sizeof(szLabelspacing) - 1)
+									nSp = (int)sizeof(szLabelspacing) - 1;
+								if (nSp > 0) memset(szLabelspacing, ' ', (size_t)nSp);
+							}
+							strcat(szLogFileLine, szLabelspacing);
+						}
+						else strcat(szLogFileLine, " ");
+						strcat(szLogFileLine, szCurrentLabel[1]);
+					}
+
+					strcat(szLogFileLine, "\n");
+
+					char lmBuf[LM_LINE_MAX];
+					int  lmLen = _snprintf_s(lmBuf, sizeof(lmBuf), _TRUNCATE,
+					                         "%s%s", bNewLine ? "\n" : "", szLogFileLine);
+					if (lmLen > 0) LogManager::Get().WriteLineTo(szFilename, lmBuf, lmLen);
+
+					LogFileHandling(NULL, NULL, CLOSE_FILES);  // reject path returns early; reset handle
+				}
 				return;
 			}
 		}
@@ -2439,6 +2500,41 @@ static char *stristr_local(const char *haystack, const char *needle)
 }
 
 
+// FIX [FilterWholeWord]: case-insensitive WHOLE-WORD search. Returns a pointer into the
+// string to the first occurrence of 'needle' at-or-after 'from' that is bounded on both
+// sides by a non-alphanumeric character (or the string start/end). 'base' is the true start
+// of the message, so the left-boundary test reads the real preceding character even when
+// 'from' points into the middle of the message (as the '&' AND-loop advances it). An empty
+// needle never matches.
+static char *stristr_word(const char *from, const char *base, const char *needle)
+{
+	size_t nlen;
+	if (!from || !needle || !*needle) return NULL;
+	nlen = strlen(needle);
+	for (; *from; from++)
+	{
+		if (_strnicmp(from, needle, nlen) != 0) continue;
+		char before = (from == base) ? '\0' : from[-1];
+		char after  = from[nlen];
+		if (!isalnum((unsigned char)before) && !isalnum((unsigned char)after))
+			return (char *)from;
+	}
+	return NULL;
+}
+
+
+// FIX [FilterWholeWord]: resolve one filter token against the message. A leading '=' selects
+// whole-word matching (stristr_word); otherwise the legacy case-insensitive substring search
+// (stristr_local) runs unchanged, so non-'=' filters behave byte-for-byte as before. 'from'
+// is the search offset into 'base'.
+static char *find_filter_token(const char *base, int from, const char *token)
+{
+	if (token[0] == '=')
+		return stristr_word(base + from, base, token + 1);
+	return stristr_local(base + from, token);
+}
+
+
 int Check_4_Filtermatch()
 {
 	int msg_len, code_len, txt_len, nFilters;
@@ -2616,17 +2712,19 @@ int Check_4_Filtermatch()
 							}
 							szTextTMP[j]='\0';
 
-							pSearch = stristr_local(&Current_MSG[MSG_MESSAGE][k], szTextTMP);
+							pSearch = find_filter_token(Current_MSG[MSG_MESSAGE], k, szTextTMP);	// FIX [FilterWholeWord]: '=' prefix = whole word
 
 							if (!pSearch) break;
+
+							int slen = (int)strlen(szTextTMP) - (szTextTMP[0]=='=' ? 1 : 0);	// length without the '=' prefix
 
 							if (pTerm[i] == '&') { i++; j=0; }
 							k = (pSearch - Current_MSG[MSG_MESSAGE]);
 
 							iTextPositions[l]=k;
-							iTextLengths[l++]=strlen(szTextTMP);
+							iTextLengths[l++]=slen;
 
-							k += strlen(szTextTMP);
+							k += slen;
 						}
 						if (pSearch)
 						{
@@ -2639,17 +2737,26 @@ int Check_4_Filtermatch()
 					}
 					else
 					{
-						// plain single substring (no '&' in this OR-term)
-						if ((int)strlen(pTerm) <= msg_len)
+						// single term (no '&' in this OR-term); '=' prefix = whole word
+						pSearch = find_filter_token(Current_MSG[MSG_MESSAGE], 0, pTerm);	// FIX [FilterWholeWord]
+						if (pSearch)
 						{
-							pSearch = stristr_local(Current_MSG[MSG_MESSAGE], pTerm);
-							if (pSearch)
-							{
-								iTextMatch  = (int)(pSearch - Current_MSG[MSG_MESSAGE]);
-								iTextLength = strlen(pTerm);
-							}
+							iTextMatch  = (int)(pSearch - Current_MSG[MSG_MESSAGE]);
+							iTextLength = (int)strlen(pTerm) - (pTerm[0]=='=' ? 1 : 0);
 						}
 					}
+				}
+			}
+			else if (Profile.filters[iFilter].text[0] == '=' && strstr(Profile.filters[iFilter].text, "&") == 0)
+			{
+				// FIX [FilterWholeWord]: single whole-word term (no '&', no '|'). Placed before
+				// the 'txt_len <= msg_len' guard because the leading '=' inflates txt_len by 1,
+				// which could otherwise skip a legitimate match against a short message.
+				pSearch = find_filter_token(Current_MSG[MSG_MESSAGE], 0, Profile.filters[iFilter].text);
+				if (pSearch)
+				{
+					iTextMatch  = (int)(pSearch - Current_MSG[MSG_MESSAGE]);
+					iTextLength = (int)strlen(Profile.filters[iFilter].text) - 1;	// minus the '=' prefix
 				}
 			}
 			else if (txt_len <= msg_len)	// Text string has to be shorter than message
@@ -2673,7 +2780,7 @@ int Check_4_Filtermatch()
 						}
 						szTextTMP[j]='\0';
 
-						pSearch = stristr_local(&Current_MSG[MSG_MESSAGE][k], szTextTMP);	// FIX [FilterText]: was strstr (case-sensitive) — nu consistent met overige filterpaden
+						pSearch = find_filter_token(Current_MSG[MSG_MESSAGE], k, szTextTMP);	// FIX [FilterWholeWord]: '=' prefix = whole word (was stristr_local)
 
 						if (!pSearch)
 						{
@@ -2688,6 +2795,8 @@ int Check_4_Filtermatch()
 							break;
 						}
 
+						int slen = (int)strlen(szTextTMP) - (szTextTMP[0]=='=' ? 1 : 0);	// length without the '=' prefix
+
 						if (Profile.filters[iFilter].text[i] == '&')
 						{
 							i++;
@@ -2696,9 +2805,9 @@ int Check_4_Filtermatch()
 						k = (pSearch - Current_MSG[MSG_MESSAGE]);
 
 						iTextPositions[l]=k;
-						iTextLengths[l++]=strlen(szTextTMP);
+						iTextLengths[l++]=slen;
 
-						k += strlen(szTextTMP);
+						k += slen;
 					}
 					if (pSearch)
 					{
@@ -2935,11 +3044,33 @@ void ActivateCommandFile()
 		strncpy(szCommandFile, Profile.filter_cmd, MAX_STR_LEN - 1);
 	szCommandFile[MAX_STR_LEN - 1] = '\0';
 
-	CreateProcess(NULL, szCommandFile, NULL, NULL, FALSE, NULL, 0, NULL, &si, &pif);
+	// FIX [CmdWorkDir]: run the command file from its OWN folder instead of inheriting
+	//                   PDW's current working directory. The 8th CreateProcess argument
+	//                   (lpCurrentDirectory) was NULL, so the spawned helper (e.g.
+	//                   meld2mysql) resolved its config and log files against whatever
+	//                   PDW's CWD happened to be - which wanders because no file dialog
+	//                   sets OFN_NOCHANGEDIR. Derive the directory from the full command
+	//                   path (Profile.filter_cmd is a browsed full path) and pass it as
+	//                   the working directory so the helper always finds files next to it.
+	char  szWorkDir[MAX_FILE_LEN + 1];
+	char *pSlash;
+	strncpy(szWorkDir, Profile.filter_cmd, MAX_FILE_LEN);
+	szWorkDir[MAX_FILE_LEN] = '\0';
+	pSlash = strrchr(szWorkDir, '\\');
+	if (!pSlash) pSlash = strrchr(szWorkDir, '/');
+	if (pSlash) *pSlash = '\0'; else szWorkDir[0] = '\0';
 
-	// Close process and thread handles.
-	CloseHandle(pif.hProcess);
-	CloseHandle(pif.hThread);
+	// FIX [CmdSpawnGuard]: pif is NOT zero-initialised and CreateProcess can fail (bad path,
+	// permissions, file-not-found). The old code closed pif.hProcess/hThread unconditionally, so a
+	// failed spawn called CloseHandle() on uninitialised stack garbage -> invalid-handle exception.
+	// Only close the handles when CreateProcess actually succeeded.
+	if (CreateProcess(NULL, szCommandFile, NULL, NULL, FALSE, NULL, 0,
+	                  szWorkDir[0] ? szWorkDir : NULL, &si, &pif))
+	{
+		// Close process and thread handles.
+		CloseHandle(pif.hProcess);
+		CloseHandle(pif.hThread);
+	}
 
 //	MessageBox(ghWnd, szCommandFile, "PDW Commandfile", MB_ICONINFORMATION);
 }

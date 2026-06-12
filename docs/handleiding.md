@@ -232,6 +232,12 @@ Elk filter kan onafhankelijk een willekeurige combinatie van het volgende active
 | **Monitor only** | Toon op het scherm maar sluit uit van hoofdlog en uitvoerfeeds |
 | **Reject** | Onderdruk dit bericht volledig - niet tonen of loggen |
 
+Een reject-filter kan worden beperkt tot een specifiek bericht door de capcode te combineren met een **Tekst**-waarde: het bericht wordt alleen verworpen wanneer **zowel** de capcode **als** de tekst matcht. Zo kunt u bijvoorbeeld alleen de berichten van een capcode verwerpen die een bepaald woord bevatten, terwijl alle andere berichten van diezelfde capcode normaal worden doorgelaten.
+
+Wanneer **Reject** is aangevinkt, worden de actie-instellingen die geen effect hebben op een verworpen bericht - Geluid, E-mail, Telegram, Pushover, Monitor only, Commando en aparte filterbestanden - grijs weergegeven, omdat een verworpen bericht wordt onderdrukt voordat een van die acties draait. Het **Label**-veld blijft wel beschikbaar: een reject-filter wordt nooit op het scherm getoond, maar als u er een label aan geeft, wordt dat naast het bericht geschreven in de rejected-regel van het logbestand (wanneer "Verworpen berichten ook loggen" aan staat). Dat maakt dat logrecord beter leesbaar.
+
+Een verworpen bericht wordt normaal uit elke uitvoer gehouden, inclusief het logbestand op schijf. De globale optie **"Verworpen berichten ook loggen"** in het Logbestand-dialoogvenster (zie sectie 10.8) overschrijft alleen het log-gedeelte: indien ingeschakeld worden verworpen berichten alsnog naar het monitorlogbestand geschreven, terwijl ze onderdrukt blijven op het scherm, in het filterlog en in alle feeds.
+
 Filterlabels kunnen maximaal **256 tekens** lang zijn.
 
 ### 9.3 Zoeken tijdens het typen
@@ -655,6 +661,8 @@ Alle PDW-logbestanden gebruiken de datumgestempelde naamgevingsconventie `JJMMDD
 
 Aanbevolen voor drukke POCSAG/FLEX-netwerken waar veel berichten per seconde hoge schrijfversterking kunnen veroorzaken op een SSD. Het maximale logverlies bij een harde crash is gelijk aan het spoelinterval.
 
+**Verworpen berichten ook loggen** - een globale optie in het Logbestand-dialoogvenster. Standaard onderdrukt een filter met de **Reject**-actie zijn berichten overal, inclusief het logbestand op schijf. Met deze optie ingeschakeld worden verworpen berichten alsnog naar het monitorlogbestand geschreven - met dezelfde kolommen en tijdstempel (inclusief het ISO-formaat, indien geselecteerd) als een normale regel - zodat het log een compleet overzicht blijft, terwijl ze verborgen blijven op het scherm, buiten het filterlog en buiten elke feed (SMTP, MQTT, webhook, enz.). Het selectievakje is alleen beschikbaar wanneer het berichtenlog zelf is ingeschakeld.
+
 ### 10.9 Programmaopties
 
 | Optie | Beschrijving |
@@ -715,7 +723,7 @@ FLEX is een hogesnelheid pagingprotocol ontwikkeld door Motorola.
 
 PDW decodeert alle drie snelheden gelijktijdig. Berichttypen: **Alpha**, **Numeriek**, **Toon**, **Korte instructie**, **Frame-info**, **Groepsoproepen**.
 
-**Meervoudig frameherstel:** lange FLEX-alpha-berichten die meerdere frames beslaan, worden verzameld en weergegeven als een volledige string.
+**Meervoudig frameherstel:** lange FLEX-alpha-berichten die meerdere frames beslaan, worden verzameld en weergegeven als een volledige string. Een succesvol hersteld bericht wordt op het scherm gemarkeerd met een asterisk (`*`) direct achter de capcode. Een fragment dat (nog) niet kon worden voltooid, krijgt in plaats daarvan een tekstmarkering naast het bericht - `[fragmented]`, of `[<type> fragment - incomplete]` voor een los fragment zonder voorafgaande reeks - zodat u een volledig herstel kunt onderscheiden van een gedeeltelijk.
 
 **Groepsoproepen:** een groepscapcode (bereik 2029568-2029583) richt zich tegelijkertijd op meerdere individuele pagers. PDW toont alle abonnee-capcodes en hun labels samen met het groepsbericht.
 

@@ -1,12 +1,91 @@
-# PDW 3.6.3 - Release Notes
+# PDW 3.6.5 - Release Notes
+
+## New in 3.6.5
+
+### Filter fixes
+
+- **Reject filters can now match on capcode + text (FIX [RejectText]):** when the **Reject** action was
+  enabled, the filter editor silently discarded the **Text** field on Apply/OK, so the typed text never
+  reached the saved filter. This made it impossible to create a reject filter that only fires on a
+  specific message (e.g. reject a capcode only when the message contains a given word). The text is now
+  saved regardless of the reject flag - exactly like the capcode - so a capcode+text reject works and
+  can, combined with "Also log rejected messages", keep just those messages in the log while letting the
+  rest of the capcode through. The matcher already supported capcode+text; only the editor's save path
+  was at fault. Capcode-only reject filters are unaffected. The filter list (Ctrl+F) now also shows the
+  text criterion for a reject filter, e.g. `FLEX 1180000 | REJECT | "TEST"`, so the attached word filter
+  is visible in the overview. The "Match EXACT message" option is likewise persisted for reject filters
+  (previously editing it on a reject filter had no effect, as it sat behind the same reject gate as the
+  text).
+- **Reject filters grey out actions that do not apply (FIX [RejectActions]):** Send email, Send Telegram,
+  Send Pushover and Monitor only are now disabled when **Reject** is checked. None of these ever ran for a
+  rejected message - the reject path returns before any feed dispatch, and monitor-only is mutually
+  exclusive with reject - so leaving them clickable was misleading. This mirrors how the sound, command
+  and separate-file controls were already disabled for reject filters.
+- **Label can be set on reject filters (FIX [RejectLabel]):** the filter Label field and its enable
+  checkbox are no longer greyed out when **Reject** is checked. A reject filter is never shown on
+  screen, so the label has no display effect, but when "Also log rejected messages" is on the label is
+  written next to the message in the rejected log line - making that on-disk record readable (e.g.
+  `... TESTOPROEP MOB / - MKB Oost-Brabant (heartbeat REJECT) -`). The label, its enable flag and colour
+  now persist regardless of the reject flag, like the text and match-exact criteria.
+
+### Logging
+
+- **Scrambled log lines fixed (FIX [LogWriteOrder]):** the buffered log writer drained its ring buffer
+  and then `qsort`-ed the batch by file path to group writes per file (fewer open/close calls). Because
+  `qsort` is not a stable sort, lines that share the same file - i.e. every line of `monitor.log` - could
+  be reordered relative to each other. On screen everything was correct (the screen does not go through
+  the buffer), but on disk multi-line entries got shuffled, most visibly with FlexGroupMode group calls
+  where a header line and its indented subscriber lines are separate writes that must stay in order. The
+  batch is now stamped with its FIFO index and path-ties break on that index, so per-file order is
+  preserved while still grouping by path. Affected all buffered log files; unbuffered logging was never
+  affected.
+- **Log rejected messages to disk (FIX [LogRejected]):** a new global checkbox **"Also log rejected
+  messages"** in the Logfile dialog. By default a filter with the **Reject** action suppresses its
+  messages everywhere, including the on-disk message log. With this option enabled, rejected messages
+  are still written to the monitor log file - using the same columns and timestamp (including the ISO
+  format, if selected) as a normal entry - so the log stays a complete record, while remaining hidden
+  on screen, out of the filter log and out of every feed (SMTP, MQTT, webhook, etc.). The write goes
+  through the central log manager like all other logging. The checkbox is only available when the
+  message log itself is enabled, and the setting persists in PDW.ini (`LogRejectedMessages`). It is
+  off by default, so existing behaviour is unchanged unless you turn it on. If the reject filter carries
+  a label, the logged line includes that label just like a normal monitored entry (honouring the "Log
+  labels" option). Note: when FlexGroupMode is active the rejected line is written as a standalone
+  column-format row and does not fold into the compact GROUP-N group layout.
+
+### Filter improvements
+
+- **Whole-word matching with `=` (FIX [FilterWholeWord]):** prefix any filter term with `=` to match
+  it only as a complete word, not as part of a longer word. For example `alpha&=cat` matches
+  `alpha ... the cat` but no longer false-matches on `category` or `vacate`. A word boundary is any
+  non-alphanumeric character or the start/end of the message. The `=` applies per term, so substring
+  and whole-word terms can be mixed in one filter; matching stays case-insensitive. Filters without
+  `=` are unaffected. This completes the filter-text operator set - `^` (starts with), `&` (AND),
+  `|` (OR) and `=` (whole word) - all documented with examples in the manual (section 9.3).
+
+## New in 3.6.4
+
+### Command file fixes
+
+- **Crash on failed command spawn fixed (FIX [CmdSpawnGuard]):** when an external command file failed
+  to start (wrong path, missing file, permissions), PDW closed two uninitialised process handles,
+  which could raise an invalid-handle exception. The handles are now closed only when the program
+  actually started.
+- **Command file runs from its own folder (FIX [CmdWorkDir]):** when a filter triggers an external
+  command file, PDW now starts that program with its working directory set to the folder the program
+  lives in, instead of leaving it on PDW's own working directory. Previously the spawned helper
+  inherited whatever working directory PDW happened to have, so a program that keeps its config and
+  log files next to itself (in a separate folder) could fail to find its config and would write its
+  logs into the PDW folder instead. The working directory is taken from the full path of the
+  configured command file; if no folder can be determined the previous behaviour is kept. This
+  restores the pre-3.2-era behaviour where the command file always ran from its own directory.
 
 ## New in 3.6.3
 
 ### Filter improvements
 
 - **OR operator in filter text (FIX [FilterOR]):** message-text filters now support `|` as a
-  top-level OR operator in addition to the existing `&` (AND). For example `P 1&BR|P 1&HV` matches
-  when the message contains `P 1` and `BR`, **or** `P 1` and `HV`. `&` binds tighter than `|`
+  top-level OR operator in addition to the existing `&` (AND). For example `alpha&bravo|alpha&charlie`
+  matches when the message contains `alpha` and `bravo`, **or** `alpha` and `charlie`. `&` binds tighter than `|`
   (standard precedence), empty terms are ignored (`|alpha` behaves like `alpha`), and a leading `^`
   on a term is ignored when `|` is present. Filters without `|` are completely unaffected. The
   highlight positions on a match are set exactly as for a normal single-term match. The *Match exact

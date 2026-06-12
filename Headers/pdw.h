@@ -173,6 +173,7 @@ typedef struct
 	int  logfile_enabled;
 	char logfile[MAX_FILE_LEN+1];
 	int  logfile_use_date;
+	int  logRejected;				// FIX [LogRejected]: 1=also write reject-filtered messages to the message log
 
 	int  filterfile_enabled;
 	char filterfile[MAX_FILE_LEN+1];
