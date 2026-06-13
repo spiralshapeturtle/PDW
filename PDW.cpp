@@ -6889,6 +6889,7 @@ void Copy_Filter_Fields(FILTER *out_filter, FILTER in_filter)
 	out_filter->smtp			= in_filter.smtp;
 	out_filter->telegram		= in_filter.telegram;		// FIX [Telegram]
 	out_filter->pushover		= in_filter.pushover;		// FIX [Telegram]
+	out_filter->ignore_in_groupcall	= in_filter.ignore_in_groupcall;	// FIX [GroupcallScreenHide]
 	out_filter->match_exact_msg	= in_filter.match_exact_msg;
 
 	for (int i=0; i<3; i++)
@@ -6985,6 +6986,9 @@ void BuildFilterString(char *temp_str, size_t bufsize, FILTER filter)
 		{
 			bfs_cat(temp_str, bufsize, filter.wave_number == -1 ? "NoSound" : wave_names[filter.wave_number]);
 		}
+
+		// FIX [GroupcallScreenHide]: flag this capcode as hidden from the on-screen group view
+		if (filter.ignore_in_groupcall) bfs_cat(temp_str, bufsize, " | IGN-GRP");
 	}
 
 	if (filter.label[0])
@@ -8021,6 +8025,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 	int filter_cmd=0, color=0, audio=0, iHits=0;
 	int sep_en=0, sep1=0, sep2=0, sep3=0;
 	int telegram=0, pushover=0;	// FIX [Telegram]: multi-edit "don't change" trackers
+	int ignore_grp=0;	// FIX [GroupcallScreenHide]: multi-edit "don't change" tracker
 
 	char temp_cap[FILTER_CAPCODE_LEN+1]="",
 		 temp[MAX_STR_LEN],	// FIX [FilterTextLen]: was MAX_PATH (260); holds BuildFilterString output (label+text up to ~560 bytes)
@@ -8164,6 +8169,12 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			case IDC_SEPFILTERFILEEN :
 
 			strcpy(szFilterEditHelpText, " Whether you want PDW to log messages to a separate filter file");
+
+			break;
+
+			case IDC_FILTER_IGNORE_GROUPCALL :	// FIX [GroupcallScreenHide]
+
+			strcpy(szFilterEditHelpText, " Hide this capcode from the on-screen group view - needs FLEX group call mode ON. Still logged/fed in full");
 
 			break;
 
@@ -8411,6 +8422,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					if (Profile.filters[index].smtp != filter.smtp) smtp=1;
 					if (Profile.filters[index].telegram != filter.telegram) telegram=1;	// FIX [Telegram]
 					if (Profile.filters[index].pushover != filter.pushover) pushover=1;	// FIX [Telegram]
+					if (Profile.filters[index].ignore_in_groupcall != filter.ignore_in_groupcall) ignore_grp=1;	// FIX [GroupcallScreenHide]
 					if (Profile.filters[index].sep_filterfile_en != filter.sep_filterfile_en) sep_en=1;
 					if (Profile.filters[index].sep_filterfiles > sep_filterfiles) sep_filterfiles = Profile.filters[index].sep_filterfiles;
 
@@ -8426,6 +8438,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 				if (smtp)         SendDlgItemMessage(hDlg, IDC_FILTERSMTP,          BM_SETSTYLE, BS_AUTO3STATE, TRUE);
 				if (telegram)     SendDlgItemMessage(hDlg, IDC_FILTERTELEGRAM,      BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [Telegram]
 				if (pushover)     SendDlgItemMessage(hDlg, IDC_FILTERPUSHOVER,      BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [Pushover]
+				if (ignore_grp)   SendDlgItemMessage(hDlg, IDC_FILTER_IGNORE_GROUPCALL, BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [GroupcallScreenHide]
 
 				sprintf(temp, "Total number of hits: %i", iHits);
 				SetDlgItemText(hDlg, IDC_FILTERHITS, temp);
@@ -8484,6 +8497,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		CheckDlgButton(hDlg, IDC_FILTERSMTP,          smtp         ? BST_INDETERMINATE : filter.smtp);
 		CheckDlgButton(hDlg, IDC_FILTERTELEGRAM,      telegram     ? BST_INDETERMINATE : filter.telegram);	// FIX [Telegram]
 		CheckDlgButton(hDlg, IDC_FILTERPUSHOVER,      pushover     ? BST_INDETERMINATE : filter.pushover);	// FIX [Pushover]
+		CheckDlgButton(hDlg, IDC_FILTER_IGNORE_GROUPCALL, ignore_grp ? BST_INDETERMINATE : filter.ignore_in_groupcall);	// FIX [GroupcallScreenHide]
 		CheckDlgButton(hDlg, IDC_SEPFILTERFILEEN,     sep_en       ? BST_INDETERMINATE : filter.sep_filterfile_en);
 
 		SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_RESETCONTENT, 0, 0);
@@ -8722,6 +8736,14 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTERSMTP),     (captxt && !reject) ? true : false);
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTERTELEGRAM), Profile.telegramEnabled && !reject);
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTERPUSHOVER), Profile.pushoverEnabled && !reject);
+		// FIX [GroupcallScreenHide]: only meaningful for a non-reject capcode filter (a reject
+		// filter already drops the message before the group-call screen path, and the 0x80 bit
+		// is not persisted for reject filters - mirrors the SEP/SMTP gating above).
+		// FIX [GroupcallScreenHide]: Ignore and Monitor-only are mutually exclusive (contradictory:
+		// monitor-only shows on screen + suppresses feeds; ignore hides on screen + keeps feeds).
+		// Both stay enabled and clicking either one clears the other in the WM_COMMAND handlers, so
+		// the gating here only mirrors the SMTP/SEP rule: unavailable for a reject filter.
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_IGNORE_GROUPCALL), (captxt && !reject) ? true : false);
 
 		return (TRUE);
 
@@ -8763,6 +8785,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 				if (IsDlgButtonChecked(hDlg, IDC_FILTERREJECT))
 				{
 					CheckDlgButton(hDlg, IDC_FILTER_MONITOR_ONLY,  BST_UNCHECKED);
+					CheckDlgButton(hDlg, IDC_FILTER_IGNORE_GROUPCALL, BST_UNCHECKED);	// FIX [GroupcallScreenHide]: mutually exclusive
 					CheckDlgButton(hDlg, IDC_SEPFILTERFILEEN,      BST_UNCHECKED);
 					SendDlgItemMessage(hDlg, IDC_FILTERAUDIO,      WM_CLEAR, (WPARAM) 0, 0L);
 					SendDlgItemMessage(hDlg, IDC_FILTERLABELCOLOR, WM_CLEAR, (WPARAM) 0, 0L);
@@ -8799,6 +8822,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			if (monitor_only)
 			{
 				CheckDlgButton(hDlg, IDC_FILTERREJECT, BST_UNCHECKED);
+				CheckDlgButton(hDlg, IDC_FILTER_IGNORE_GROUPCALL, BST_UNCHECKED);	// FIX [GroupcallScreenHide]: mutually exclusive
 
 				SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "No sound");
 				SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "Monitor_only.wav");
@@ -8820,6 +8844,39 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 				SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_SETCURSEL, (WPARAM) monitor_only ? 2 : 12, 0L);
 			}
 			else SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_SETCURSEL, (WPARAM) 1, 0L);
+
+			SendMessage(hDlg, WM_WININICHANGE, initializing, 0L);
+
+			break;
+
+			case IDC_FILTER_IGNORE_GROUPCALL:	// FIX [GroupcallScreenHide]
+
+			// Mutually exclusive with Monitor-only (contradictory modes: monitor-only shows on
+			// screen + suppresses feeds; ignore hides on screen + keeps feeds). Clicking Ignore
+			// clears Monitor-only - the symmetric counterpart of the Monitor-only handler above,
+			// which clears Ignore. Both checkboxes stay enabled so the pair can never deadlock.
+			// Monitor-only had switched the audio list to its own entries, so rebuild the normal
+			// sound list here, mirroring the Monitor-only handler's "off" branch.
+			if ((IsDlgButtonChecked(hDlg, IDC_FILTER_IGNORE_GROUPCALL) & BST_CHECKED) &&
+			    (IsDlgButtonChecked(hDlg, IDC_FILTER_MONITOR_ONLY)     & BST_CHECKED))
+			{
+				CheckDlgButton(hDlg, IDC_FILTER_MONITOR_ONLY, BST_UNCHECKED);
+
+				SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_RESETCONTENT, 0, 0);
+				SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_ADDSTRING, 0, (LPARAM) (LPSTR) "No sound");
+				SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_ADDSTRING, 0, (LPARAM) (LPSTR) "Default");
+				for (i=0; i<11; i++)
+				{
+					sprintf(temp, "Sound%i.wav", i);
+					SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_ADDSTRING, 0, (LPARAM) (LPSTR) temp);
+				}
+				if (multiple_edit)
+				{
+					SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "Don't change");
+					SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_SETCURSEL, (WPARAM) 12, 0L);
+				}
+				else SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_SETCURSEL, (WPARAM) 1, 0L);
+			}
 
 			SendMessage(hDlg, WM_WININICHANGE, initializing, 0L);
 
@@ -9260,6 +9317,12 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					if (IsDlgButtonChecked(hDlg, IDC_FILTERPUSHOVER) != BST_INDETERMINATE)
 					{
 						Profile.filters[index].pushover = IsDlgButtonChecked(hDlg, IDC_FILTERPUSHOVER);
+					}
+
+					// FIX [GroupcallScreenHide]: persist per-filter "Ignore in Groupcall" bit (tri-state aware)
+					if (IsDlgButtonChecked(hDlg, IDC_FILTER_IGNORE_GROUPCALL) != BST_INDETERMINATE)
+					{
+						Profile.filters[index].ignore_in_groupcall = IsDlgButtonChecked(hDlg, IDC_FILTER_IGNORE_GROUPCALL);
 					}
 
 					if (IsDlgButtonChecked(hDlg, IDC_SEPFILTERFILEEN) != BST_INDETERMINATE)
@@ -11814,6 +11877,7 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 							filter.match_exact_msg     = (iTEMP & 0x10) != 0;
 							filter.telegram            = (iTEMP & 0x20) != 0;	// FIX [Telegram]: per-filter Telegram bit
 							filter.pushover            = (iTEMP & 0x40) != 0;	// FIX [Telegram]: per-filter Pushover bit (phase 2)
+							filter.ignore_in_groupcall = (iTEMP & 0x80) != 0;	// FIX [GroupcallScreenHide]: hide capcode from on-screen group view
 
 							break;
 							
@@ -12280,6 +12344,7 @@ void WriteFilters(PPROFILE pProfile, int backup)
 				if (pProfile->filters[index].match_exact_msg)	iTEMP += 16;
 				if (pProfile->filters[index].telegram)			iTEMP += 32;	// FIX [Telegram]: 0x20
 				if (pProfile->filters[index].pushover)			iTEMP += 64;	// FIX [Telegram]: 0x40
+				if (pProfile->filters[index].ignore_in_groupcall)	iTEMP += 128;	// FIX [GroupcallScreenHide]: 0x80
 			}
 
 			sprintf(szTEMP, "%i", iTEMP);

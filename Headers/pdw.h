@@ -36,6 +36,7 @@ typedef struct
 	int			 smtp;
 	int			 telegram;		// FIX [Telegram]: per-filter Telegram notify (bit 0x20 in filters.ini SEP field)
 	int			 pushover;		// FIX [Telegram]: per-filter Pushover notify (bit 0x40), reserved for phase 2
+	int			 ignore_in_groupcall;	// FIX [GroupcallScreenHide]: hide this capcode from the on-screen group view (bit 0x80); full message still logged to disk
 	int			 sep_filterfile_en;
 	char		 sep_filterfile[3][FILTER_FILE_LEN+1];	// PH: max 3 sepfiles
 	int			 sep_filterfiles;						// PH: number of sepfiles

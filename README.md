@@ -4,7 +4,7 @@
 
 ---
 
-**Version 3.6.6** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.6.7** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -507,6 +507,9 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v3.6.7 (June 2026)
+- **"Ignore in Groupcall" filter option** — a new per-filter checkbox in the Ctrl+F editor hides a routine subscriber capcode (roadblock, station-technical, etc.) from the on-screen FLEX group view so the genuine personnel-alarm subscribers stand out. An ignored code no longer shows its line, drags its group into the filter window, or beeps; but the **full** group message - including the ignored capcode - is still written to the monitor log and sent to every output feed. It has no effect on individual (non-group) pages to that capcode, and is mutually exclusive with *Monitor only* (ticking one clears the other). Applies to non-reject capcode filters inside FLEX group calls; flagged filters are marked `IGN-GRP` in the filter overview
 
 ### v3.6.6 (June 2026)
 - **Reject log formatting inside group calls fixed** — when "Also log rejected messages" was on and a rejected capcode appeared inside a FLEX group call, the monitor log got garbled: a spurious blank line appeared before every rejected subscriber entry, and with FlexGroupMode compact logging the rejected subscriber was written as a standalone timestamp line instead of the correct indented capcode line under the group header. Both issues are fixed; rejected group-call subscribers now integrate cleanly into the log in the same format as non-rejected ones.

@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
 #define PDW_VERSION_MINOR  6
-#define PDW_VERSION_PATCH  6
-#define PDW_VERSION_STR    "3.6.6"
+#define PDW_VERSION_PATCH  7
+#define PDW_VERSION_STR    "3.6.7"
 
 #define IDC_STATIC             -1
 
@@ -307,6 +307,7 @@
 #define IDC_SEPFILTERFILEBROWSE2   995
 #define IDC_SEPFILTERFILEBROWSE3   996
 #define IDC_SEPFILTERBOX           997
+#define IDC_FILTER_IGNORE_GROUPCALL 998   // FIX [GroupcallScreenHide]: hide capcode from on-screen group view
 
 #define IDC_SYSTEMTRAY            1000
 #define IDC_SYSTEMTRAY_RESTORE    1001

@@ -921,6 +921,22 @@ void ShowMessage()
 
 	bGroupcode = memcmp(Current_MSG[MSG_CAPCODE], "20295", 5) ? false : true;
 
+	// FIX [GroupcallScreenHide]: when a group-call subscriber matches a filter with
+	// "Ignore in Groupcall" set, suppress only its on-screen capcode (FlexGroupMode
+	// compact view) to cut screen clutter from noise codes (roadblocks, station
+	// technics). The group message header/text stays visible and the full message -
+	// including this capcode - is still written to every disk log and feed unchanged.
+	// Only the screen panes are gated; logging paths are left fully intact. Gated on
+	// FlexGroupMode: the classic verbose view draws the subscriber in the main pane
+	// loop (not the second loop), so honouring the flag there would only half-hide it
+	// (capcode still drawn, label/flush skipped). Deliberately FlexGroupMode-only.
+	// The dialog makes "Ignore in Groupcall" and "Monitor only" mutually exclusive; the
+	// extra !monitor_only here is a runtime safety net so a hand-edited filters.ini that
+	// carries both bits still behaves predictably (monitor-only wins, no half state).
+	bool bHideGroupcallScreen = (Profile.FlexGroupMode && iConvertingGroupcall && !bGroupcode
+		&& iMatch != -1 && Profile.filters[iMatch].ignore_in_groupcall
+		&& !Profile.filters[iMatch].monitor_only) ? true : false;
+
 	if (!iConvertingGroupcall)
 	{
 		nCount_Messages++;
@@ -969,6 +985,17 @@ void ShowMessage()
 				bFILTERED=true;
 				if (Profile.filterwindowonly) bMONITOR=false;	// Don't display filtered messages in monitor pane
 			}
+
+			// FIX [GroupcallScreenHide]: an "Ignore in Groupcall" subscriber must not pull its
+			// group into the FILTER window/log (or trigger the filter beep) just because it
+			// matched. The earlier guards only suppress this subscriber's capcode LINE, but the
+			// main pane loop still draws the shared GROUP header+message into any pane the
+			// subscriber qualifies for - so an ignored-only group still flooded the filter pane
+			// (header+message visible, capcode line gone). Dropping bFILTERED keeps the main loop
+			// out of the filter pane for this subscriber; a genuinely matching (non-ignored)
+			// member of the same group still brings it in via its own ShowMessage pass. The
+			// monitor view (all traffic) and every disk log / feed keep the full message.
+			if (bHideGroupcallScreen) bFILTERED = false;
 
 			if (Profile.filters[iMatch].reject)
 			{
@@ -1514,7 +1541,10 @@ void ShowMessage()
 		}
 		iMessageIndex = 0;					// reset to beginning of filter buffer
 
-		if (Profile.FlexGroupMode)
+		// FIX [GroupcallScreenHide]: skip the per-subscriber capcode render for a hidden
+		// group-call subscriber. The group header/message was already drawn by the main
+		// pane loop above; the disk-log indented capcode line below is left untouched.
+		if (Profile.FlexGroupMode && !bHideGroupcallScreen)
 		{
 			for (pane=0; pane<2; pane++)	// Loop trough messageitems, first show MONITOR,
 			{								// then show FILTER
@@ -1563,7 +1593,10 @@ void ShowMessage()
 			}
 		}
 
-		if (bMATCH && Profile.filters[iMatch].label_enabled && Profile.filters[iMatch].label[0])
+		// FIX [GroupcallScreenHide]: a hidden subscriber must not paint its label on screen
+		// either. The FlexGroupMode disk log uses szCurrentLabel[0] (set near the top of
+		// ShowMessage), not the "- label -" form built here, so logging stays complete.
+		if (!bHideGroupcallScreen && bMATCH && Profile.filters[iMatch].label_enabled && Profile.filters[iMatch].label[0])
 		{
 			// Display description (LABEL) text
 			if (strstr(Profile.filters[iMatch].label, "%"))
@@ -1620,7 +1653,9 @@ void ShowMessage()
 			}
 		}	// end of filter label
 
-		if (iPanePos)
+		// FIX [GroupcallScreenHide]: nothing was drawn for a hidden subscriber, so do not
+		// flush a (possibly stale) pane line for it - that would leave a blank artifact.
+		if (iPanePos && !bHideGroupcallScreen)
 		{
 			if (bMONITOR)  display_line(&Pane1);		// Ensure last line is displayed.
 			if (bFILTERED) display_line(&Pane2);		// Ensure last line is displayed.
@@ -2095,7 +2130,15 @@ void ShowMessage()
 		case 3:  bSendBalloon = (bMATCH && !bMONITOR_ONLY); break;
 		default: bSendBalloon = false; break;
 		}
-		if (bSendBalloon)
+		// FIX [GroupcallToastHide]: an "Ignore in Groupcall" subscriber is hidden from
+		// the on-screen group view (bHideGroupcallScreen) but its label/capcode was still
+		// accumulated into the tray-balloon/WinRT-toast title below, so the Windows toast
+		// kept showing exactly the codes the user hid. The toast is a notification path,
+		// not a disk log/feed, so it follows the screen-hide rule. bHideGroupcallScreen is
+		// only ever true for a group-call subscriber (iConvertingGroupcall && !bGroupcode),
+		// so normal messages and the group capcode row itself are unaffected. Disk logs and
+		// all feeds stay full and unchanged - deliberately screen/notification-only.
+		if (bSendBalloon && !bHideGroupcallScreen)
 		{
 			const char *szBalloonLabel = szCurrentLabel[0][0] ? szCurrentLabel[0] : Current_MSG[MSG_CAPCODE];
 			const char *szBalloonMsg   = iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE];

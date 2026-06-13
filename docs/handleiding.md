@@ -1,6 +1,6 @@
 # PDW Gebruikershandleiding
 
-**Versie 3.6.1** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Versie 3.6.7** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -61,7 +61,7 @@
 
 PDW is een software pagingdecoder die een geluidskaart of seriele poort omzet in een volwaardige FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES-ontvanger. Het decodeert, filtert en distribueert pagingberichten naar een breed scala aan uitvoerkanalen - van eenvoudige weergave op het scherm en e-mailmeldingen tot MQTT-brokers, webhooks, Telnet-clients, MySQL-databases en lokale SQLite-bestanden.
 
-Deze versie (3.6.1) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
+Deze versie (3.6.7) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
 
 ---
 
@@ -230,7 +230,21 @@ Elk filter kan onafhankelijk een willekeurige combinatie van het volgende active
 | **Opdracht** | Voer een extern programma of script uit |
 | **Log 1 / 2 / 3** | Schrijf gematchte berichten naar maximaal drie afzonderlijke logbestanden |
 | **Monitor only** | Toon op het scherm maar sluit uit van hoofdlog en uitvoerfeeds |
+| **Negeer in groepsoproep** | Verberg deze capcode uit de schermweergave van de groepsoproep, maar log en verstuur het volledige bericht wel |
 | **Reject** | Onderdruk dit bericht volledig - niet tonen of loggen |
+
+**Negeer in groepsoproep** is bedoeld om schermruis te verminderen bij routinematige abonnee-capcodes in een FLEX-groepsoproep - denk aan wegblokkering- of station-techniekadressen - zodat de echte personeelsalarmadressen opvallen. Wanneer een capcode die bij een dergelijk filter hoort als abonnee in een groepsoproep verschijnt:
+
+- wordt de capcoderegel weggelaten uit de schermweergave van de groepsoproep (zowel het monitor- als het filterpaneel);
+- sleept de capcode zijn groep niet meer op zichzelf mee naar het **filtervenster** - een groepsoproep waarvan het enige overeenkomende lid een genegeerde capcode is, verstoort het onderste (filter)paneel niet. Een groep die ook een echte (niet-genegeerde) overeenkomende capcode heeft, verschijnt er nog steeds via die capcode;
+- activeert de capcode de filterbep niet;
+- wordt de capcode uit de **Windows-toast/tray-melding** voor die groepsoproep gehouden: de genegeerde capcode/label wordt niet meer in de meldingstitel opgenomen, wat overeenkomt met de schermweergave. (Een groep die ook een echte overeenkomende capcode heeft, geeft nog steeds een melding voor die capcode.)
+
+Het groepsberichtopschrift en de tekst blijven zichtbaar in het monitorpaneel, en alle niet-genegeerde abonnees worden normaal weergegeven. Er gaat niets verloren op schijf: het **volledige** groepsbericht, inclusief de genegeerde capcode, wordt nog steeds naar het monitorlogbestand geschreven en naar elke uitvoerfeed gestuurd (e-mail, Telegram, Pushover, webhook, MQTT, database) precies zoals voorheen. (Het genegeerde lid wordt wel uit het *filter*logbestand gehouden, zodat dit overeenkomt met het filtervenster.) De optie is alleen van toepassing op niet-reject capcode-filters en alleen binnen FLEX-groepsoproepen.
+
+De vlag heeft **geen effect buiten een groepsoproep**: wanneer dezelfde capcode individueel wordt gepagineerd (een normaal alfa/numeriek bericht zonder groepsadres), of in de klassieke (niet-FlexGroupMode) uitgebreide weergave, wordt hij volledig normaal weergegeven, gefilterd, gelogd en doorgestuurd. "Negeer in groepsoproep" verbergt een capcode alleen terwijl hij *abonnee is in* een FLEX-groepsoproep.
+
+**Negeer in groepsoproep** en **Monitor only** sluiten elkaar wederzijds uit: ze vragen om tegengesteld gedrag (monitor-only *toont* een bericht op het scherm en *onderdrukt* de feeds; negeer *verbergt* het op het scherm en *behoudt* de feeds). Het aanvinken van een van de twee wist automatisch de andere, zodat een filter nooit in beide modi tegelijk kan staan.
 
 Een reject-filter kan worden beperkt tot een specifiek bericht door de capcode te combineren met een **Tekst**-waarde: het bericht wordt alleen verworpen wanneer **zowel** de capcode **als** de tekst matcht. Zo kunt u bijvoorbeeld alleen de berichten van een capcode verwerpen die een bepaald woord bevatten, terwijl alle andere berichten van diezelfde capcode normaal worden doorgelaten.
 

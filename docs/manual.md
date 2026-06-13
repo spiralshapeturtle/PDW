@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 3.6.5** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 3.6.7** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -231,7 +231,39 @@ Each filter can independently trigger any combination of the following:
 | **Command** | Run an external program or script |
 | **Log 1 / 2 / 3** | Write matched messages to up to three separate log files |
 | **Monitor only** | Show on screen but exclude from main log and feed outputs |
+| **Ignore in Groupcall** | Hide this capcode from the on-screen group view, but still log and feed the full message |
 | **Reject** | Suppress this message entirely — do not show or log |
+
+**Ignore in Groupcall** is meant to cut screen clutter from routine subscriber codes inside a FLEX
+group call - for example roadblock or station-technical addresses - so the genuine personnel-alarm
+subscribers stand out. When a capcode that matches such a filter appears as a subscriber in a group
+call:
+
+- its capcode line is left out of the on-screen group view (both the monitor and filter panes);
+- it no longer drags its group into the **filter window** on its own - so a group call whose only
+  matching member is an ignored code does not clutter the bottom (filter) pane at all. A group that
+  *also* has a genuine (non-ignored) matching member still appears there normally, via that member;
+- it does not trigger the filter beep;
+- it is kept out of the **Windows toast notification** for that group call: the ignored capcode/label
+  is no longer listed in the toast title, matching the on-screen view. (A group that also has a
+  genuine matching member still raises a toast for that member.)
+
+The group message header and text stay visible in the monitor pane, and every non-ignored subscriber
+is shown normally. Nothing is lost on disk: the **full** group message, including the ignored capcode,
+is still written to the monitor log and sent to every output feed (e-mail, Telegram, Pushover,
+webhook, MQTT, database) exactly as before. (The ignored member is kept out of the *filter* log, to
+match the filter window.) The option applies only to non-reject capcode filters and only inside FLEX
+group calls.
+
+The flag has **no effect outside a group call**: when the same capcode is paged individually (a normal
+alpha/numeric message with no group address), or in the classic (non-FlexGroupMode) verbose view, it is
+shown, filtered, logged and fed completely normally. "Ignore in Groupcall" only ever hides a capcode
+while it is a *subscriber inside* a FLEX group call.
+
+**Ignore in Groupcall** and **Monitor only** are mutually exclusive: they ask for opposite things
+(monitor-only *shows* a message on screen and *suppresses* its feeds; ignore *hides* it on screen and
+*keeps* its feeds). Ticking either one automatically clears the other, so a filter can never be in
+both modes at once.
 
 A reject filter can be narrowed to a specific message by combining the capcode with a **Text** value: the message is only rejected when **both** the capcode **and** the text match. This lets you reject, for example, only the messages from a capcode that contain a given word, while letting all other messages from the same capcode through normally.
 

@@ -1,3 +1,41 @@
+# PDW 3.6.7 - Release Notes
+
+## New in 3.6.7
+
+### Filter options
+
+- **"Ignore in Groupcall" per-filter option (FIX [GroupcallScreenHide]):** the Ctrl+F filter editor has
+  a new checkbox, *Ignore in Groupcall (FLEX group mode only)*. It is meant to cut screen clutter from
+  routine subscriber codes inside a FLEX group call - think roadblock or station-technical addresses -
+  so the genuine personnel-alarm subscribers stand out. When a capcode that matches such a filter
+  appears as a subscriber in a group call: (1) its capcode line is left out of the on-screen group view
+  (monitor and filter panes); (2) it no longer drags its group into the **filter window** on its own, so
+  a group whose only matching member is an ignored code no longer floods the bottom (filter) pane - a
+  group that also has a genuine matching member still appears there via that member; and (3) it does not
+  trigger the filter beep. The group message header and text stay visible in the monitor pane, and the
+  **full** group message - including the ignored capcode - is still written to the monitor log and sent
+  to every output feed (e-mail, Telegram, Pushover, webhook, MQTT, database) exactly as before; only the
+  *filter* log omits the ignored member, to match the filter window. The option is stored per filter in
+  `filters.ini` (bit `0x80` of the existing filter flags field), is available only for non-reject capcode
+  filters, and has no effect outside FLEX group calls or in the classic verbose view. Filters carrying
+  the flag are marked `IGN-GRP` in the Ctrl+F overview (when the extra-info column is enabled).
+  - **Windows toast follows the screen-hide (FIX [GroupcallToastHide]):** the Windows toast/tray
+    notification is a notification path, not a log or feed, so it now honours the flag too. An ignored
+    subscriber's capcode/label is no longer accumulated into the toast title for that group call - the
+    toast previously still listed exactly the codes the user had hidden on screen. A group call that
+    also has a genuine (non-ignored) matching member still raises a toast for that member. Disk logs and
+    all output feeds remain unaffected and continue to carry the full group message.
+  - **No effect on individual pages:** the flag only hides a capcode while it is a *subscriber inside* a
+    FLEX group call. When the same capcode is paged individually (a normal alpha/numeric message with no
+    group address), it is shown, filtered, logged and fed completely normally.
+  - **Mutually exclusive with Monitor only:** the two request opposite behaviour (monitor-only shows on
+    screen + suppresses feeds; ignore hides on screen + keeps feeds), so ticking either checkbox in the
+    filter editor automatically clears the other. Both stay enabled (no greying), so the pair can never
+    deadlock. A runtime safety net also lets monitor-only win should a hand-edited `filters.ini` ever
+    carry both bits.
+
+---
+
 # PDW 3.6.6 - Release Notes
 
 ## New in 3.6.6
