@@ -2027,7 +2027,14 @@ void ShowMessage()
 	if (Profile.mysql_enabled)
 	{
 		// match_type: 1=in filter pane, 2=monitor-only (filter match), 0=no match
-		int mysqlMatchType = bFILTERED ? 1 : (bMONITOR_ONLY ? 2 : 0);
+		// FIX [GroupcallIgnoreFeed]: an "Ignore in Groupcall" subscriber gets a DISTINCT
+		// per-subscriber match_type 3 so a website can isolate/show these "monitor codes"
+		// apart from genuine matches (1/2) and from the many plain unfiltered group members
+		// (0). bHideGroupcallScreen is only ever true for an ignored group-call subscriber;
+		// bFILTERED was forced false at the screen-hide above, so without this it would
+		// collapse to 0 - indistinguishable from every other unfiltered member in the group.
+		// Subscriber-level only: the group-ROW match_type stays 0/1/2 (see MysqlGroupAccumulate).
+		int mysqlMatchType = bHideGroupcallScreen ? 3 : (bFILTERED ? 1 : (bMONITOR_ONLY ? 2 : 0));
 
 		// label_color: PDW COLORREF → "#RRGGBB" for the website; empty if no label
 		char szLabelColorHex[8] = "";
@@ -2069,7 +2076,8 @@ void ShowMessage()
 	// FIX [SqliteFeed]: SQLite INSERT — zelfde groep-/non-groep logica als de MySQL-feed hierboven.
 	if (Profile.sqlite_enabled)
 	{
-		int sqliteMatchType = bFILTERED ? 1 : (bMONITOR_ONLY ? 2 : 0);
+		// FIX [GroupcallIgnoreFeed]: see MySQL feed above - 3 = ignored-in-group (subscriber-level).
+		int sqliteMatchType = bHideGroupcallScreen ? 3 : (bFILTERED ? 1 : (bMONITOR_ONLY ? 2 : 0));
 
 		char szLabelColorHex[8] = "";
 		if (iMatch >= 0 && Profile.filters[iMatch].label_enabled && Profile.filters[iMatch].label[0])

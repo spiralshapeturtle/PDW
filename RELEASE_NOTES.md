@@ -25,6 +25,15 @@
     toast previously still listed exactly the codes the user had hidden on screen. A group call that
     also has a genuine (non-ignored) matching member still raises a toast for that member. Disk logs and
     all output feeds remain unaffected and continue to carry the full group message.
+  - **Database feeds tag the member distinctly (FIX [GroupcallIgnoreFeed]):** in the MySQL and SQLite
+    feeds an ignored group-call subscriber is written with a dedicated per-subscriber `match_type` value
+    of **3** (alongside 1 = filtered, 2 = monitor-only, 0 = unfiltered member). The member stays fully
+    present in the group row's `subscribers` JSON - it is not dropped - but the distinct value lets a
+    website isolate, hide or restyle these "monitor codes" on demand, apart from both genuine matches and
+    the many plain unfiltered members of a group. The group-row `match_type` column itself stays 0/1/2
+    (an ignored member counts as 0 for the row aggregate), so existing row-level queries, badges and
+    counters are unaffected. Earlier the ignored member collapsed to `match_type` 0 and was
+    indistinguishable from any other unfiltered subscriber.
   - **No effect on individual pages:** the flag only hides a capcode while it is a *subscriber inside* a
     FLEX group call. When the same capcode is paged individually (a normal alpha/numeric message with no
     group address), it is shown, filtered, logged and fed completely normally.

@@ -255,6 +255,14 @@ webhook, MQTT, database) exactly as before. (The ignored member is kept out of t
 match the filter window.) The option applies only to non-reject capcode filters and only inside FLEX
 group calls.
 
+In the **database feeds** (MySQL and SQLite) an ignored group-call member is tagged with a dedicated
+per-subscriber `match_type` value of **3** in the group row's `subscribers` JSON (1 = filtered,
+2 = monitor-only, 3 = ignored-in-group, 0 = plain unfiltered member). The member is not dropped - the
+distinct value simply lets a companion website show, hide or restyle these "monitor codes" on demand,
+separately from genuine matches and from the other unfiltered members of the same group. The group
+row's own `match_type` column stays 0/1/2 (an ignored member counts as 0 for the row aggregate), so
+existing row-level queries and statistics are unaffected.
+
 The flag has **no effect outside a group call**: when the same capcode is paged individually (a normal
 alpha/numeric message with no group address), or in the classic (non-FlexGroupMode) verbose view, it is
 shown, filtered, logged and fed completely normally. "Ignore in Groupcall" only ever hides a capcode

@@ -674,7 +674,9 @@ void SqliteGroupAccumulate(const char *capcode, const char *label,
         ga->active     = TRUE;
         ga->sPos       = 0;
         ga->nSubscr    = 0;
-        ga->iMatchType = matchType;
+        // FIX [GroupcallIgnoreFeed]: 3 (ignored-in-group) never leaks to the row column; the
+        // row aggregate stays 0/1/2. The 3 lives only in the per-subscriber JSON below.
+        ga->iMatchType = (matchType == 3) ? 0 : matchType;
 #define GACOPY(dst, src) strncpy(dst, (src) ? (src) : "", sizeof(dst) - 1); dst[sizeof(dst)-1] = '\0'
         Utf8Sanitize(ga->szMessage, sizeof(ga->szMessage), message ? message : "", g_bLinefeed);
         GACOPY(ga->szTime,       szTime);
@@ -701,8 +703,9 @@ void SqliteGroupAccumulate(const char *capcode, const char *label,
     char escCc[32];
     JsonEscapeStr(escCc, sizeof(escCc), capcode ? capcode : "");
     int written;
-    /* FIX [GroupMatchPerCapcode]: per-subscriber match_type meeschrijven zodat de
-       website elk lid in het juiste paneel toont, identiek aan het PDW-window. */
+    /* FIX [GroupMatchPerCapcode]: per-subscriber match_type meeschrijven (0=geen, 1=filtered,
+       2=monitor-only, 3=ignored-in-group [FIX GroupcallIgnoreFeed]) zodat de website elk lid
+       in het juiste paneel toont, identiek aan het PDW-window. */
     if (labelColor && labelColor[0]) {
         char escColor[16];
         JsonEscapeStr(escColor, sizeof(escColor), labelColor);

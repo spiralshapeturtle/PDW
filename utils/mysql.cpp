@@ -1048,7 +1048,10 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
         ga->active     = TRUE;
         ga->sPos       = 0;
         ga->nSubscr    = 0;
-        ga->iMatchType = matchType;
+        // FIX [GroupcallIgnoreFeed]: group-ROW match_type stays 0/1/2 (strongest member). An
+        // ignored member carries per-subscriber match_type 3 (written to the JSON below), but
+        // counts as 0 for the row aggregate so 3 never leaks into the row column.
+        ga->iMatchType = (matchType == 3) ? 0 : matchType;
 #define GACOPY(dst, src) strncpy(dst, (src) ? (src) : "", sizeof(dst) - 1); dst[sizeof(dst)-1] = '\0'
         // FIX [MysqlUtf8]: groepsbericht-body net zo saneren als MysqlNotify (zelfde UTF-8 garantie).
         Utf8SanitizeForMysql(ga->szMessage, sizeof(ga->szMessage), message ? message : "", g_bLinefeed);
@@ -1088,8 +1091,8 @@ void MysqlGroupAccumulate(const char *capcode, const char *label,
     /* FIX [WebGroupColor]: kleur per abonnee meeschrijven zodat de website de
        capcode-labels onder een groepsbericht in hun eigen kleur kan tonen.
        FIX [GroupMatchPerCapcode]: per-subscriber match_type meeschrijven (0=geen,
-       1=filtered, 2=monitor-only) zodat de website elk lid in het juiste paneel
-       toont, identiek aan het PDW-window. */
+       1=filtered, 2=monitor-only, 3=ignored-in-group [FIX GroupcallIgnoreFeed]) zodat de
+       website elk lid in het juiste paneel toont, identiek aan het PDW-window. */
     if (labelColor && labelColor[0]) {
         char escColor[16];
         JsonEscapeStr(escColor, sizeof(escColor), labelColor);
