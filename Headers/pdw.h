@@ -37,6 +37,9 @@ typedef struct
 	int			 telegram;		// FIX [Telegram]: per-filter Telegram notify (bit 0x20 in filters.ini SEP field)
 	int			 pushover;		// FIX [Telegram]: per-filter Pushover notify (bit 0x40), reserved for phase 2
 	int			 ignore_in_groupcall;	// FIX [GroupcallScreenHide]: hide this capcode from the on-screen group view (bit 0x80); full message still logged to disk
+	int			 pushover_priority;		// FIX [PushoverPerFilter]: -9=use global, -2..1=override; stored in CSV field 12
+	char		 pushover_sound[32];	// FIX [PushoverPerFilter]: ""=use global; stored in CSV field 13 (quoted)
+	int			 telegram_silent;		// FIX [TelegramSilent]: 0/1; stored as bit 0x100 in FLAGS field (field 9)
 	int			 sep_filterfile_en;
 	char		 sep_filterfile[3][FILTER_FILE_LEN+1];	// PH: max 3 sepfiles
 	int			 sep_filterfiles;						// PH: number of sepfiles

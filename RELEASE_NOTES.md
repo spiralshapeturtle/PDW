@@ -1,3 +1,82 @@
+# PDW 3.6.9 - Release Notes
+
+## New in 3.6.9
+
+### FLEX group calls
+
+- **Late / fragmented group messages now keep their subscriber list (FIX [GroupLateFrame] /
+  [GroupAssembledLeak]):** a FLEX group call is announced by Short Instructions ("listen to group X,
+  the message arrives in frame N") after which PDW collects the member capcodes and shows them under
+  the group message. The match used to require the group message to arrive in *exactly* frame N. But
+  per the FLEX spec a long message may be split into fragments sent "in following frames", and a busy
+  frame can push the message one or more frames later than announced. When that happened PDW showed the
+  group capcode bare (without its members), never cleared the collected members, and the stale list
+  then leaked onto the next group call that reused the same group slot - appearing minutes later under
+  the wrong group. PDW now accepts the group message anywhere within the same grace window it already
+  used for missed-call detection (up to `GROUP_GRACE_FRAMES` after the announced frame, with
+  end-of-cycle wrap handling), so the members are shown immediately under the correct message and the
+  slot is cleared. A safety net also emits and clears the members for multi-fragment messages that
+  complete beyond the grace window. As a side effect such late calls are no longer mis-counted as
+  "missed group calls". Applies identically to all 16 group codes (2029568-2029583). The on-screen
+  view, the Windows toast and the webhook/Telegram/Pushover/MQTT/MySQL/SQLite feeds all benefit; the
+  telnet wire feed was already correct (it emits the raw instruction and message events separately).
+
+## New in 3.6.8
+
+### Filter overview
+
+- **Telegram/Pushover state in the Ctrl+F overview (FIX [FilterWindowFeeds]):** with *Show extra info*
+  enabled, each filter row now shows `TG`/`tg` and `PO`/`po` flags (uppercase = on, lowercase = off)
+  next to the existing `CMD` / `LAB` / `SEP` / sound / `IGN-GRP` markers. The flags reflect the
+  per-filter *Send Telegram* / *Send Pushover* checkboxes, giving an at-a-glance view of which capcodes
+  are wired to each notification service - useful when scanning thousands of filters. The markers only
+  appear for non-reject filters (a reject row shows `REJECT` instead) and only when the extra-info
+  column is turned on.
+
+### Per-filter notification overrides
+
+- **Telegram silent per filter (FIX [TelegramSilent]):** the Ctrl+F filter editor has a new *Telegram
+  silent* checkbox. When checked it forces `disable_notification=true` for every Telegram message that
+  matches this filter, regardless of the global *Silent delivery* setting. When unchecked it defers to
+  the global setting (it does not force audible). Useful for silencing routine status capcodes in an
+  otherwise audible Telegram bot, or for keeping a critical alarm capcode audible even when global
+  silent is on. The flag is stored as bit `0x100` of the existing filter flags field in `filters.ini`.
+  It is disabled for reject rules (reject filters never produce Telegram output). In multi-edit mode
+  (multiple filters selected) the checkbox switches to tri-state; an indeterminate state means "leave
+  unchanged".
+
+- **Per-filter overrides now apply inside FLEX group calls (FIX [GroupcallPerFilter]):** a P2000
+  monitor capcode almost always arrives only as a *subscriber inside a group call*, never as an
+  individual page. Earlier the per-filter Telegram-silent / Pushover-priority / Pushover-sound
+  overrides were dropped for group calls (the single aggregated notification used the global settings),
+  which made them useless for exactly the monitor-code use case they were built for. The overrides are
+  now folded into the per-group accumulator and applied when the group is flushed as one notification:
+  - **Pushover priority** - the most urgent priority among the matched subscribers wins (e.g. one
+    subscriber set to *High* lifts the whole group notification to High).
+  - **Pushover sound** - the first non-empty per-filter sound among the matched subscribers is used.
+  - **Telegram silent** - the group is sent silent only when **every** matched subscriber requested
+    silent; a single non-silent matched member keeps it audible, so a real alarm is never accidentally
+    muted. The global silent setting is still applied on top.
+  A subscriber with no override (priority "Global" / empty sound / silent off) does not affect the
+  aggregate. The Test buttons in the Telegram and Pushover config dialogs now also include the
+  configured priority/sound/silent so a test send previews the real notification.
+
+- **Pushover priority and sound per filter (FIX [PushoverPerFilter]):** the filter editor has two new
+  Pushover-specific controls:
+  - *PO priority* dropdown: "Global" (use the Pushover config value), or an explicit override
+    (-2 Lowest / -1 Low / 0 Normal / 1 High). Emergency priority 2 is not offered (requires
+    receipt-polling infrastructure not yet present).
+  - *PO sound* text field: leave blank to use the global configured sound; enter a Pushover sound name
+    (up to 31 characters, e.g. `siren`, `alien`, `none`) to override it for this filter only.
+  Both are disabled for reject rules and unavailable when the Pushover sink is off. In multi-edit mode
+  the dropdown has a "Don't change" item and the sound field shows "(leave unchanged)" when selected
+  filters differ. Overrides are stored as CSV fields 12 and 13 appended to the existing `filters.ini`
+  line (`-9` / empty = use global). Older PDW versions that read the file stop at field 11 and ignore
+  the new tail, so the format is backward-compatible. These overrides apply both to individual pages
+  and inside FLEX group calls (see the group-call aggregation note above).
+
+---
+
 # PDW 3.6.7 - Release Notes
 
 ## New in 3.6.7

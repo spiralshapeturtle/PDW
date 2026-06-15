@@ -26,7 +26,8 @@ void PushoverDestroy(void);
 void PushoverNotify(const char *capcode, const char *message, const char *label,
                     const char *szTime, const char *szDate,
                     const char *szMode, const char *szType, const char *szBitrate,
-                    BOOL isGroup, int groupbit);
+                    BOOL isGroup, int groupbit,
+                    int jobPriority, const char *jobSound);  // FIX [PushoverPerFilter]: -9/""=use global
 // FIX [PoGroupBatch]: emit one accumulated FLEX group call as a single notification.
 void PushoverFlushGroup(int groupbit);
 void PushoverSetStatusWnd(HWND hWnd);
@@ -34,6 +35,6 @@ void PushoverSetStatusWnd(HWND hWnd);
 // Synchronous test send used by the config dialog (GUI thread). Renders a sample page through the
 // given Title/Body templates (and html flag) so the test previews the real formatting. TRUE on 2xx.
 BOOL PushoverTestSend(const char *appToken, const char *userKey, const char *title, const char *body,
-                      BOOL html, char *errOut, int errLen);
+                      BOOL html, int priority, const char *sound, char *errOut, int errLen);  // FIX [PushoverPerFilter]: Test honours priority/sound
 
 #endif /* PDW_PUSHOVER_H */

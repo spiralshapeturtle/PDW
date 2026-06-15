@@ -79,6 +79,8 @@ typedef struct {
     char szMode   [32];
     char szType   [32];
     char szBitrate[32];
+    int  jobPriority;       // FIX [PushoverPerFilter]: -9=use global, -2..1=override
+    char jobSound[32];      // FIX [PushoverPerFilter]: ""=use global
 } PushoverJob;
 
 static PushoverJob g_queue[PO_QUEUE_SIZE];
@@ -98,6 +100,8 @@ typedef struct {
     char szMode    [32];
     char szType    [32];
     char szBitrate [32];
+    int  accPriority;       // FIX [GroupcallPrioMax]: highest priority across members (override or global); -9=none yet
+    char accSound[32];      // FIX [GroupcallPerFilter]: aggregated per-filter sound (first non-empty wins)
 } PoGroupAcc;
 static PoGroupAcc g_groupAcc[PO_MAX_GROUPBITS];
 
@@ -340,6 +344,9 @@ static void DoSend(const PushoverJob *job)
     int  prio = g_iPriority;
     BOOL html = g_bHtml;
     LeaveCriticalSection(&g_cs);
+    // FIX [PushoverPerFilter]: apply per-job overrides when not sentinel
+    if (job->jobPriority >= -2 && job->jobPriority <= 1) prio = job->jobPriority;
+    if (job->jobSound[0]) { strncpy(sound, job->jobSound, sizeof(sound) - 1); sound[sizeof(sound) - 1] = '\0'; }
 
     if (!appTok[0] || !userKey[0]) return;
 
@@ -546,12 +553,21 @@ static void EnqueueJob(const PushoverJob *job)
 void PushoverNotify(const char *capcode, const char *message, const char *label,
                     const char *szTime, const char *szDate,
                     const char *szMode, const char *szType, const char *szBitrate,
-                    BOOL isGroup, int groupbit)
+                    BOOL isGroup, int groupbit,
+                    int jobPriority, const char *jobSound)  // FIX [PushoverPerFilter]: -9/""=use global
 {
     if (!g_bRunning) return;
 
     // FIX [PoGroupBatch]: accumulate group-call subscribers per groupbit; one notification is
     // emitted from PushoverFlushGroup() instead of one per subscriber capcode.
+    // FIX [GroupcallPerFilter]: aggregate each matched subscriber's per-filter priority/sound so a
+    // monitor capcode that only appears inside a group call still drives the notification's priority
+    // and sound. First non-empty sound wins.
+    // FIX [GroupcallPrioMax]: the HIGHEST priority in the group must be heard on the phone, even when
+    // other members have a lower or no override. Every subscriber therefore contributes either its
+    // own override OR the global priority (when it defers, jobPriority==-9), and the most-urgent of
+    // all those contributions wins. This stops a single low-priority member from dragging the whole
+    // group below what a defer-to-global member would otherwise have triggered.
     if (isGroup && groupbit >= 0 && groupbit < PO_MAX_GROUPBITS)
     {
         EnterCriticalSection(&g_cs);
@@ -560,6 +576,7 @@ void PushoverNotify(const char *capcode, const char *message, const char *label,
         {
             ZeroMemory(ga, sizeof(*ga));
             ga->active = TRUE;
+            ga->accPriority = -9;   // FIX [GroupcallPerFilter]: -9 = no contribution folded in yet
             strncpy(ga->szMessage, message ? message : "", sizeof(ga->szMessage) - 1);
             strncpy(ga->szTime,    szTime  ? szTime  : "", sizeof(ga->szTime)    - 1);
             strncpy(ga->szDate,    szDate  ? szDate  : "", sizeof(ga->szDate)    - 1);
@@ -569,6 +586,20 @@ void PushoverNotify(const char *capcode, const char *message, const char *label,
         }
         AppendListItem(ga->szCapcodes, sizeof(ga->szCapcodes), capcode, ' ');
         AppendListItem(ga->szLabels,   sizeof(ga->szLabels),   label,   '\n');	// FIX [PoGroupNewline]: one label per line
+        // FIX [GroupcallPrioMax]: fold this subscriber's contribution into the group aggregate. A
+        // member with an explicit override (-2..1) contributes that value; a member that defers to
+        // global (jobPriority==-9) contributes the global priority g_iPriority (already clamped to
+        // -2..1 in PushoverInit). The most-urgent contribution wins, so the highest priority in the
+        // group is always the one that fires the phone.
+        {
+            int effPrio = (jobPriority >= -2 && jobPriority <= 1) ? jobPriority : g_iPriority;
+            if (ga->accPriority < -2 || effPrio > ga->accPriority) ga->accPriority = effPrio; // highest wins
+        }
+        if (jobSound && jobSound[0] && !ga->accSound[0])
+        {
+            strncpy(ga->accSound, jobSound, sizeof(ga->accSound) - 1);
+            ga->accSound[sizeof(ga->accSound) - 1] = '\0';
+        }
         LeaveCriticalSection(&g_cs);
         return;
     }
@@ -583,6 +614,8 @@ void PushoverNotify(const char *capcode, const char *message, const char *label,
     strncpy(job.szMode,    szMode  ? szMode  : "", sizeof(job.szMode)    - 1);
     strncpy(job.szType,    szType  ? szType  : "", sizeof(job.szType)    - 1);
     strncpy(job.szBitrate, szBitrate ? szBitrate : "", sizeof(job.szBitrate) - 1);
+    job.jobPriority = jobPriority;   // FIX [PushoverPerFilter]
+    if (jobSound) { strncpy(job.jobSound, jobSound, sizeof(job.jobSound) - 1); job.jobSound[sizeof(job.jobSound) - 1] = '\0'; }
 
     EnqueueJob(&job);
 }
@@ -600,6 +633,11 @@ void PushoverFlushGroup(int groupbit)
     if (ga->active)
     {
         ZeroMemory(&job, sizeof(job));
+        // FIX [GroupcallPrioMax]: apply the aggregated priority. accPriority is the most-urgent of all
+        // members' contributions (each member's override, or the global priority when it deferred), so
+        // it is a concrete -2..1 value once any subscriber was folded in. accSound: "" = use global.
+        job.jobPriority = ga->accPriority;
+        if (ga->accSound[0]) { strncpy(job.jobSound, ga->accSound, sizeof(job.jobSound) - 1); job.jobSound[sizeof(job.jobSound) - 1] = '\0'; }
         strncpy(job.szCapcode, ga->szCapcodes, sizeof(job.szCapcode) - 1);
         strncpy(job.szLabel,   ga->szLabels,   sizeof(job.szLabel)   - 1);
         strncpy(job.szMessage, ga->szMessage,  sizeof(job.szMessage) - 1);
@@ -646,7 +684,7 @@ static void FillSampleJob(PushoverJob *job)
 // FIX [PoTestPreview]: the Test button renders a sample page through the supplied Title/Body templates
 // (and html flag), so the test previews the real formatting just like Telegram.
 BOOL PushoverTestSend(const char *appToken, const char *userKey, const char *title, const char *body_tmpl,
-                      BOOL html, char *errOut, int errLen)
+                      BOOL html, int priority, const char *sound, char *errOut, int errLen)  // FIX [PushoverPerFilter]
 {
     if (errOut && errLen) errOut[0] = '\0';
     if (!appToken || !appToken[0]) { if (errOut) _snprintf(errOut, errLen - 1, "No app token set"); return FALSE; }
@@ -687,6 +725,12 @@ BOOL PushoverTestSend(const char *appToken, const char *userKey, const char *tit
     AppendField(body, &p, sizeof(body), &first, "user",    userKey);
     AppendField(body, &p, sizeof(body), &first, "message", msgBuf);
     if (titleBuf[0]) AppendField(body, &p, sizeof(body), &first, "title", titleBuf);
+    // FIX [PushoverPerFilter]: include priority/sound so the Test send reflects the configured values
+    {
+        char pr[8]; sprintf(pr, "%d", priority);
+        AppendField(body, &p, sizeof(body), &first, "priority", pr);
+    }
+    if (sound && sound[0]) AppendField(body, &p, sizeof(body), &first, "sound", sound);
     if (html)        AppendField(body, &p, sizeof(body), &first, "html",  "1");
     body[p] = '\0';
 

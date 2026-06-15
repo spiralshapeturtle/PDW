@@ -30,7 +30,8 @@ void TelegramDestroy(void);   // process-exit teardown (keeps g_cs; OS reclaims 
 void TelegramNotify(const char *capcode, const char *message, const char *label,
                     const char *szTime, const char *szDate,
                     const char *szMode, const char *szType, const char *szBitrate,
-                    BOOL isGroup, int groupbit);
+                    BOOL isGroup, int groupbit,
+                    int bJobSilent);   // FIX [TelegramSilent]: 1=disable_notification for this job
 // FIX [TgGroupBatch]: emit one accumulated FLEX group call as a single message.
 void TelegramFlushGroup(int groupbit);
 void TelegramSetStatusWnd(HWND hWnd);
@@ -39,7 +40,7 @@ void TelegramSetStatusWnd(HWND hWnd);
 // TelegramTestSend: renders a sample page through the given Title/Body templates (parse_mode=HTML) and
 // sends it to each chat_id, so the test previews the real formatting. Returns TRUE on HTTP 2xx.
 BOOL TelegramTestSend(const char *token, const char *chatids, const char *title, const char *body,
-                      char *errOut, int errLen);
+                      BOOL bSilent, char *errOut, int errLen);   // FIX [TelegramSilent]: bSilent adds disable_notification
 // TelegramDiscoverChatId: calls getUpdates, fills chatOut with the most recent chat_id (+name), TRUE if found.
 BOOL TelegramDiscoverChatId(const char *token, char *chatOut, int chatLen, char *errOut, int errLen);
 

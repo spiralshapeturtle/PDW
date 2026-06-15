@@ -81,6 +81,7 @@ typedef struct {
     char szMode   [32];
     char szType   [32];
     char szBitrate[32];
+    int  bSilent;   // FIX [TelegramSilent]: 1=disable_notification for this job (OR with global g_bSilent)
 } TelegramJob;
 
 static TelegramJob g_queue[TG_QUEUE_SIZE];
@@ -101,6 +102,8 @@ typedef struct {
     char szMode    [32];
     char szType    [32];
     char szBitrate [32];
+    int  nSub;       // FIX [GroupcallPerFilter]: count of matched subscribers accumulated
+    int  nSilent;    // FIX [GroupcallPerFilter]: how many of them requested per-filter silent
 } TgGroupAcc;
 static TgGroupAcc g_groupAcc[TG_MAX_GROUPBITS];
 
@@ -288,7 +291,8 @@ static void BuildMessageText(char *dst, int dstLen, const TelegramJob *job)
 }
 
 // Build the JSON request body for one chat_id. useParse=FALSE drops parse_mode (plain fallback).
-static void BuildJson(char *dst, int maxLen, const char *chatId, const char *htmlText, BOOL useParse)
+// bJobSilent=TRUE adds disable_notification (OR with the global g_bSilent).
+static void BuildJson(char *dst, int maxLen, const char *chatId, const char *htmlText, BOOL useParse, BOOL bJobSilent)
 {
     int p = 0;
     const char *pre = "{\"chat_id\":";
@@ -308,7 +312,7 @@ static void BuildJson(char *dst, int maxLen, const char *chatId, const char *htm
         const char *np = ",\"disable_web_page_preview\":true";
         for (int i = 0; np[i] && p < maxLen - 2; i++) dst[p++] = np[i];
     }
-    if (g_bSilent)
+    if (g_bSilent || bJobSilent)   // FIX [TelegramSilent]: global OR per-job silent
     {
         const char *ds = ",\"disable_notification\":true";
         for (int i = 0; ds[i] && p < maxLen - 2; i++) dst[p++] = ds[i];
@@ -460,7 +464,7 @@ static void ApplyMigration(const char *oldId, LONGLONG newId)
     WriteLog("MIGRATE chat_id %s -> %lld (updated)", oldId, newId);
 }
 
-static void SendToChat(const char *token, const char *chatId, const char *htmlText)
+static void SendToChat(const char *token, const char *chatId, const char *htmlText, BOOL bJobSilent)
 {
     static char jsonBody[6 * TG_MSG_LEN + 1024];
     char resp[2048];
@@ -473,7 +477,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
             PostStatus(TGS_RETRY, attempt);
         }
 
-        BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, TRUE);
+        BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, TRUE, bJobSilent);
         int status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
 
         if (status >= 200 && status < 300)
@@ -504,7 +508,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
         if (status == 400 && strstr(resp, "can't parse entities"))
         {
             WriteLog("PARSE   chat_id=%s HTML rejected, retrying as plain text", chatId);
-            BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, FALSE);
+            BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, FALSE, bJobSilent);
             status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
             if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return; }
         }
@@ -517,7 +521,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
             {
                 ApplyMigration(chatId, newId);
                 char newStr[32]; sprintf(newStr, "%lld", newId);
-                BuildJson(jsonBody, sizeof(jsonBody), newStr, htmlText, TRUE);
+                BuildJson(jsonBody, sizeof(jsonBody), newStr, htmlText, TRUE, bJobSilent);
                 status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
                 if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return; }
             }
@@ -606,7 +610,7 @@ static void DoSend(const TelegramJob *job)
         while (tok)
         {
             while (*tok == ' ') tok++;
-            if (*tok) SendToChat(szToken, tok, chunk);
+            if (*tok) SendToChat(szToken, tok, chunk, job->bSilent ? TRUE : FALSE);  // FIX [TelegramSilent]
             tok = strtok_s(NULL, ";, ", &ctx);
         }
 
@@ -741,13 +745,17 @@ static void EnqueueJob(const TelegramJob *job)
 void TelegramNotify(const char *capcode, const char *message, const char *label,
                     const char *szTime, const char *szDate,
                     const char *szMode, const char *szType, const char *szBitrate,
-                    BOOL isGroup, int groupbit)
+                    BOOL isGroup, int groupbit,
+                    int bJobSilent)  // FIX [TelegramSilent]: 1=disable_notification for this job
 {
     if (!g_bRunning) return;
 
     // FIX [TgGroupBatch]: a FLEX group call calls TelegramNotify once per subscriber capcode.
     // Accumulate them per groupbit and emit a single message from TelegramFlushGroup(), so the
     // user receives ONE Telegram listing all subscriber capcodes/labels rather than N copies.
+    // FIX [GroupcallPerFilter]: vote on per-filter silent so a monitor capcode that only appears
+    // inside a group call can still silence the notification. The group is sent silent only when
+    // EVERY matched subscriber requested silent (a single non-silent member keeps it audible).
     if (isGroup && groupbit >= 0 && groupbit < TG_MAX_GROUPBITS)
     {
         EnterCriticalSection(&g_cs);
@@ -765,6 +773,8 @@ void TelegramNotify(const char *capcode, const char *message, const char *label,
         }
         AppendListItem(ga->szCapcodes, sizeof(ga->szCapcodes), capcode, ' ');
         AppendListItem(ga->szLabels,   sizeof(ga->szLabels),   label,   '\n');	// FIX [TgGroupNewline]: one label per line
+        ga->nSub++;                          // FIX [GroupcallPerFilter]: silent vote
+        if (bJobSilent) ga->nSilent++;
         LeaveCriticalSection(&g_cs);
         return;
     }
@@ -779,6 +789,7 @@ void TelegramNotify(const char *capcode, const char *message, const char *label,
     strncpy(job.szMode,    szMode  ? szMode  : "", sizeof(job.szMode)    - 1);
     strncpy(job.szType,    szType  ? szType  : "", sizeof(job.szType)    - 1);
     strncpy(job.szBitrate, szBitrate ? szBitrate : "", sizeof(job.szBitrate) - 1);
+    job.bSilent = bJobSilent;   // FIX [TelegramSilent]
 
     EnqueueJob(&job);
 }
@@ -804,6 +815,9 @@ void TelegramFlushGroup(int groupbit)
         strncpy(job.szMode,    ga->szMode,     sizeof(job.szMode)    - 1);
         strncpy(job.szType,    ga->szType,     sizeof(job.szType)    - 1);
         strncpy(job.szBitrate, ga->szBitrate,  sizeof(job.szBitrate) - 1);
+        // FIX [GroupcallPerFilter]: silent only when ALL matched subscribers requested it (global
+        // silent is still applied on top in BuildJson via g_bSilent).
+        job.bSilent = (ga->nSub > 0 && ga->nSilent == ga->nSub) ? 1 : 0;
         ZeroMemory(ga, sizeof(*ga));   // clear slot
         have = TRUE;
     }
@@ -895,7 +909,7 @@ static void FillSampleJob(TelegramJob *job)
 // FIX [TgTestPreview]: the Test button now renders a sample page through the supplied Title/Body
 // templates with parse_mode=HTML, so the recipient sees the exact formatting (bold, line breaks).
 BOOL TelegramTestSend(const char *token, const char *chatids, const char *title, const char *body,
-                      char *errOut, int errLen)
+                      BOOL bSilent, char *errOut, int errLen)   // FIX [TelegramSilent]
 {
     if (errOut && errLen) errOut[0] = '\0';
     if (!token || !token[0])   { if (errOut) _snprintf(errOut, errLen - 1, "No bot token set"); return FALSE; }
@@ -925,8 +939,14 @@ BOOL TelegramTestSend(const char *token, const char *chatids, const char *title,
             for (int i = 0; mid[i] && p < (int)sizeof(json) - 2; i++) json[p++] = mid[i];
             JsonEscape(json, &p, sizeof(json), text);
             if (p < (int)sizeof(json) - 2) json[p++] = '"';
-            const char *post = ",\"parse_mode\":\"HTML\"}";
+            const char *post = ",\"parse_mode\":\"HTML\"";
             for (int i = 0; post[i] && p < (int)sizeof(json) - 1; i++) json[p++] = post[i];
+            if (bSilent)   // FIX [TelegramSilent]: honour the Silent checkbox in the Test send too
+            {
+                const char *ds = ",\"disable_notification\":true";
+                for (int i = 0; ds[i] && p < (int)sizeof(json) - 2; i++) json[p++] = ds[i];
+            }
+            if (p < (int)sizeof(json) - 1) json[p++] = '}';
             json[p] = '\0';
 
             int st = DialogPost(token, "sendMessage", json, (int)strlen(json), resp, sizeof(resp));
@@ -942,6 +962,11 @@ BOOL TelegramTestSend(const char *token, const char *chatids, const char *title,
                     for (int i = 0; mid[i] && p < (int)sizeof(json) - 2; i++) json[p++] = mid[i];
                     JsonEscape(json, &p, sizeof(json), text);
                     if (p < (int)sizeof(json) - 2) json[p++] = '"';
+                    if (bSilent)   // FIX [TelegramSilent]: also in the plain-text fallback
+                    {
+                        const char *ds = ",\"disable_notification\":true";
+                        for (int i = 0; ds[i] && p < (int)sizeof(json) - 2; i++) json[p++] = ds[i];
+                    }
                     if (p < (int)sizeof(json) - 1) json[p++] = '}';
                     json[p] = '\0';
                     st = DialogPost(token, "sendMessage", json, (int)strlen(json), resp, sizeof(resp));

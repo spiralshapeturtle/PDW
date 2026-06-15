@@ -281,6 +281,15 @@ A rejected message is normally kept out of every output, including the on-disk m
 
 Filter labels and filter text patterns can each be up to **256 characters** long.
 
+**Filter overview columns.** With *Show extra info* enabled (Filters dialog), each row in the Ctrl+F
+overview shows a compact set of per-filter flags so you can scan a large filter set at a glance.
+Each flag is **UPPERCASE when on, lowercase when off**: `CMD`/`cmd` (command file), `LAB`/`lab`
+(show label), `SEP`/`sep` (separate filter file), `TG`/`tg` (Send Telegram), `PO`/`po` (Send
+Pushover), the sound name, and `IGN-GRP` when *Ignore in Groupcall* is set. The `TG`/`PO` flags
+reflect the per-filter *Send Telegram* / *Send Pushover* checkboxes, which drive those feeds in the
+"Selected filters only" send mode - handy for seeing which of thousands of capcodes are wired to each
+notification service.
+
 ### 9.3 Message text matching
 
 When a filter has a **Text** value, the message must contain that text for the filter to match. Matching is case-insensitive. The text field accepts up to **256 characters** and understands the following operators:
@@ -484,6 +493,15 @@ handful of capcodes/riccodes; in the other modes it is ignored. **FLEX group cal
 a single message listing all matching subscriber capcodes/labels, not one message per member. Activity
 logged to `YYMMDD_telegram.log`.
 
+**Per-filter silent override:** the Ctrl+F filter editor has a *Telegram silent* checkbox that
+overrides the global *Silent delivery* setting for a specific filter. When checked, Telegram delivers
+notifications for that capcode silently (no buzz/ring) even if global silent is off. When unchecked
+it defers to the global setting. Not available for reject rules. In multi-edit mode the checkbox is
+tri-state: an indeterminate state means "leave the current value unchanged" across the selected
+filters. **Inside FLEX group calls** the flag still counts: the single aggregated group notification
+is sent silent only when *every* matched subscriber in that group requested silent, so one ordinary
+(non-silent) member keeps the whole group audible.
+
 ### 10.3b Pushover
 
 Configure via **Pushover** in the menu. Pushes decoded pages to [Pushover](https://pushover.net)
@@ -538,6 +556,24 @@ call, use Telegram (which can split across messages).
 (**Ctrl-F**) has a *Send Pushover* checkbox that is consulted **only** in *Selected filters only*
 mode. FLEX group calls are delivered as a single notification listing all matching subscriber
 capcodes. Activity logged to `YYMMDD_pushover.log`.
+
+**Per-filter priority and sound overrides:** the Ctrl+F filter editor has two additional per-filter
+Pushover controls:
+
+- *PO priority* dropdown — overrides the global priority for this filter. Choose "Global" to follow
+  the Pushover dialog setting, or pick an explicit level (-2 Lowest / -1 Low / 0 Normal / 1 High).
+  Use this to ring at high priority for an alarm capcode while leaving routine pagers at -2.
+- *PO sound* text field — overrides the global sound for this filter. Leave blank to use the global
+  configured sound; enter a Pushover sound name (e.g. `siren`, `alien`, `none`) to override it for
+  this capcode only. Sound names are case-sensitive and must match the Pushover API name exactly.
+
+Both controls are disabled for reject rules and when the Pushover sink is inactive. In multi-edit
+mode the priority dropdown has a "Don't change" item and the sound field shows "(leave unchanged)"
+when the selected filters carry different values. **Inside FLEX group calls** the overrides still
+apply to the single aggregated notification: the most urgent priority among the matched subscribers
+wins, and the first non-empty per-filter sound is used. This matters because a P2000 monitor capcode
+usually only ever appears as a subscriber inside a group call - so without this the override would
+never take effect for it.
 
 ### 10.4 Telnet server
 
@@ -848,7 +884,7 @@ PDW decodes all three rates simultaneously. Message types: **Alpha**, **Numeric*
 
 **Multi-frame reassembly:** long FLEX alpha messages that span multiple frames are accumulated and displayed as a single complete string. A successfully reassembled message is marked on screen with an asterisk (`*`) directly after the capcode. A fragment that could not (yet) be completed is shown instead with a text marker next to the message - `[fragmented]`, or `[<type> fragment - incomplete]` for an orphan fragment with no prior chain - so you can tell a complete reassembly apart from a partial one.
 
-**Group calls:** a group capcode (range 2029568–2029583) addresses multiple individual pagers simultaneously. PDW displays all subscriber capcodes and their labels together with the group message.
+**Group calls:** a group capcode (range 2029568–2029583) addresses multiple individual pagers simultaneously. The network first sends Short Instructions ("listen to group X, the message follows in frame N"), which tell PDW which subscriber capcodes belong to the group and in which frame to expect the message; PDW then displays all subscriber capcodes and their labels together with the group message. Because a long message may be split into fragments sent in later frames - and a congested frame can delay it as well - the group message can legitimately arrive a frame or more after the announced one. PDW tolerates this within a small grace window, so the subscriber list always stays attached to the right message and is shown the moment the message completes.
 
 **ReFLEX** is an extended version of FLEX supporting two-way paging. PDW decodes ReFLEX using the same decoder path.
 

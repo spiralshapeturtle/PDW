@@ -6890,6 +6890,10 @@ void Copy_Filter_Fields(FILTER *out_filter, FILTER in_filter)
 	out_filter->telegram		= in_filter.telegram;		// FIX [Telegram]
 	out_filter->pushover		= in_filter.pushover;		// FIX [Telegram]
 	out_filter->ignore_in_groupcall	= in_filter.ignore_in_groupcall;	// FIX [GroupcallScreenHide]
+	out_filter->telegram_silent	= in_filter.telegram_silent;	// FIX [TelegramSilent]
+	out_filter->pushover_priority	= in_filter.pushover_priority;	// FIX [PushoverPerFilter]
+	strncpy(out_filter->pushover_sound, in_filter.pushover_sound, 31);	// FIX [PushoverPerFilter]
+	out_filter->pushover_sound[31] = '\0';
 	out_filter->match_exact_msg	= in_filter.match_exact_msg;
 
 	for (int i=0; i<3; i++)
@@ -6976,6 +6980,13 @@ void BuildFilterString(char *temp_str, size_t bufsize, FILTER filter)
 		bfs_cat(temp_str, bufsize, filter.label_enabled ? "LAB" : "lab");
 		bfs_cat(temp_str, bufsize, " | ");
 		bfs_cat(temp_str, bufsize, filter.sep_filterfile_en ? "SEP" : "sep");
+		// FIX [FilterWindowFeeds]: show per-filter Telegram/Pushover state in the overview
+		// (uppercase = on, lowercase = off), so the selected-filter feeds are visible at a glance
+		// across a large filter set. These bits drive the feeds in "Selected filters only" mode.
+		bfs_cat(temp_str, bufsize, " | ");
+		bfs_cat(temp_str, bufsize, filter.telegram ? "TG" : "tg");
+		bfs_cat(temp_str, bufsize, " | ");
+		bfs_cat(temp_str, bufsize, filter.pushover ? "PO" : "po");
 		bfs_cat(temp_str, bufsize, " | ");
 
 		if (filter.monitor_only)
@@ -7439,6 +7450,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 				//HWi
 				memset(&filter, 0, sizeof(filter)) ;
+				filter.pushover_priority = -9; // FIX [PushoverPerFilter]: default = use global
 
 				SetFocus(GetDlgItem(hFilterDlg, IDC_FILTERS));
 
@@ -8026,6 +8038,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 	int sep_en=0, sep1=0, sep2=0, sep3=0;
 	int telegram=0, pushover=0;	// FIX [Telegram]: multi-edit "don't change" trackers
 	int ignore_grp=0;	// FIX [GroupcallScreenHide]: multi-edit "don't change" tracker
+	int tg_silent=0, po_priority_diff=0, po_sound_diff=0;	// FIX [TelegramSilent] / FIX [PushoverPerFilter]: multi-edit trackers
 
 	char temp_cap[FILTER_CAPCODE_LEN+1]="",
 		 temp[MAX_STR_LEN],	// FIX [FilterTextLen]: was MAX_PATH (260); holds BuildFilterString output (label+text up to ~560 bytes)
@@ -8377,6 +8390,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		{
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTERTELEGRAM), true);
 			SendDlgItemMessage(hDlg, IDC_FILTERTELEGRAM, WM_SETTEXT, 0, (LPARAM) "Send Telegram");
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_SILENT), true);	// FIX [TelegramSilent]
 		}
 
 		// FIX [Pushover]: idem
@@ -8384,6 +8398,16 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		{
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTERPUSHOVER), true);
 			SendDlgItemMessage(hDlg, IDC_FILTERPUSHOVER, WM_SETTEXT, 0, (LPARAM) "Send Pushover");
+			// FIX [PushoverPerFilter]: fill priority combo and enable sound edit
+			SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_RESETCONTENT, 0, 0);
+			SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"Global");
+			SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"-2 Lowest");
+			SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"-1 Low");
+			SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"0 Normal");
+			SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"1 High");
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTER_PO_PRIORITY), true);
+			SendDlgItemMessage(hDlg, IDC_FILTER_PO_SOUND, EM_LIMITTEXT, 31, 0L);
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTER_PO_SOUND), true);
 		}
 
 		if (filter.type == UNUSED_FILTER) // Add Filter
@@ -8423,6 +8447,9 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					if (Profile.filters[index].telegram != filter.telegram) telegram=1;	// FIX [Telegram]
 					if (Profile.filters[index].pushover != filter.pushover) pushover=1;	// FIX [Telegram]
 					if (Profile.filters[index].ignore_in_groupcall != filter.ignore_in_groupcall) ignore_grp=1;	// FIX [GroupcallScreenHide]
+					if (Profile.filters[index].telegram_silent != filter.telegram_silent) tg_silent=1;	// FIX [TelegramSilent]
+					if (Profile.filters[index].pushover_priority != filter.pushover_priority) po_priority_diff=1;	// FIX [PushoverPerFilter]
+					if (strcmp(Profile.filters[index].pushover_sound, filter.pushover_sound) != 0) po_sound_diff=1;	// FIX [PushoverPerFilter]
 					if (Profile.filters[index].sep_filterfile_en != filter.sep_filterfile_en) sep_en=1;
 					if (Profile.filters[index].sep_filterfiles > sep_filterfiles) sep_filterfiles = Profile.filters[index].sep_filterfiles;
 
@@ -8439,6 +8466,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 				if (telegram)     SendDlgItemMessage(hDlg, IDC_FILTERTELEGRAM,      BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [Telegram]
 				if (pushover)     SendDlgItemMessage(hDlg, IDC_FILTERPUSHOVER,      BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [Pushover]
 				if (ignore_grp)   SendDlgItemMessage(hDlg, IDC_FILTER_IGNORE_GROUPCALL, BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [GroupcallScreenHide]
+				if (tg_silent)    SendDlgItemMessage(hDlg, IDC_FILTER_TG_SILENT, BM_SETSTYLE, BS_AUTO3STATE, TRUE);	// FIX [TelegramSilent]
 
 				sprintf(temp, "Total number of hits: %i", iHits);
 				SetDlgItemText(hDlg, IDC_FILTERHITS, temp);
@@ -8498,7 +8526,22 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		CheckDlgButton(hDlg, IDC_FILTERTELEGRAM,      telegram     ? BST_INDETERMINATE : filter.telegram);	// FIX [Telegram]
 		CheckDlgButton(hDlg, IDC_FILTERPUSHOVER,      pushover     ? BST_INDETERMINATE : filter.pushover);	// FIX [Pushover]
 		CheckDlgButton(hDlg, IDC_FILTER_IGNORE_GROUPCALL, ignore_grp ? BST_INDETERMINATE : filter.ignore_in_groupcall);	// FIX [GroupcallScreenHide]
+		CheckDlgButton(hDlg, IDC_FILTER_TG_SILENT, tg_silent ? BST_INDETERMINATE : filter.telegram_silent);	// FIX [TelegramSilent]
 		CheckDlgButton(hDlg, IDC_SEPFILTERFILEEN,     sep_en       ? BST_INDETERMINATE : filter.sep_filterfile_en);
+		// FIX [PushoverPerFilter]: load Pushover priority combo and sound edit
+		{
+			// Priority: index 0=Global(-9), 1=-2, 2=-1, 3=0, 4=1; index 5 = "Don't change" added for multi-edit
+			static const int prioVals[] = { -9, -2, -1, 0, 1 };
+			int psel = 0; // default: Global
+			for (int pi = 0; pi < 5; pi++) { if (filter.pushover_priority == prioVals[pi]) { psel = pi; break; } }
+			if (po_priority_diff)
+			{
+				SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_ADDSTRING, 0, (LPARAM)"Don't change");
+				SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_SETCURSEL, 5, 0L);
+			}
+			else SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_SETCURSEL, psel, 0L);
+			SetDlgItemText(hDlg, IDC_FILTER_PO_SOUND, po_sound_diff ? "(leave unchanged)" : filter.pushover_sound);
+		}
 
 		SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_RESETCONTENT, 0, 0);
 		SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_ADDSTRING, 0, (LPARAM) (LPSTR) "No sound");
@@ -8744,6 +8787,11 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		// Both stay enabled and clicking either one clears the other in the WM_COMMAND handlers, so
 		// the gating here only mirrors the SMTP/SEP rule: unavailable for a reject filter.
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_IGNORE_GROUPCALL), (captxt && !reject) ? true : false);
+		// FIX [TelegramSilent]: silent flag only meaningful when Telegram is enabled and not a reject filter
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_SILENT), Profile.telegramEnabled && !reject);
+		// FIX [PushoverPerFilter]: priority/sound only meaningful when Pushover is enabled and not a reject filter
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_PO_PRIORITY), Profile.pushoverEnabled && !reject);
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_PO_SOUND),    Profile.pushoverEnabled && !reject);
 
 		return (TRUE);
 
@@ -9082,13 +9130,18 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					return (FALSE);
 				}
 
-				if ((strchr(filter.text, '^') - filter.text) > 0)
+				// FIX [CaretCheck]: strchr returns NULL when '^' is absent; NULL - ptr is UB.
+				// Cache the result to avoid the UB and the redundant second call.
 				{
-					MessageBox(hDlg, "The character ^ can only be used\nat the beginning of the line","PDW Filter Text", MB_ICONERROR);
-					SetFocus(GetDlgItem(hDlg, IDC_FILTERTEXT));
-					pos = strchr(filter.text, '^') - filter.text;
-					SendDlgItemMessage(hDlg, IDC_FILTERTEXT, EM_SETSEL, pos, pos+1);
-					return (FALSE);
+					char *pCaret = strchr(filter.text, '^');
+					if (pCaret != NULL && (pCaret - filter.text) > 0)
+					{
+						MessageBox(hDlg, "The character ^ can only be used\nat the beginning of the line","PDW Filter Text", MB_ICONERROR);
+						SetFocus(GetDlgItem(hDlg, IDC_FILTERTEXT));
+						pos = (int)(pCaret - filter.text);
+						SendDlgItemMessage(hDlg, IDC_FILTERTEXT, EM_SETSEL, pos, pos+1);
+						return (FALSE);
+					}
 				}
 				filter.match_exact_msg = IsDlgButtonChecked(hDlg, IDC_FILTERMATCHEXACT);
 			}
@@ -9317,6 +9370,31 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					if (IsDlgButtonChecked(hDlg, IDC_FILTERPUSHOVER) != BST_INDETERMINATE)
 					{
 						Profile.filters[index].pushover = IsDlgButtonChecked(hDlg, IDC_FILTERPUSHOVER);
+					}
+
+					// FIX [TelegramSilent]: persist per-filter Telegram silent bit (tri-state aware)
+					if (IsDlgButtonChecked(hDlg, IDC_FILTER_TG_SILENT) != BST_INDETERMINATE)
+					{
+						Profile.filters[index].telegram_silent = IsDlgButtonChecked(hDlg, IDC_FILTER_TG_SILENT) ? 1 : 0;
+					}
+
+					// FIX [PushoverPerFilter]: persist per-filter Pushover priority override
+					{
+						static const int prioVals[] = { -9, -2, -1, 0, 1 };
+						int psel = (int)SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_GETCURSEL, 0, 0);
+						if (psel >= 0 && psel <= 4) // 5 = "Don't change" (multi-edit) -> skip
+							Profile.filters[index].pushover_priority = prioVals[psel];
+					}
+
+					// FIX [PushoverPerFilter]: persist per-filter Pushover sound override
+					{
+						char szSnd[32];
+						GetDlgItemText(hDlg, IDC_FILTER_PO_SOUND, szSnd, sizeof(szSnd));
+						if (strcmp(szSnd, "(leave unchanged)") != 0) // multi-edit sentinel -> skip
+						{
+							strncpy(Profile.filters[index].pushover_sound, szSnd, 31);
+							Profile.filters[index].pushover_sound[31] = '\0';
+						}
 					}
 
 					// FIX [GroupcallScreenHide]: persist per-filter "Ignore in Groupcall" bit (tri-state aware)
@@ -10267,8 +10345,9 @@ BOOL FAR PASCAL TelegramDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			GetDlgItemText(hDlg, IDC_TG_CHATIDS, chatids, sizeof(chatids));
 			GetDlgItemText(hDlg, IDC_TG_TITLE,   title,   sizeof(title));	// FIX [TgTestPreview]: preview current templates
 			GetDlgItemText(hDlg, IDC_TG_BODY,    body,    sizeof(body));
+			BOOL tgSilent = IsDlgButtonChecked(hDlg, IDC_TG_SILENT) ? TRUE : FALSE;	// FIX [TelegramSilent]: Test honours Silent checkbox
 			SetDlgItemText(hDlg, IDC_TG_STATUS, "Status: Testing...");
-			BOOL ok = TelegramTestSend(token, chatids, title, body, err, sizeof(err));
+			BOOL ok = TelegramTestSend(token, chatids, title, body, tgSilent, err, sizeof(err));
 			char msg[200];
 			sprintf(msg, "Status: %s", ok ? "Test OK" : (err[0] ? err : "Test failed"));
 			SetDlgItemText(hDlg, IDC_TG_STATUS, msg);
@@ -10389,8 +10468,16 @@ BOOL FAR PASCAL PushoverDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			GetDlgItemText(hDlg, IDC_PO_TITLE,    title,   sizeof(title));	// FIX [PoTestPreview]: preview current templates
 			GetDlgItemText(hDlg, IDC_PO_BODY,     body,    sizeof(body));
 			BOOL htmlOn = IsDlgButtonChecked(hDlg, IDC_PO_HTML) ? TRUE : FALSE;
+			// FIX [PushoverPerFilter]: Test honours the configured priority + sound
+			int poTestPrio;
+			{
+				int iSel = (int)SendDlgItemMessage(hDlg, IDC_PO_PRIORITY, CB_GETCURSEL, 0, 0);
+				poTestPrio = (iSel == CB_ERR) ? 0 : (iSel - 2);   // index 0..3 -> -2..1
+			}
+			char poTestSound[64];
+			GetDlgItemText(hDlg, IDC_PO_SOUND, poTestSound, sizeof(poTestSound));
 			SetDlgItemText(hDlg, IDC_PO_STATUS, "Status: Testing...");
-			BOOL ok = PushoverTestSend(appTok, userKey, title, body, htmlOn, err, sizeof(err));
+			BOOL ok = PushoverTestSend(appTok, userKey, title, body, htmlOn, poTestPrio, poTestSound, err, sizeof(err));
 			char msg[200];
 			sprintf(msg, "Status: %s", ok ? "Test OK" : (err[0] ? err : "Test failed"));
 			SetDlgItemText(hDlg, IDC_PO_STATUS, msg);
@@ -11763,6 +11850,7 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 				else
 				{
 					ZeroMemory(&filter, sizeof(filter));
+					filter.pushover_priority = -9; // FIX [PushoverPerFilter]: default = use global
 
 					for (int item=1; item<=FILTER_HITCOUNTER; item++, i=0)	// Loop trough items
 					{
@@ -11878,6 +11966,7 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 							filter.telegram            = (iTEMP & 0x20) != 0;	// FIX [Telegram]: per-filter Telegram bit
 							filter.pushover            = (iTEMP & 0x40) != 0;	// FIX [Telegram]: per-filter Pushover bit (phase 2)
 							filter.ignore_in_groupcall = (iTEMP & 0x80) != 0;	// FIX [GroupcallScreenHide]: hide capcode from on-screen group view
+							filter.telegram_silent     = (iTEMP & 0x100) != 0;	// FIX [TelegramSilent]: per-filter silent notification bit
 
 							break;
 							
@@ -11910,6 +11999,18 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 							if (token = strtok_s(&szLine[pos], ",", &strtokCtx)) filter.hitcounter = atoi(token);
 							if (token = strtok_s(NULL, ",", &strtokCtx)) strcpy(filter.lasthit_date, token);
 							if (token = strtok_s(NULL, ",", &strtokCtx)) strcpy(filter.lasthit_time, token);
+							// FIX [PushoverPerFilter]: field 12 - per-filter Pushover priority override
+							if (token = strtok_s(NULL, ",", &strtokCtx))
+							{
+								int p = atoi(token);
+								filter.pushover_priority = (p >= -2 && p <= 1) ? p : -9;
+							}
+							// FIX [PushoverPerFilter]: field 13 - per-filter Pushover sound override (quoted string)
+							if (token = strtok_s(NULL, ",\"", &strtokCtx))
+							{
+								strncpy(filter.pushover_sound, token, 31);
+								filter.pushover_sound[31] = '\0';
+							}
 
 							break;
 						}
@@ -12345,6 +12446,7 @@ void WriteFilters(PPROFILE pProfile, int backup)
 				if (pProfile->filters[index].telegram)			iTEMP += 32;	// FIX [Telegram]: 0x20
 				if (pProfile->filters[index].pushover)			iTEMP += 64;	// FIX [Telegram]: 0x40
 				if (pProfile->filters[index].ignore_in_groupcall)	iTEMP += 128;	// FIX [GroupcallScreenHide]: 0x80
+				if (pProfile->filters[index].telegram_silent)	iTEMP += 256;	// FIX [TelegramSilent]: 0x100
 			}
 
 			sprintf(szTEMP, "%i", iTEMP);
@@ -12375,15 +12477,20 @@ void WriteFilters(PPROFILE pProfile, int backup)
 
 			strcat(szLine, "\"");
 
+			// FIX [PushoverPerFilter] / FIX [TelegramSilent]: always write hitcounter block + fields
+			// 12-13 so per-filter overrides survive reload even when hitcounter is 0.
+			// When hitcounter==0 the date/time slots use "-" as placeholders (never displayed
+			// since the GUI hides last-hit info for count==0; old readers safely ignore field 12+).
 			if (pProfile->filters[index].hitcounter)
-			{
-				strcat(szLine, ",");
-
-				sprintf(szTEMP, "%i,%s,%s", pProfile->filters[index].hitcounter,
-											pProfile->filters[index].lasthit_date,
-											pProfile->filters[index].lasthit_time);
-				strcat(szLine, szTEMP);
-			}
+				sprintf(szTEMP, ",%i,%s,%s", pProfile->filters[index].hitcounter,
+				                             pProfile->filters[index].lasthit_date,
+				                             pProfile->filters[index].lasthit_time);
+			else
+				strcpy(szTEMP, ",0,-,-");
+			strcat(szLine, szTEMP);
+			sprintf(szTEMP, ",%i,\"%s\"", pProfile->filters[index].pushover_priority,
+			                              pProfile->filters[index].pushover_sound);
+			strcat(szLine, szTEMP);
 			fprintf(pFiltersFile, "%s\n", szLine);
 		}
 		fclose(pFiltersFile);

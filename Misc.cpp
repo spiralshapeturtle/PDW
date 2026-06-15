@@ -492,6 +492,79 @@ static void TrayBalloonFlush()
 static void GetGroupcallLogPath(char *out, int outSize);   // forward declarations
 static void EnsureGroupcallLogHeader(const char *szFile);
 
+// Tolerance window for late group-message delivery. A group message that
+// arrives within GROUP_GRACE_FRAMES of the SI-assigned frame is still in
+// time; only declare missed once we are strictly past the grace window.
+// Matches the model used by other FLEX decoders to absorb network slop.
+#define GROUP_GRACE_FRAMES 5
+
+// FIX [GroupLateFrame]: a group message does NOT always arrive in the exact frame
+// the Short Instruction announced. When the announced frame is congested (e.g. it
+// already carries other group messages) the network slips the group call into a
+// later frame, within the grace window. Confirmed against a reference FLEX decoder
+// wire dump: SI assigned frame 125 for 2029581, but the message arrived in frame
+// 126 because 2029576 and 2029578 already occupied frame 125. The HAPPY path used
+// to require GroupFrame[groupbit] == iCurrentFrame exactly, so such a late call
+// fell through to the missed/assembled handling (members dropped or leaked, plus a
+// false "missed" X++). This mirrors the grace tolerance Check4_MissedGroupcalls
+// already applies, and the (cycle,frame)+distance window used by p2kflexDecoder.
+// Returns true when iCurrentFrame is at or up to GROUP_GRACE_FRAMES past the
+// assigned frame (with end-of-cycle wrap handling); never before the assigned frame.
+static bool GroupFrameInWindow(int groupbit)
+{
+	int gf = GroupFrame[groupbit];
+	if (gf < 0) return false;
+
+	int cf = iCurrentFrame;
+	// Assigned late in the cycle, message slipped past the 127->0 wrap.
+	if (gf > 120 && cf < 8) cf += 128;
+
+	int diff = cf - gf;	// 0 = exact frame; >0 = arrived after the assigned frame
+	return (diff >= 0 && diff <= GROUP_GRACE_FRAMES);
+}
+
+// FIX [GroupAssembledLeak]: emit an accumulated group call (members + group capcode)
+// and flush every feed, then clear the accumulator. Mirrors the HAPPY-path block in
+// ConvertGroupcall() exactly; kept as a helper so the late-assembled path (a successful
+// multi-fragment group message whose SI frame no longer matches the completion frame)
+// uses the SAME emission instead of silently dropping the members. If the HAPPY-path
+// emission below ever changes, keep this in sync.
+static void EmitGroupcall(int groupbit, char *vtype, int capcode)
+{
+	SortGroupCall(groupbit);				// PH: Sort current groupcall in ascending order
+
+	iConvertingGroupcall = groupbit + 1;
+
+	strcpy(Current_MSG[MSG_TYPE], " GROUP ");
+
+	CreateDateFilename("", NULL);			// Get current date to use as filename
+
+	for (int nCapcode = 1; nCapcode <= aGroupCodes[groupbit][CAPCODES_INDEX]; nCapcode++)
+	{
+		if (aGroupCodes[groupbit][nCapcode] == 9999999) strcpy(Current_MSG[MSG_CAPCODE], "???????");
+		else sprintf(Current_MSG[MSG_CAPCODE], "%07i", aGroupCodes[groupbit][nCapcode]);
+
+		ShowMessage();						// PH: Display current short instruction
+	}
+	sprintf(Current_MSG[MSG_CAPCODE], "%07i", capcode);
+	strcpy(Current_MSG[MSG_TYPE], vtype);
+
+	ShowMessage();							// PH: Display current groupcode & original vector type
+
+	memset(aGroupCodes[groupbit], 0, sizeof(int) * MAXIMUM_GROUPSIZE);
+
+	GroupFrame[groupbit] = -1;
+
+	iConvertingGroupcall = 0;				// PH: Reset for next groupmessage
+	WebhookFlushGroup(groupbit);
+	if (Profile.telegramEnabled) TelegramFlushGroup(groupbit); // FIX [TgGroupBatch]
+	if (Profile.pushoverEnabled) PushoverFlushGroup(groupbit); // FIX [PoGroupBatch]
+	MqttFlushGroup(groupbit);
+	if (Profile.mysql_enabled) MysqlFlushGroup(groupbit); // FIX [MySQLFeed]
+	if (Profile.sqlite_enabled) SqliteFlushGroup(groupbit); // FIX [SqliteFeed]
+	TrayBalloonFlush(); // FIX [TrayBalloon]
+}
+
 void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 {
 	char szFile[MAX_PATH];
@@ -509,10 +582,10 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 			iCurrentFrame, capcode, groupbit, groupbit,
 			GroupFrame[groupbit], aGroupCodes[groupbit][CAPCODES_INDEX], iMessageIndex);
 
-		if (GroupFrame[groupbit] == iCurrentFrame)
+		if (GroupFrameInWindow(groupbit))	// FIX [GroupLateFrame]: was exact match (==)
 		{
-			DebugLog("[ConvertGroupcall] HAPPY path: groupbit=%d  capcodes=%d  text='%s'",
-				groupbit, aGroupCodes[groupbit][CAPCODES_INDEX], message_buffer);
+			DebugLog("[ConvertGroupcall] HAPPY path: groupbit=%d  GroupFrame=%d  iCurrentFrame=%d  capcodes=%d  text='%s'",
+				groupbit, GroupFrame[groupbit], iCurrentFrame, aGroupCodes[groupbit][CAPCODES_INDEX], message_buffer);
 
 			SortGroupCall(groupbit);	// PH: Sort current groupcall in ascending order
 
@@ -616,9 +689,24 @@ void ConvertGroupcall(int groupbit, char *vtype, int capcode)
 				// Multi-fragment group message just assembled, with a prior SI announcement.
 				// The SI-frame-mismatch is expected: SI announced frame N for the first
 				// fragment; we are now at frame N+k where the last fragment completes.
-				// This is NOT a missed event — clear GroupFrame and skip both X++ and Y++.
-				GroupFrame[groupbit] = -1;
-				DebugLog("[ConvertGroupcall] ELSE path: assembled chain with prior SI -> X/Y SUPPRESSED, GroupFrame cleared");
+				// This is NOT a missed event — it is a SUCCESSFUL group call.
+				//
+				// FIX [GroupAssembledLeak]: the old code only cleared GroupFrame and then
+				// fell through to the lone ShowMessage() below, printing the raw group capcode
+				// WITHOUT its members and — critically — never clearing aGroupCodes[groupbit].
+				// The accumulated subscribers (built up by the SI's AddAssignment calls) then
+				// sat in the slot indefinitely. Check4_MissedGroupcalls skips slots whose
+				// GroupFrame is -1, so nothing ever reclaimed them. The next SI to reuse this
+				// group slot APPENDED on top of the stale list (AddAssignment only resets on a
+				// frame REASSIGN, which needs GroupFrame != -1), so the next successful group
+				// call on that slot emitted the stale members + the new ones — an arbitrary
+				// time gap later and under the wrong group capcode. Emit the members now (same
+				// as the happy path) and clear the accumulator instead of leaking it.
+				DebugLog("[ConvertGroupcall] ELSE path: assembled chain with prior SI -> emit %d members, X/Y SUPPRESSED",
+					aGroupCodes[groupbit][CAPCODES_INDEX]);
+				EmitGroupcall(groupbit, vtype, capcode);
+				iMessageIndex = 0;
+				return;
 			}
 			else
 			{
@@ -677,12 +765,6 @@ void SortGroupCall(int groupbit)	// PH: Sort aGroupCodes[groupbit]
 	}
 }
 
-
-// Tolerance window for late group-message delivery. A group message that
-// arrives within GROUP_GRACE_FRAMES of the SI-assigned frame is still in
-// time; only declare missed once we are strictly past the grace window.
-// Matches the model used by other FLEX decoders to absorb network slop.
-#define GROUP_GRACE_FRAMES 5
 
 void Check4_MissedGroupcalls()
 {
@@ -1955,6 +2037,13 @@ void ShowMessage()
 		}
 		if (bTgSend)
 		{
+			// FIX [TelegramSilent] / FIX [GroupcallPerFilter]: pass this capcode's per-filter silent
+			// intent (0/1) for BOTH individual and group-call paths. The global silent setting is
+			// applied in the worker (BuildJson: g_bSilent || job). For a group call the worker votes
+			// across the matched subscribers (silent only if ALL of them requested silent) - a P2000
+			// monitor capcode only ever arrives as a group-call subscriber, so honouring it here is
+			// the only way its per-filter silent flag can take effect.
+			int bTgSilent = (iMatch >= 0 && Profile.filters[iMatch].telegram_silent) ? 1 : 0;
 			TelegramNotify(Current_MSG[MSG_CAPCODE],
 			               iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 			               szCurrentLabel[0],
@@ -1964,7 +2053,8 @@ void ShowMessage()
 			               Current_MSG[MSG_TYPE],
 			               Current_MSG[MSG_BITRATE],
 			               iConvertingGroupcall > 0,
-			               iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+			               iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1,
+			               bTgSilent);
 		}
 	}
 
@@ -1982,6 +2072,13 @@ void ShowMessage()
 		}
 		if (bPoSend)
 		{
+			// FIX [PushoverPerFilter] / FIX [GroupcallPerFilter]: pass this capcode's per-filter
+			// priority/sound for BOTH individual and group-call paths (-9/"" = use global). For a
+			// group call the worker aggregates across the matched subscribers (most-urgent priority
+			// wins, first non-empty sound wins). A P2000 monitor capcode only ever arrives as a
+			// group-call subscriber, so honouring it here is the only way its override can take effect.
+			int poPriority = (iMatch >= 0) ? Profile.filters[iMatch].pushover_priority : -9;
+			const char *poSound = (iMatch >= 0) ? Profile.filters[iMatch].pushover_sound : "";
 			PushoverNotify(Current_MSG[MSG_CAPCODE],
 			               iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 			               szCurrentLabel[0],
@@ -1991,7 +2088,8 @@ void ShowMessage()
 			               Current_MSG[MSG_TYPE],
 			               Current_MSG[MSG_BITRATE],
 			               iConvertingGroupcall > 0,
-			               iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1);
+			               iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1,
+			               poPriority, poSound);
 		}
 	}
 

@@ -4,7 +4,7 @@
 
 ---
 
-**Version 3.6.7** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 3.6.8** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -160,6 +160,9 @@ libraries). Configure via **Telegram** in the menu.
 - Send-in modes mirror SMTP: All / Filtered / Filtered+Monitor / **Selected filters only**
 - **Per-capcode control**: each filter (Ctrl-F) has a *Send Telegram* checkbox, used only in
   "Selected filters only" mode (forward just a few capcodes); ignored in the other modes
+- **Per-filter silent override**: the filter editor has a *Telegram silent* checkbox that overrides
+  the global silent setting for a specific capcode — useful for alarm capcodes that must still
+  buzz even when global silent is on, or noise capcodes that should never alert
 - **FLEX group calls** sent as one message listing all matching subscriber capcodes. Bot token never logged.
 
 ---
@@ -177,6 +180,10 @@ libraries). Configure via **Pushover** in the menu.
 - Send-in modes mirror SMTP: All / Filtered / Filtered+Monitor / **Selected filters only**
 - **Per-capcode control**: each filter (Ctrl-F) has a *Send Pushover* checkbox, used only in
   "Selected filters only" mode; FLEX group calls sent as one notification listing all subscribers
+- **Per-filter priority and sound overrides**: the filter editor exposes a *PO priority* dropdown
+  (-2 Lowest / -1 Low / 0 Normal / 1 High; "Global" uses the Pushover config setting) and a
+  *PO sound* text field (leave blank to use the global sound). Set high priority on alarm capcodes
+  or mute routine pagers with priority -2, without changing the global setting
 - Emergency priority 2 (receipt polling) intentionally not offered yet
 
 ---
@@ -507,6 +514,13 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v3.6.9 (June 2026)
+- **Late / fragmented FLEX group messages keep their subscriber list** — a group call is announced by Short Instructions that say which frame the message will arrive in; PDW then lists the collected member capcodes under that message. A long message can be split into fragments sent in later frames, and a busy frame can also delay the message, so it may arrive a frame or more after the announced one. Previously PDW required an exact frame match, so a late message was shown bare (no members), its collected member list was never cleared, and that stale list later leaked onto the next group call reusing the same group slot (showing up minutes later under the wrong group). PDW now accepts the message within the same grace window it already uses for missed-call detection, shows the members under the correct message right away, clears the slot, and no longer mis-counts the call as "missed". Applies to all 16 group codes and to every output feed and database; the telnet wire feed was already correct
+
+### v3.6.8 (June 2026)
+- **Telegram/Pushover state shown in the Ctrl+F overview** — with *Show extra info* on, each filter row now displays `TG`/`tg` and `PO`/`po` flags (uppercase = on) alongside the existing `CMD`/`LAB`/`SEP`/`IGN-GRP` markers, so you can see at a glance which capcodes are wired to each notification service across a large filter set
+- **Per-filter Telegram silent and Pushover priority/sound overrides** — the Ctrl+F filter editor now has three new per-filter notification controls: a *Telegram silent* checkbox (overrides the global silent setting for this capcode only), a *PO priority* dropdown (-2 Lowest / -1 Low / 0 Normal / 1 High / Global), and a *PO sound* text field (blank = use global). These let you set high priority on alarm capcodes or mute routine pagers without touching the global sink configuration. Stored in `filters.ini` (bit `0x100` of the flags field for silent; appended fields 12-13 for priority/sound). Disabled for reject rules; supported in multi-edit (tri-state / "Don't change" where selections differ). **The overrides also apply inside FLEX group calls** — a monitor capcode that only ever appears as a group-call subscriber still drives the notification: most-urgent priority wins, first non-empty sound wins, and a group is silenced only when every matched subscriber asked for silent. The Telegram/Pushover **Test** buttons now also include the configured priority/sound/silent
 
 ### v3.6.7 (June 2026)
 - **"Ignore in Groupcall" filter option** — a new per-filter checkbox in the Ctrl+F editor hides a routine subscriber capcode (roadblock, station-technical, etc.) from the on-screen FLEX group view so the genuine personnel-alarm subscribers stand out. An ignored code no longer shows its line, drags its group into the filter window, or beeps; but the **full** group message - including the ignored capcode - is still written to the monitor log and sent to every output feed. It has no effect on individual (non-group) pages to that capcode, and is mutually exclusive with *Monitor only* (ticking one clears the other). Applies to non-reject capcode filters inside FLEX group calls; flagged filters are marked `IGN-GRP` in the filter overview

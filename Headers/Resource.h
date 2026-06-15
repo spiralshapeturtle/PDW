@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
 #define PDW_VERSION_MINOR  6
-#define PDW_VERSION_PATCH  7
-#define PDW_VERSION_STR    "3.6.7"
+#define PDW_VERSION_PATCH  9
+#define PDW_VERSION_STR    "3.6.9"
 
 #define IDC_STATIC             -1
 
@@ -308,6 +308,7 @@
 #define IDC_SEPFILTERFILEBROWSE3   996
 #define IDC_SEPFILTERBOX           997
 #define IDC_FILTER_IGNORE_GROUPCALL 998   // FIX [GroupcallScreenHide]: hide capcode from on-screen group view
+#define IDC_FILTER_TG_SILENT       999   // FIX [TelegramSilent]: per-filter Telegram silent (disable_notification)
 
 #define IDC_SYSTEMTRAY            1000
 #define IDC_SYSTEMTRAY_RESTORE    1001
@@ -316,6 +317,8 @@
 #define IDC_SYSTEMTRAY_FILTER     1004
 #define IDC_SYSTEMTRAY_NOTIFY     1005  // FIX [TrayBalloon]: combobox balloon-tip modus
 #define IDC_SYSTEMTRAY_LABEL      1006  // FIX [TrayBalloon]: checkbox filter label in balloon
+#define IDC_FILTER_PO_PRIORITY    1007  // FIX [PushoverPerFilter]: per-filter Pushover priority combobox
+#define IDC_FILTER_PO_SOUND       1008  // FIX [PushoverPerFilter]: per-filter Pushover sound editbox
 
 #define IDC_CLEAR_PANE1           1010
 #define IDC_CLEAR_PANE2           1011
