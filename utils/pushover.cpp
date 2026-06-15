@@ -241,20 +241,14 @@ static void ResolveTemplate(char *dst, int dstLen, const char *tmpl, const Pusho
     dst[p] = '\0';
 }
 
-// FIX [PoHtmlNewline]: Pushover renders html=1 messages per HTML rules, where a bare newline is
-// whitespace - not a line break. So a multi-line template (e.g. "<b>{message}</b>\n{label}") collapses
-// onto one line. When html mode is on, convert each newline to "<br>\n" so the line breaks render. In
-// plain mode Pushover already honours newlines, so the text is returned unchanged.
-static void HtmlifyNewlines(char *dst, int dstLen, const char *src)
-{
-    int p = 0;
-    for (int i = 0; src[i] && p < dstLen - 6; i++)
-    {
-        if (src[i] == '\n') { strcpy(dst + p, "<br>\n"); p += 5; }
-        else                { dst[p++] = src[i]; }
-    }
-    dst[p] = '\0';
-}
+// FIX [PoHtmlNewlineSpace]: do NOT convert newlines to <br> in html mode. Empirically Pushover
+// already turns a bare "\n" into a line break in BOTH plain and html mode (nl2br on its side). The
+// earlier conversion (whether "<br>\n" or "\n<br>") therefore stacked our own <br> on top of
+// Pushover's own break, producing a stray leading space / blank line per capcode/label line in the
+// app while the preview (HTML tags stripped) kept a single clean newline - hence the mismatch the
+// user saw. The correct behaviour is to leave the newlines untouched: "\n" renders as one clean line
+// break in plain mode, the app, AND the preview, while html=1 still styles <b>/<i>/etc. So no html-
+// specific newline transform is needed at all.
 
 // ---------------------------------------------------------------------------
 // WinHTTP (worker-thread only)
@@ -361,13 +355,8 @@ static void DoSend(const PushoverJob *job)
     if (g_szBody[0]) ResolveTemplate(message, sizeof(message), g_szBody, job);
     else { strncpy(message, job->szMessage, sizeof(message) - 1); message[sizeof(message) - 1] = '\0'; }
     if (!message[0]) { strncpy(message, job->szMessage, sizeof(message) - 1); message[sizeof(message) - 1] = '\0'; }
-    // FIX [PoHtmlNewline]: in html mode newlines must become <br> to render as line breaks.
-    if (html)
-    {
-        static char htmlMsg[2 * PO_MSG_LEN];
-        HtmlifyNewlines(htmlMsg, sizeof(htmlMsg), message);
-        strncpy(message, htmlMsg, sizeof(message) - 1); message[sizeof(message) - 1] = '\0';
-    }
+    // FIX [PoHtmlNewlineSpace]: no html newline conversion - Pushover honours "\n" as a line break in
+    // both plain and html mode, so the text is sent verbatim and html=1 only adds <b>/<i> styling.
     if ((int)strlen(message) > PO_MAX_MSG) message[PO_MAX_MSG] = '\0';   // Pushover message cap
 
     static char body[8 * PO_MSG_LEN];
@@ -702,12 +691,7 @@ BOOL PushoverTestSend(const char *appToken, const char *userKey, const char *tit
     if (body_tmpl && body_tmpl[0]) ResolveTemplate(msgBuf, sizeof(msgBuf), body_tmpl, &job);
     else { strncpy(msgBuf, job.szMessage, sizeof(msgBuf) - 1); msgBuf[sizeof(msgBuf) - 1] = '\0'; }
     if (!msgBuf[0]) { strncpy(msgBuf, job.szMessage, sizeof(msgBuf) - 1); msgBuf[sizeof(msgBuf) - 1] = '\0'; }
-    if (html)   // FIX [PoHtmlNewline]: newlines -> <br> so they render in html mode
-    {
-        static char htmlMsg[2 * PO_MSG_LEN];
-        HtmlifyNewlines(htmlMsg, sizeof(htmlMsg), msgBuf);
-        strncpy(msgBuf, htmlMsg, sizeof(msgBuf) - 1); msgBuf[sizeof(msgBuf) - 1] = '\0';
-    }
+    // FIX [PoHtmlNewlineSpace]: no html newline conversion (Pushover honours "\n" in html mode too).
     if ((int)strlen(msgBuf) > PO_MAX_MSG) msgBuf[PO_MAX_MSG] = '\0';
 
     HINTERNET hS = WinHttpOpen(L"PDW-Pushover/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,

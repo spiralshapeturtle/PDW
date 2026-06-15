@@ -1,4 +1,34 @@
-# PDW 3.6.9 - Release Notes
+# PDW 3.7.0 - Release Notes
+
+## New in 3.7.0
+
+### Telegram
+
+- **Per-filter Telegram routing (FIX [TelegramRouting]):** the Ctrl+F filter editor now has two new
+  per-filter Telegram fields. *TG topic* sets a numeric forum topic / thread id
+  (`message_thread_id`) so a capcode's messages land in a specific topic of a forum group (blank or 0
+  = the chat's default thread). *TG chat* overrides the destination chat: leave blank to use the
+  global chat id(s), or enter a single target such as `-1001234567890` or `@mychannel` to send just
+  that capcode somewhere else. Both fields are stored in `filters.ini` (new CSV fields 14 and 15);
+  old files without them load with the global routing as before. The overrides also apply inside
+  FLEX group calls (first non-zero topic and first non-empty chat override among the matched
+  subscribers win). A topic id belongs to a specific chat - if you combine a chat override with a
+  topic id, that topic must exist in the overridden chat. A failing override send is logged to
+  `YYMMDD_telegram.log` and never blocks the rest of the Telegram stream; the bot token is never
+  logged.
+
+### Pushover
+
+- **HTML line breaks no longer add a stray space/blank line (FIX [PoHtmlNewlineSpace]):** with HTML
+  formatting on, a multi-line Pushover message (for example one capcode/label per line in a group
+  call) showed an extra leading space - or with the interim build a full blank line - in front of each
+  line in the Pushover app, while the lock-screen preview looked fine. PDW used to translate every
+  `\n` into an HTML `<br>`, but Pushover already turns a bare newline into a line break in HTML mode
+  too, so the explicit `<br>` stacked a second break on top of Pushover's own. PDW now sends the
+  newlines verbatim in both plain and HTML mode: a single `\n` renders as one clean line break
+  everywhere (app, lock-screen preview, and plain mode), and `<b>`/`<i>` styling still applies with
+  HTML on. Use `\n\n` in the Title/Body template where you want a blank line of separation between the
+  message and the label list.
 
 ## New in 3.6.9
 

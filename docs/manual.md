@@ -502,6 +502,27 @@ filters. **Inside FLEX group calls** the flag still counts: the single aggregate
 is sent silent only when *every* matched subscriber in that group requested silent, so one ordinary
 (non-silent) member keeps the whole group audible.
 
+**Per-filter routing (topic and chat override):** the Ctrl+F filter editor has two additional
+per-filter Telegram fields that let a specific capcode be delivered to a different place than the
+global configuration:
+
+- *TG topic* — a numeric forum topic / thread id (`message_thread_id`). Leave blank (or 0) to post
+  to the chat's default thread. Set it to route this capcode's messages to a specific topic in a
+  forum-enabled group.
+- *TG chat* — a chat-id override. Leave blank to use the global chat id(s) from the Telegram dialog.
+  Otherwise enter a single target, e.g. a numeric id (`-1001234567890`) or a public channel name
+  (`@mychannel`). When set, this capcode is sent only to the override chat instead of the global list.
+
+Both fields are available only when Telegram is enabled and the rule is not a reject rule. In
+multi-edit mode they show `(leave unchanged)` to leave the current values untouched. **Inside FLEX
+group calls** the routing is aggregated onto the single group notification: the first non-zero topic
+and the first non-empty chat override among the matched subscribers win.
+
+> **Caveat:** a topic id belongs to a *specific* chat. If you combine a chat override with a topic
+> id, that topic must actually exist in the overridden chat - otherwise that send fails. A failed
+> override send is logged to `YYMMDD_telegram.log` and never blocks the rest of the Telegram stream
+> (other messages still go to the global chat). The bot token is never written to the log.
+
 ### 10.3b Pushover
 
 Configure via **Pushover** in the menu. Pushes decoded pages to [Pushover](https://pushover.net)
@@ -540,12 +561,12 @@ formatting on**, matching Telegram. A few examples:
 
 An empty body falls back to the raw page text (Pushover requires a non-empty message). Note Pushover
 does not render `<b>`/`<i>`/etc. unless **HTML formatting** is on, and the message is hard-capped at
-1024 chars. Unlike Telegram, Pushover follows HTML rules in HTML mode where a bare newline is just
-whitespace; PDW therefore converts `\n` line breaks to `<br>` automatically when HTML formatting is on,
-so a template like `<b>{message}</b>\n{label}` shows the bold text and each label on its own line. (In
-plain mode Pushover keeps newlines as-is, but then the `<b>` tags show literally - turn HTML on for
-bold.) **Test** renders a sample page through the current Title/Body fields (and the HTML checkbox) so
-you preview the real formatting, just like Telegram.
+1024 chars. A `\n` line break in the template renders as a single clean line break in both plain and
+HTML mode (Pushover honours newlines in either mode), so `<b>{message}</b>\n{label}` shows the bold
+text with each label on its own line. Use `\n\n` where you want a blank line of separation (e.g.
+`<b>{message}</b>\n\n{label}` to set the labels off from the message). In plain mode the `<b>` tags
+show literally - turn HTML on for bold. **Test** renders a sample page through the current Title/Body
+fields (and the HTML checkbox) so you preview the real formatting, just like Telegram.
 
 For a FLEX group call `{label}`/`{capcode}` expand to the matching subscribers, one label per line.
 Pushover has no splitting, so the notification is hard-capped at 1024 characters (title 250); a group

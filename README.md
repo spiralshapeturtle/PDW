@@ -163,6 +163,10 @@ libraries). Configure via **Telegram** in the menu.
 - **Per-filter silent override**: the filter editor has a *Telegram silent* checkbox that overrides
   the global silent setting for a specific capcode — useful for alarm capcodes that must still
   buzz even when global silent is on, or noise capcodes that should never alert
+- **Per-filter routing override**: the filter editor exposes a *TG topic* field (numeric forum
+  thread/topic id; blank = default thread) and a *TG chat* field (chat-id override such as
+  `-1001234567890` or `@mychannel`; blank = global chat). Route a specific capcode to its own topic
+  or chat without changing the global target. A topic id must exist in whatever chat it is sent to.
 - **FLEX group calls** sent as one message listing all matching subscriber capcodes. Bot token never logged.
 
 ---
@@ -548,7 +552,7 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 
 ### v3.6.1 (June 2026)
 - **Telegram & Pushover output sinks** with separate Title/Body templates (`{message}` placeholder, `\n` line breaks), a Test button that previews the real formatting, SMTP-style send-in modes, and one-message-per-group-call batching (one label per line)
-- Pushover HTML line breaks fixed (`\n` → `<br>` in HTML mode); both sinks default to bold `<b>{message}</b>\n{label}`
+- Pushover/Telegram line breaks: a `\n` in the template renders as one clean line break in both plain and HTML mode (use `\n\n` for a blank separator line); both sinks default to bold `<b>{message}</b>\n{label}`
 
 ### v3.5.9 (June 2026)
 - **Per-capcode match state in group calls** — each member in the `subscribers` JSON now carries its own `match_type` (filtered / monitor-only / no match), so a viewer renders every capcode in the same pane the PDW window does
