@@ -803,6 +803,17 @@ SOCKET clientSocket(char *address,int port)
 		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tmo, sizeof(tmo));
 		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&tmo, sizeof(tmo));
 	}
+
+	// FIX [SmtpKeepAlive]: enable TCP keepalive on the (optionally persistent) SMTP socket so a
+	// half-open server -- one that vanished without a FIN while the link sat idle between mails --
+	// is eventually reaped by the OS instead of lingering. This is a safety net: the per-use 30 s
+	// SO_RCVTIMEO above already detects a dead peer on the next mail, and SMTP servers drop idle
+	// sessions themselves. Plain boolean SO_KEEPALIVE only (this TU is winsock 1.1; the finer
+	// SIO_KEEPALIVE_VALS tuning used elsewhere needs winsock2/mstcpip, which conflicts here).
+	{
+		BOOL ka = TRUE;
+		setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (char*)&ka, sizeof(ka));
+	}
 	return(s);
 }
 

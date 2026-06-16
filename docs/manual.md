@@ -510,8 +510,10 @@ global configuration:
   to the chat's default thread. Set it to route this capcode's messages to a specific topic in a
   forum-enabled group.
 - *TG chat* — a chat-id override. Leave blank to use the global chat id(s) from the Telegram dialog.
-  Otherwise enter a single target, e.g. a numeric id (`-1001234567890`) or a public channel name
-  (`@mychannel`). When set, this capcode is sent only to the override chat instead of the global list.
+  Otherwise enter one *or more* targets, e.g. a numeric id (`-1001234567890`), a public channel name
+  (`@mychannel`), or several separated by `;` (`-1001234567890;@mychannel`). When set, this capcode is
+  sent to the override target(s) instead of the global list. (You may also separate with a comma or
+  space; PDW stores commas as `;` so the `filters.ini` line stays intact.)
 
 Both fields are available only when Telegram is enabled and the rule is not a reject rule. In
 multi-edit mode they show `(leave unchanged)` to leave the current values untouched. **Inside FLEX
@@ -603,6 +605,8 @@ Configure via **Options → Telnet Server**.
 > **Note:** The built-in Telnet server is a custom extension intended for integration with specialised monitoring software. It is not needed for normal PDW use and is disabled by default. Regular users can ignore this section.
 
 PDW includes a built-in Telnet server (default port **8024**) that streams every decoded message over a plain TCP connection using an internal wire-format. Up to 25 simultaneous clients are supported. A reconnecting client receives a configurable backlog window (default 60 s) so it can catch up on messages it missed while disconnected.
+
+TCP keepalive is enabled on every connection so a half-open client (after a router/NAT rebind, crash, or network blip) is detected and its slot freed within about a minute, instead of lingering as a phantom "connected" client. Multiple simultaneous connections from the same address (several clients behind one NAT, or test setups) are fully supported - each TCP connection is treated as its own session.
 
 | Setting | Description |
 |---------|-------------|

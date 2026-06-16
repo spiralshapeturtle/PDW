@@ -31,7 +31,9 @@ void TelegramNotify(const char *capcode, const char *message, const char *label,
                     const char *szTime, const char *szDate,
                     const char *szMode, const char *szType, const char *szBitrate,
                     BOOL isGroup, int groupbit,
-                    int bJobSilent);   // FIX [TelegramSilent]: 1=disable_notification for this job
+                    int bJobSilent,    // FIX [TelegramSilent]: 1=disable_notification for this job
+                    int threadId,      // FIX [TelegramRouting]: per-filter topic/thread-id; 0 = use global
+                    const char *chatOverride);  // FIX [TelegramRouting]: per-filter chat-id override; NULL/"" = use global chat list
 // FIX [TgGroupBatch]: emit one accumulated FLEX group call as a single message.
 void TelegramFlushGroup(int groupbit);
 void TelegramSetStatusWnd(HWND hWnd);

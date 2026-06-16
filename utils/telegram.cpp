@@ -82,6 +82,8 @@ typedef struct {
     char szType   [32];
     char szBitrate[32];
     int  bSilent;   // FIX [TelegramSilent]: 1=disable_notification for this job (OR with global g_bSilent)
+    int  threadId;            // FIX [TelegramRouting]: per-filter topic/thread-id; 0 = use global g_iThreadId
+    char chatOverride[256];   // FIX [TelegramRouting]: per-filter chat-id override; "" = use global chat list; ';'-separated for multiple
 } TelegramJob;
 
 static TelegramJob g_queue[TG_QUEUE_SIZE];
@@ -104,6 +106,8 @@ typedef struct {
     char szBitrate [32];
     int  nSub;       // FIX [GroupcallPerFilter]: count of matched subscribers accumulated
     int  nSilent;    // FIX [GroupcallPerFilter]: how many of them requested per-filter silent
+    int  threadId;            // FIX [TelegramRouting]: first non-zero per-filter thread-id wins
+    char chatOverride[256];   // FIX [TelegramRouting]: first non-empty per-filter chat override wins (';'-separated list)
 } TgGroupAcc;
 static TgGroupAcc g_groupAcc[TG_MAX_GROUPBITS];
 
@@ -292,7 +296,9 @@ static void BuildMessageText(char *dst, int dstLen, const TelegramJob *job)
 
 // Build the JSON request body for one chat_id. useParse=FALSE drops parse_mode (plain fallback).
 // bJobSilent=TRUE adds disable_notification (OR with the global g_bSilent).
-static void BuildJson(char *dst, int maxLen, const char *chatId, const char *htmlText, BOOL useParse, BOOL bJobSilent)
+// FIX [TelegramRouting]: threadId is the EFFECTIVE topic id for this send (per-filter override resolved
+// against the global default by the caller). Only emitted when > 0.
+static void BuildJson(char *dst, int maxLen, const char *chatId, const char *htmlText, BOOL useParse, BOOL bJobSilent, int threadId)
 {
     int p = 0;
     const char *pre = "{\"chat_id\":";
@@ -317,9 +323,9 @@ static void BuildJson(char *dst, int maxLen, const char *chatId, const char *htm
         const char *ds = ",\"disable_notification\":true";
         for (int i = 0; ds[i] && p < maxLen - 2; i++) dst[p++] = ds[i];
     }
-    if (g_iThreadId > 0)
+    if (threadId > 0)   // FIX [TelegramRouting]: effective topic id (per-filter override or global)
     {
-        char tt[48]; sprintf(tt, ",\"message_thread_id\":%d", g_iThreadId);
+        char tt[48]; sprintf(tt, ",\"message_thread_id\":%d", threadId);
         for (int i = 0; tt[i] && p < maxLen - 2; i++) dst[p++] = tt[i];
     }
     if (p < maxLen - 1) dst[p++] = '}';
@@ -464,7 +470,7 @@ static void ApplyMigration(const char *oldId, LONGLONG newId)
     WriteLog("MIGRATE chat_id %s -> %lld (updated)", oldId, newId);
 }
 
-static void SendToChat(const char *token, const char *chatId, const char *htmlText, BOOL bJobSilent)
+static void SendToChat(const char *token, const char *chatId, const char *htmlText, BOOL bJobSilent, int threadId)
 {
     static char jsonBody[6 * TG_MSG_LEN + 1024];
     char resp[2048];
@@ -477,7 +483,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
             PostStatus(TGS_RETRY, attempt);
         }
 
-        BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, TRUE, bJobSilent);
+        BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, TRUE, bJobSilent, threadId);
         int status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
 
         if (status >= 200 && status < 300)
@@ -508,7 +514,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
         if (status == 400 && strstr(resp, "can't parse entities"))
         {
             WriteLog("PARSE   chat_id=%s HTML rejected, retrying as plain text", chatId);
-            BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, FALSE, bJobSilent);
+            BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, FALSE, bJobSilent, threadId);
             status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
             if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return; }
         }
@@ -521,7 +527,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
             {
                 ApplyMigration(chatId, newId);
                 char newStr[32]; sprintf(newStr, "%lld", newId);
-                BuildJson(jsonBody, sizeof(jsonBody), newStr, htmlText, TRUE, bJobSilent);
+                BuildJson(jsonBody, sizeof(jsonBody), newStr, htmlText, TRUE, bJobSilent, threadId);
                 status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
                 if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return; }
             }
@@ -552,7 +558,16 @@ static void DoSend(const TelegramJob *job)
     strncpy(szChatIds, g_szChatIds, sizeof(szChatIds) - 1); szChatIds[sizeof(szChatIds) - 1] = '\0';
     LeaveCriticalSection(&g_cs);
 
-    if (!szToken[0] || !szChatIds[0]) return;
+    // FIX [TelegramRouting]: a per-filter chat override replaces the global chat list for this job;
+    // a per-filter thread-id (topic) replaces the global default. Caveat: a topic belongs to a
+    // specific chat - if this job carries both an override chat and a thread-id, that topic must
+    // exist in the overridden chat (user's responsibility). An invalid override (bot not a member/
+    // admin, wrong id, missing topic) only fails THIS job in SendToChat (logged, no token); it never
+    // blocks the global Telegram stream because every other job resolves its own target independently.
+    const char *pChatSource = job->chatOverride[0] ? job->chatOverride : szChatIds;
+    int effThread = (job->threadId > 0) ? job->threadId : g_iThreadId;
+
+    if (!szToken[0] || !pChatSource[0]) return;
 
     static char szText[TG_LABELLIST_LEN + TG_MSG_LEN + 1024];   // title + full label/message body
     BuildMessageText(szText, sizeof(szText), job);
@@ -603,14 +618,15 @@ static void DoSend(const TelegramJob *job)
         if (remaining > TG_MAX_TEXT && !g_bSplitLong) strcat(chunk, "...");
 
         // Send this chunk to every chat_id (one POST each).
+        // FIX [TelegramRouting]: pChatSource is the per-filter override when set, else the global list.
         char ids[512];
-        strncpy(ids, szChatIds, sizeof(ids) - 1); ids[sizeof(ids) - 1] = '\0';
+        strncpy(ids, pChatSource, sizeof(ids) - 1); ids[sizeof(ids) - 1] = '\0';
         char *ctx = NULL;
         char *tok = strtok_s(ids, ";, ", &ctx);
         while (tok)
         {
             while (*tok == ' ') tok++;
-            if (*tok) SendToChat(szToken, tok, chunk, job->bSilent ? TRUE : FALSE);  // FIX [TelegramSilent]
+            if (*tok) SendToChat(szToken, tok, chunk, job->bSilent ? TRUE : FALSE, effThread);  // FIX [TelegramSilent] / FIX [TelegramRouting]
             tok = strtok_s(NULL, ";, ", &ctx);
         }
 
@@ -746,7 +762,8 @@ void TelegramNotify(const char *capcode, const char *message, const char *label,
                     const char *szTime, const char *szDate,
                     const char *szMode, const char *szType, const char *szBitrate,
                     BOOL isGroup, int groupbit,
-                    int bJobSilent)  // FIX [TelegramSilent]: 1=disable_notification for this job
+                    int bJobSilent,  // FIX [TelegramSilent]: 1=disable_notification for this job
+                    int threadId, const char *chatOverride)  // FIX [TelegramRouting]: per-filter topic + chat override
 {
     if (!g_bRunning) return;
 
@@ -775,6 +792,14 @@ void TelegramNotify(const char *capcode, const char *message, const char *label,
         AppendListItem(ga->szLabels,   sizeof(ga->szLabels),   label,   '\n');	// FIX [TgGroupNewline]: one label per line
         ga->nSub++;                          // FIX [GroupcallPerFilter]: silent vote
         if (bJobSilent) ga->nSilent++;
+        // FIX [TelegramRouting]: aggregate per-filter routing across the group - first non-zero
+        // thread-id and first non-empty chat override win (mirrors the Pushover sound aggregation).
+        if (ga->threadId == 0 && threadId > 0) ga->threadId = threadId;
+        if (!ga->chatOverride[0] && chatOverride && chatOverride[0])
+        {
+            strncpy(ga->chatOverride, chatOverride, sizeof(ga->chatOverride) - 1);
+            ga->chatOverride[sizeof(ga->chatOverride) - 1] = '\0';
+        }
         LeaveCriticalSection(&g_cs);
         return;
     }
@@ -790,6 +815,9 @@ void TelegramNotify(const char *capcode, const char *message, const char *label,
     strncpy(job.szType,    szType  ? szType  : "", sizeof(job.szType)    - 1);
     strncpy(job.szBitrate, szBitrate ? szBitrate : "", sizeof(job.szBitrate) - 1);
     job.bSilent = bJobSilent;   // FIX [TelegramSilent]
+    job.threadId = (threadId > 0) ? threadId : 0;   // FIX [TelegramRouting]
+    strncpy(job.chatOverride, chatOverride ? chatOverride : "", sizeof(job.chatOverride) - 1);   // FIX [TelegramRouting]
+    job.chatOverride[sizeof(job.chatOverride) - 1] = '\0';
 
     EnqueueJob(&job);
 }
@@ -818,6 +846,10 @@ void TelegramFlushGroup(int groupbit)
         // FIX [GroupcallPerFilter]: silent only when ALL matched subscribers requested it (global
         // silent is still applied on top in BuildJson via g_bSilent).
         job.bSilent = (ga->nSub > 0 && ga->nSilent == ga->nSub) ? 1 : 0;
+        // FIX [TelegramRouting]: carry the aggregated per-filter topic + chat override into the job.
+        job.threadId = ga->threadId;
+        strncpy(job.chatOverride, ga->chatOverride, sizeof(job.chatOverride) - 1);
+        job.chatOverride[sizeof(job.chatOverride) - 1] = '\0';
         ZeroMemory(ga, sizeof(*ga));   // clear slot
         have = TRUE;
     }

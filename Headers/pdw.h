@@ -40,6 +40,8 @@ typedef struct
 	int			 pushover_priority;		// FIX [PushoverPerFilter]: -9=use global, -2..1=override; stored in CSV field 12
 	char		 pushover_sound[32];	// FIX [PushoverPerFilter]: ""=use global; stored in CSV field 13 (quoted)
 	int			 telegram_silent;		// FIX [TelegramSilent]: 0/1; stored as bit 0x100 in FLAGS field (field 9)
+	int			 telegram_thread_id;	// FIX [TelegramRouting]: per-filter Telegram topic/thread-id; 0 = no topic (use global); CSV field 14
+	char		 telegram_chat[256];	// FIX [TelegramRouting]: per-filter Telegram chat-id override; "" = use global chat_id; ';'-separated for multiple targets; CSV field 15 (quoted)
 	int			 sep_filterfile_en;
 	char		 sep_filterfile[3][FILTER_FILE_LEN+1];	// PH: max 3 sepfiles
 	int			 sep_filterfiles;						// PH: number of sepfiles

@@ -164,9 +164,10 @@ libraries). Configure via **Telegram** in the menu.
   the global silent setting for a specific capcode — useful for alarm capcodes that must still
   buzz even when global silent is on, or noise capcodes that should never alert
 - **Per-filter routing override**: the filter editor exposes a *TG topic* field (numeric forum
-  thread/topic id; blank = default thread) and a *TG chat* field (chat-id override such as
-  `-1001234567890` or `@mychannel`; blank = global chat). Route a specific capcode to its own topic
-  or chat without changing the global target. A topic id must exist in whatever chat it is sent to.
+  thread/topic id; blank = default thread) and a *TG chat* field (one or more chat-id overrides such
+  as `-1001234567890`, `@mychannel`, or several separated by `;`; blank = global chat). Route a
+  specific capcode to its own topic or chat(s) without changing the global target. A topic id must
+  exist in whatever chat it is sent to.
 - **FLEX group calls** sent as one message listing all matching subscriber capcodes. Bot token never logged.
 
 ---
@@ -396,6 +397,8 @@ Both options are disabled by default — PDW never deletes data without explicit
 ### Telnet server *(custom internal feature)*
 
 PDW includes a built-in **Telnet server on port 8024** that streams every decoded message in a structured wire-format. This is a custom internal feature; it is not intended for general use or third-party client compatibility.
+
+TCP keepalive is enabled per connection so a half-open client (router/NAT rebind, crash, network blip) is detected and its slot freed within about a minute instead of lingering as a phantom. Multiple simultaneous connections from the same address are supported - each TCP connection is its own session.
 
 **Wire-format messages:**
 

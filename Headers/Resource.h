@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  3
-#define PDW_VERSION_MINOR  6
-#define PDW_VERSION_PATCH  9
-#define PDW_VERSION_STR    "3.6.9"
+#define PDW_VERSION_MINOR  7
+#define PDW_VERSION_PATCH  0
+#define PDW_VERSION_STR    "3.7.0"
 
 #define IDC_STATIC             -1
 
@@ -319,6 +319,8 @@
 #define IDC_SYSTEMTRAY_LABEL      1006  // FIX [TrayBalloon]: checkbox filter label in balloon
 #define IDC_FILTER_PO_PRIORITY    1007  // FIX [PushoverPerFilter]: per-filter Pushover priority combobox
 #define IDC_FILTER_PO_SOUND       1008  // FIX [PushoverPerFilter]: per-filter Pushover sound editbox
+#define IDC_FILTER_TG_THREAD      1009  // FIX [TelegramRouting]: per-filter Telegram topic/thread-id editbox
+#define IDC_FILTER_TG_CHAT        1012  // FIX [TelegramRouting]: per-filter Telegram chat-id override editbox
 
 #define IDC_CLEAR_PANE1           1010
 #define IDC_CLEAR_PANE2           1011

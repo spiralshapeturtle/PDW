@@ -6894,6 +6894,9 @@ void Copy_Filter_Fields(FILTER *out_filter, FILTER in_filter)
 	out_filter->pushover_priority	= in_filter.pushover_priority;	// FIX [PushoverPerFilter]
 	strncpy(out_filter->pushover_sound, in_filter.pushover_sound, 31);	// FIX [PushoverPerFilter]
 	out_filter->pushover_sound[31] = '\0';
+	out_filter->telegram_thread_id	= in_filter.telegram_thread_id;	// FIX [TelegramRouting]
+	strncpy(out_filter->telegram_chat, in_filter.telegram_chat, sizeof(out_filter->telegram_chat) - 1);	// FIX [TelegramRouting]
+	out_filter->telegram_chat[sizeof(out_filter->telegram_chat) - 1] = '\0';
 	out_filter->match_exact_msg	= in_filter.match_exact_msg;
 
 	for (int i=0; i<3; i++)
@@ -8039,6 +8042,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 	int telegram=0, pushover=0;	// FIX [Telegram]: multi-edit "don't change" trackers
 	int ignore_grp=0;	// FIX [GroupcallScreenHide]: multi-edit "don't change" tracker
 	int tg_silent=0, po_priority_diff=0, po_sound_diff=0;	// FIX [TelegramSilent] / FIX [PushoverPerFilter]: multi-edit trackers
+	int tg_thread_diff=0, tg_chat_diff=0;	// FIX [TelegramRouting]: multi-edit "don't change" trackers
 
 	char temp_cap[FILTER_CAPCODE_LEN+1]="",
 		 temp[MAX_STR_LEN],	// FIX [FilterTextLen]: was MAX_PATH (260); holds BuildFilterString output (label+text up to ~560 bytes)
@@ -8391,6 +8395,11 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTERTELEGRAM), true);
 			SendDlgItemMessage(hDlg, IDC_FILTERTELEGRAM, WM_SETTEXT, 0, (LPARAM) "Send Telegram");
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_SILENT), true);	// FIX [TelegramSilent]
+			// FIX [TelegramRouting]: per-filter topic/thread-id + chat-override edits
+			SendDlgItemMessage(hDlg, IDC_FILTER_TG_THREAD, EM_LIMITTEXT, 9, 0L);
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_THREAD), true);
+			SendDlgItemMessage(hDlg, IDC_FILTER_TG_CHAT, EM_LIMITTEXT, 255, 0L);	// FIX [TelegramRouting]: ';'-separated list of chat-id overrides
+			EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_CHAT), true);
 		}
 
 		// FIX [Pushover]: idem
@@ -8450,6 +8459,8 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					if (Profile.filters[index].telegram_silent != filter.telegram_silent) tg_silent=1;	// FIX [TelegramSilent]
 					if (Profile.filters[index].pushover_priority != filter.pushover_priority) po_priority_diff=1;	// FIX [PushoverPerFilter]
 					if (strcmp(Profile.filters[index].pushover_sound, filter.pushover_sound) != 0) po_sound_diff=1;	// FIX [PushoverPerFilter]
+					if (Profile.filters[index].telegram_thread_id != filter.telegram_thread_id) tg_thread_diff=1;	// FIX [TelegramRouting]
+					if (strcmp(Profile.filters[index].telegram_chat, filter.telegram_chat) != 0) tg_chat_diff=1;	// FIX [TelegramRouting]
 					if (Profile.filters[index].sep_filterfile_en != filter.sep_filterfile_en) sep_en=1;
 					if (Profile.filters[index].sep_filterfiles > sep_filterfiles) sep_filterfiles = Profile.filters[index].sep_filterfiles;
 
@@ -8541,6 +8552,16 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			}
 			else SendDlgItemMessage(hDlg, IDC_FILTER_PO_PRIORITY, CB_SETCURSEL, psel, 0L);
 			SetDlgItemText(hDlg, IDC_FILTER_PO_SOUND, po_sound_diff ? "(leave unchanged)" : filter.pushover_sound);
+		}
+		// FIX [TelegramRouting]: load per-filter Telegram topic/thread-id (0 -> empty field) and chat-override.
+		// Multi-edit "don't change" mirrors the Pushover-sound sentinel ("(leave unchanged)").
+		{
+			char szThr[16];
+			if (tg_thread_diff)            strcpy(szThr, "(leave unchanged)");
+			else if (filter.telegram_thread_id > 0) sprintf(szThr, "%i", filter.telegram_thread_id);
+			else                           szThr[0] = '\0';	// 0 = no topic -> empty field
+			SetDlgItemText(hDlg, IDC_FILTER_TG_THREAD, szThr);
+			SetDlgItemText(hDlg, IDC_FILTER_TG_CHAT, tg_chat_diff ? "(leave unchanged)" : filter.telegram_chat);
 		}
 
 		SendDlgItemMessage(hDlg, IDC_FILTERAUDIO, CB_RESETCONTENT, 0, 0);
@@ -8789,6 +8810,9 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_IGNORE_GROUPCALL), (captxt && !reject) ? true : false);
 		// FIX [TelegramSilent]: silent flag only meaningful when Telegram is enabled and not a reject filter
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_SILENT), Profile.telegramEnabled && !reject);
+		// FIX [TelegramRouting]: topic/thread-id + chat-override only meaningful when Telegram is on and not a reject filter
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_THREAD), Profile.telegramEnabled && !reject);
+		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_TG_CHAT),   Profile.telegramEnabled && !reject);
 		// FIX [PushoverPerFilter]: priority/sound only meaningful when Pushover is enabled and not a reject filter
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_PO_PRIORITY), Profile.pushoverEnabled && !reject);
 		EnableWindow(GetDlgItem(hDlg, IDC_FILTER_PO_SOUND),    Profile.pushoverEnabled && !reject);
@@ -9394,6 +9418,30 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 						{
 							strncpy(Profile.filters[index].pushover_sound, szSnd, 31);
 							Profile.filters[index].pushover_sound[31] = '\0';
+						}
+					}
+
+					// FIX [TelegramRouting]: persist per-filter Telegram topic/thread-id (empty field = 0 = no topic).
+					// Multi-edit sentinel "(leave unchanged)" -> skip, mirroring the Pushover-sound convention.
+					{
+						char szThr[24];
+						GetDlgItemText(hDlg, IDC_FILTER_TG_THREAD, szThr, sizeof(szThr));
+						if (strcmp(szThr, "(leave unchanged)") != 0)
+						{
+							int t = atoi(szThr);
+							Profile.filters[index].telegram_thread_id = (t > 0) ? t : 0;
+						}
+					}
+
+					// FIX [TelegramRouting]: persist per-filter Telegram chat-id override ("" = use global)
+					{
+						char szChat[256];
+						GetDlgItemText(hDlg, IDC_FILTER_TG_CHAT, szChat, sizeof(szChat));
+						if (strcmp(szChat, "(leave unchanged)") != 0)
+						{
+							for (char *pc = szChat; *pc; pc++) if (*pc == ',') *pc = ';';	// FIX [TelegramRouting]: normalise ',' to ';' (filters.ini is comma-separated)
+							strncpy(Profile.filters[index].telegram_chat, szChat, sizeof(Profile.filters[index].telegram_chat) - 1);
+							Profile.filters[index].telegram_chat[sizeof(Profile.filters[index].telegram_chat) - 1] = '\0';
 						}
 					}
 
@@ -12005,11 +12053,32 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 								int p = atoi(token);
 								filter.pushover_priority = (p >= -2 && p <= 1) ? p : -9;
 							}
-							// FIX [PushoverPerFilter]: field 13 - per-filter Pushover sound override (quoted string)
-							if (token = strtok_s(NULL, ",\"", &strtokCtx))
+							// FIX [PushoverPerFilter] / FIX [TelegramRouting]: fields 13-15 are quoted
+							// (sound, chat-override) or plain int (thread-id). Tokenize on ',' only and
+							// strip surrounding quotes manually. The earlier ",\"" delimiter set skipped
+							// an empty "" value (the common default) and would have swallowed the next
+							// field once 14-15 were appended; comma-only keeps empty values aligned.
+							// (sound/chat-override never contain a comma.)
+							if (token = strtok_s(NULL, ",", &strtokCtx))	// field 13 - Pushover sound
 							{
-								strncpy(filter.pushover_sound, token, 31);
+								char *s = token;
+								if (*s == '"') { s++; char *q = strrchr(s, '"'); if (q) *q = '\0'; }
+								strncpy(filter.pushover_sound, s, 31);
 								filter.pushover_sound[31] = '\0';
+							}
+							// FIX [TelegramRouting]: field 14 - per-filter Telegram topic/thread-id (int, 0 = use global)
+							if (token = strtok_s(NULL, ",", &strtokCtx))
+							{
+								int t = atoi(token);
+								filter.telegram_thread_id = (t > 0) ? t : 0;
+							}
+							// FIX [TelegramRouting]: field 15 - per-filter Telegram chat-id override (quoted; "" = use global)
+							if (token = strtok_s(NULL, ",", &strtokCtx))
+							{
+								char *s = token;
+								if (*s == '"') { s++; char *q = strrchr(s, '"'); if (q) *q = '\0'; }
+								strncpy(filter.telegram_chat, s, sizeof(filter.telegram_chat) - 1);
+								filter.telegram_chat[sizeof(filter.telegram_chat) - 1] = '\0';
 							}
 
 							break;
@@ -12490,6 +12559,11 @@ void WriteFilters(PPROFILE pProfile, int backup)
 			strcat(szLine, szTEMP);
 			sprintf(szTEMP, ",%i,\"%s\"", pProfile->filters[index].pushover_priority,
 			                              pProfile->filters[index].pushover_sound);
+			strcat(szLine, szTEMP);
+			// FIX [TelegramRouting]: always write field 14 (thread-id, int) + field 15 (chat-override, quoted)
+			// so the per-filter Telegram routing survives reload. Old readers ignore the extra fields.
+			sprintf(szTEMP, ",%i,\"%s\"", pProfile->filters[index].telegram_thread_id,
+			                              pProfile->filters[index].telegram_chat);
 			strcat(szLine, szTEMP);
 			fprintf(pFiltersFile, "%s\n", szLine);
 		}

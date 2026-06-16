@@ -2,14 +2,35 @@
 
 ## New in 3.7.0
 
+### Telnet server
+
+- **Half-open client sessions are now detected and cleaned up (FIX [TelnetStaleSlot]):** when a
+  connected client dropped its link ungracefully - a router/NAT rebind, a crash, or a brief network
+  blip that swallowed the TCP close - PDW never noticed the old socket was dead. It kept the slot
+  "connected" and kept sending to it, and when the same client reconnected the new link was assigned a
+  *second* slot. The result was two simultaneous sessions, both shown as active, while only one was
+  actually processed downstream - so a receiver could look perfectly connected yet have its data
+  silently ignored. PDW now enables TCP keepalive on every accepted connection, so a dead/half-open
+  peer is detected within roughly a minute and its slot is freed for reuse. Multiple simultaneous
+  connections from the same address (for example several clients behind one NAT, or test setups) are
+  fully supported - each TCP connection is its own session.
+
+### E-mail (SMTP)
+
+- **TCP keepalive on the mail connection (FIX [SmtpKeepAlive]):** the SMTP socket now enables TCP
+  keepalive so a server that disappeared without closing the link cannot leave a half-open
+  connection lingering. This is a safety net on top of the existing 30 s receive timeout (which
+  already detects a dead server on the next mail) and the server's own idle-session timeout.
+
 ### Telegram
 
 - **Per-filter Telegram routing (FIX [TelegramRouting]):** the Ctrl+F filter editor now has two new
   per-filter Telegram fields. *TG topic* sets a numeric forum topic / thread id
   (`message_thread_id`) so a capcode's messages land in a specific topic of a forum group (blank or 0
   = the chat's default thread). *TG chat* overrides the destination chat: leave blank to use the
-  global chat id(s), or enter a single target such as `-1001234567890` or `@mychannel` to send just
-  that capcode somewhere else. Both fields are stored in `filters.ini` (new CSV fields 14 and 15);
+  global chat id(s), or enter one or more targets such as `-1001234567890`, `@mychannel`, or several
+  separated by `;` to send just that capcode somewhere else (a typed comma or space is normalised to
+  `;` so the CSV line stays intact). Both fields are stored in `filters.ini` (new CSV fields 14 and 15);
   old files without them load with the global routing as before. The overrides also apply inside
   FLEX group calls (first non-zero topic and first non-empty chat override among the matched
   subscribers win). A topic id belongs to a specific chat - if you combine a chat override with a
@@ -29,6 +50,19 @@
   everywhere (app, lock-screen preview, and plain mode), and `<b>`/`<i>` styling still applies with
   HTML on. Use `\n\n` in the Title/Body template where you want a blank line of separation between the
   message and the label list.
+
+### Filter dialog
+
+- **Hit counter is fully visible again (FIX [FilterHitsClip]):** after the Telegram/Pushover layout
+  rework the "Number of hits" field in the Ctrl+F filter editor had been narrowed so far that the
+  prefix text left room for only a single digit - a filter with 2 or more hits showed nothing after
+  "Number of hits:". The count was always read and stored correctly; only the on-screen field was too
+  small. The hit-counter row is back to its original column widths so multi-digit counts and the last
+  hit date/time are shown in full.
+- **Pushover priority/sound labels no longer clipped (FIX [FilterPoLabelClip]):** the "PO priority"
+  and "PO sound" labels in the same dialog were wide enough that their text ran underneath the combo
+  box / edit field next to them, hiding the last characters. The labels were narrowed and the inputs
+  nudged right so each label stays fully readable.
 
 ## New in 3.6.9
 

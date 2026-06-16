@@ -23,6 +23,7 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>          /* tcp_keepalive / SIO_KEEPALIVE_VALS -- FIX [TelnetStaleSlot] */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -840,6 +841,30 @@ int TelnetServerGetEvents(TsEvent *out, int maxCount)
 ** Worker-thread routines
 ** ---------------------------------------------------------------------------*/
 
+/* FIX [TelnetStaleSlot]: enable TCP keepalive on an accepted client socket so a
+** half-open peer (a client that vanished without a FIN -- NAT/router rebind,
+** crash, network blip) is detected and reaped within ~tens of seconds instead of
+** lingering as a "live" slot forever. Without this PDW kept fanning out to a dead
+** socket; a reconnect then landed in a SECOND slot, yielding two parallel sessions
+** with the same name/role. Keepalive resolves the dead socket so it transitions to
+** 'disconnected' and gets reused/GC'd via the normal paths.
+**
+** Deliberately keepalive-ONLY, no IP-based supersede: one client IP can legitimately
+** host MULTIPLE concurrent sessions (testing, or several clients behind one NAT), so
+** a new connection from a known IP must NEVER retire an existing live session -- the
+** unique key for a logical session is the socket (srcIP:srcPort), not the IP. An
+** earlier same-IP supersede attempt made two real same-IP clients ping-pong each
+** other into a reconnect loop. Best-effort; failure is non-fatal. */
+static void EnableKeepAlive(SOCKET s)
+{
+    struct tcp_keepalive ka;
+    ka.onoff             = 1;
+    ka.keepalivetime     = 15000;   /* idle (ms) before the first keepalive probe */
+    ka.keepaliveinterval = 3000;    /* (ms) between probes; ~10 probes -> ~45s to drop */
+    DWORD bytes = 0;
+    WSAIoctl(s, SIO_KEEPALIVE_VALS, &ka, sizeof(ka), NULL, 0, &bytes, NULL, NULL);
+}
+
 /* Search for a disconnected slot with the same IP — used for replay-on-reconnect.
 ** Caller holds g_tsCs. Returns slot index or -1. */
 static int FindDisconnectedSlotByIp(const SOCKADDR_IN *peer)
@@ -904,6 +929,7 @@ static void AcceptOneClient(void)
     /* Make the new socket non-blocking — keeps fan-out send() from stalling. */
     u_long nb = 1;
     ioctlsocket(s, FIONBIO, &nb);
+    EnableKeepAlive(s);                 // FIX [TelnetStaleSlot]: detect/reap half-open peers
 
     EnterCriticalSection(&g_tsCs);
 

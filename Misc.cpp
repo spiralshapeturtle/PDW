@@ -2044,6 +2044,13 @@ void ShowMessage()
 			// monitor capcode only ever arrives as a group-call subscriber, so honouring it here is
 			// the only way its per-filter silent flag can take effect.
 			int bTgSilent = (iMatch >= 0 && Profile.filters[iMatch].telegram_silent) ? 1 : 0;
+			// FIX [TelegramRouting]: pass this capcode's per-filter topic/thread-id + chat-override
+			// (0/"" = use global) for BOTH individual and group-call paths. For a group call the worker
+			// aggregates across matched subscribers (first non-zero thread-id / first non-empty chat
+			// override wins). A topic/thread-id belongs to a specific chat: if a filter combines a chat
+			// override with a thread-id, that topic must exist in the overridden chat (user's choice).
+			int tgThread = (iMatch >= 0) ? Profile.filters[iMatch].telegram_thread_id : 0;
+			const char *tgChat = (iMatch >= 0) ? Profile.filters[iMatch].telegram_chat : "";
 			TelegramNotify(Current_MSG[MSG_CAPCODE],
 			               iMOBITEX ? Current_MSG[MSG_MOBITEX] : Current_MSG[MSG_MESSAGE],
 			               szCurrentLabel[0],
@@ -2054,7 +2061,8 @@ void ShowMessage()
 			               Current_MSG[MSG_BITRATE],
 			               iConvertingGroupcall > 0,
 			               iConvertingGroupcall > 0 ? iConvertingGroupcall - 1 : -1,
-			               bTgSilent);
+			               bTgSilent,
+			               tgThread, tgChat);
 		}
 	}
 
