@@ -10403,24 +10403,30 @@ BOOL FAR PASCAL TelegramDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 		}
 		case IDC_TG_DISCOVER:
 		{
-			char token[80], chat[64], info[200];
+			// FIX [TgDiscoverAllChats]: discover now returns ALL distinct chats (';'-joined) so a
+			// 1-on-1 chat is found even when a busy group dominates the updates. Split the list and
+			// append each id that is not already present in the chat_id field.
+			char token[80], chat[512], info[512];
 			GetDlgItemText(hDlg, IDC_TG_TOKEN, token, sizeof(token));
 			SetDlgItemText(hDlg, IDC_TG_STATUS, "Status: Querying getUpdates...");
 			BOOL ok = TelegramDiscoverChatId(token, chat, sizeof(chat), info, sizeof(info));
 			if (ok)
 			{
-				// Append the discovered id to the chat_id field (if not already present).
 				char cur[512];
 				GetDlgItemText(hDlg, IDC_TG_CHATIDS, cur, sizeof(cur));
-				if (!strstr(cur, chat))
+				char ids[512]; strncpy(ids, chat, sizeof(ids) - 1); ids[sizeof(ids) - 1] = '\0';
+				char *ctx = NULL;
+				for (char *tok = strtok_s(ids, ";", &ctx); tok; tok = strtok_s(NULL, ";", &ctx))
 				{
+					if (!tok[0] || strstr(cur, tok)) continue;   // skip empty / already present
 					if (cur[0]) strncat(cur, ";", sizeof(cur) - strlen(cur) - 1);
-					strncat(cur, chat, sizeof(cur) - strlen(cur) - 1);
-					SetDlgItemText(hDlg, IDC_TG_CHATIDS, cur);
+					strncat(cur, tok, sizeof(cur) - strlen(cur) - 1);
 				}
+				SetDlgItemText(hDlg, IDC_TG_CHATIDS, cur);
 			}
-			char msg[220];
-			sprintf(msg, "Status: %s", info[0] ? info : (ok ? "Found" : "Not found"));
+			char msg[560];
+			_snprintf(msg, sizeof(msg) - 1, "Status: %s", info[0] ? info : (ok ? "Found" : "Not found"));
+			msg[sizeof(msg) - 1] = '\0';
 			SetDlgItemText(hDlg, IDC_TG_STATUS, msg);
 			break;
 		}

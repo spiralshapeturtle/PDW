@@ -565,7 +565,15 @@ static void DoSend(const TelegramJob *job)
     // admin, wrong id, missing topic) only fails THIS job in SendToChat (logged, no token); it never
     // blocks the global Telegram stream because every other job resolves its own target independently.
     const char *pChatSource = job->chatOverride[0] ? job->chatOverride : szChatIds;
-    int effThread = (job->threadId > 0) ? job->threadId : g_iThreadId;
+    // FIX [TelegramThreadOverflow]: a message_thread_id (forum topic) is only valid for a forum
+    // supergroup. Two ways it gets wrongly applied to a non-forum chat -> HTTP 400 "message thread
+    // not found": (a) a per-filter chat override with no explicit thread inheriting g_iThreadId, and
+    // (b) a private/direct chat sitting in the GLOBAL chat list alongside the forum group, which
+    // would inherit g_iThreadId for every id in the list. Resolve the *candidate* thread here
+    // (per-filter override wins; a chat override with no explicit thread means "no topic"); the
+    // actual per-id gating on chat type happens in the send loop below.
+    int effThread = (job->threadId > 0) ? job->threadId
+                  : (job->chatOverride[0] ? 0 : g_iThreadId);
 
     if (!szToken[0] || !pChatSource[0]) return;
 
@@ -626,7 +634,15 @@ static void DoSend(const TelegramJob *job)
         while (tok)
         {
             while (*tok == ' ') tok++;
-            if (*tok) SendToChat(szToken, tok, chunk, job->bSilent ? TRUE : FALSE, effThread);  // FIX [TelegramSilent] / FIX [TelegramRouting]
+            if (*tok)
+            {
+                // FIX [TelegramThreadOverflow]: only groups/supergroups/channels (negative chat ids)
+                // can be forums and accept a topic. A private/direct chat has a POSITIVE id and never
+                // has topics, so sending message_thread_id to it returns HTTP 400. Gate the thread per
+                // id on the sign so a DM in the chat list never 400s while the group still gets routed.
+                int idThread = (effThread > 0 && tok[0] == '-') ? effThread : 0;
+                SendToChat(szToken, tok, chunk, job->bSilent ? TRUE : FALSE, idThread);  // FIX [TelegramSilent] / FIX [TelegramRouting]
+            }
             tok = strtok_s(NULL, ";, ", &ctx);
         }
 
@@ -1018,34 +1034,89 @@ BOOL TelegramDiscoverChatId(const char *token, char *chatOut, int chatLen, char 
     if (errOut && errLen)   errOut[0]  = '\0';
     if (!token || !token[0]) { if (errOut) _snprintf(errOut, errLen - 1, "No bot token set"); return FALSE; }
 
-    char resp[8192];
+    // FIX [TgDiscoverAllChats]: a busy bot (added to a group with traffic) makes getUpdates large.
+    // The old 8 KB buffer truncated the tail (the newest updates), and DialogPost discards anything
+    // past the buffer. Use 64 KB so the whole backlog fits and no chat is silently dropped.
+    static char resp[65536];
     int st = DialogPost(token, "getUpdates", NULL, 0, resp, sizeof(resp));
     if (st < 200 || st >= 300) { if (errOut) _snprintf(errOut, errLen - 1, "getUpdates failed (HTTP %d)", st); return FALSE; }
 
-    // Find the LAST "chat":{"id":<n> ... "first_name"/"title" in the updates.
-    const char *p = resp, *lastChat = NULL;
-    while ((p = strstr(p, "\"chat\":")) != NULL) { lastChat = p; p += 7; }
-    if (!lastChat) { if (errOut) _snprintf(errOut, errLen - 1, "No messages yet - send /start to the bot first"); return FALSE; }
+    // FIX [TgDiscoverAllChats]: enumerate EVERY distinct "chat" object in the updates instead of only
+    // the LAST one. With the old last-only logic a busy group's messages were always last, so a 1-on-1
+    // (private) chat with the bot was never returned. We now collect all distinct chat ids (deduped),
+    // join them with ';' into chatOut, and summarise them (id + name + type) in errOut.
+    LONGLONG seenIds[32]; int nSeen = 0;
+    char list[512]; list[0] = '\0';     // ';'-joined ids for chatOut
+    char summary[480]; summary[0] = '\0';
 
-    const char *idp = strstr(lastChat, "\"id\":");
-    if (!idp) { if (errOut) _snprintf(errOut, errLen - 1, "Could not parse chat id"); return FALSE; }
-    idp += 5;
-    LONGLONG id = _atoi64(idp);
-
-    // Try to grab a human-readable name (title for groups, first_name for users).
-    char name[128] = "";
-    const char *np = strstr(lastChat, "\"title\":\"");
-    int npfx = 9;   // strlen("\"title\":\"")
-    if (!np) { np = strstr(lastChat, "\"first_name\":\""); npfx = 14; }  // strlen("\"first_name\":\"")
-    if (np)
+    const char *p = resp;
+    const char *cur;
+    while ((cur = strstr(p, "\"chat\":")) != NULL)
     {
-        np += npfx;
-        int k = 0;
-        while (np[k] && np[k] != '"' && k < (int)sizeof(name) - 1) { name[k] = np[k]; k++; }
-        name[k] = '\0';
+        const char *next = strstr(cur + 7, "\"chat\":");   // bound parsing to this chat object
+        const char *end  = next ? next : (resp + strlen(resp));
+        p = cur + 7;
+
+        // chat id = first "id": after "chat":, within this object's bounds.
+        const char *idp = strstr(cur, "\"id\":");
+        if (!idp || idp >= end) continue;
+        idp += 5;
+        LONGLONG id = _atoi64(idp);
+        if (id == 0) continue;
+
+        // dedup
+        BOOL dup = FALSE;
+        for (int i = 0; i < nSeen; i++) if (seenIds[i] == id) { dup = TRUE; break; }
+        if (dup) continue;
+        if (nSeen < (int)(sizeof(seenIds) / sizeof(seenIds[0]))) seenIds[nSeen++] = id;
+
+        // human-readable name (title for groups, first_name for users) within bounds.
+        char name[96] = "";
+        const char *np = strstr(cur, "\"title\":\"");      int npfx = 9;
+        if (!np || np >= end) { np = strstr(cur, "\"first_name\":\""); npfx = 14; }
+        if (np && np < end)
+        {
+            np += npfx;
+            int k = 0;
+            while (np[k] && np[k] != '"' && k < (int)sizeof(name) - 1) { name[k] = np[k]; k++; }
+            name[k] = '\0';
+        }
+
+        // chat type ("private"/"group"/"supergroup"/"channel") within bounds.
+        char type[16] = "";
+        const char *tp = strstr(cur, "\"type\":\"");
+        if (tp && tp < end)
+        {
+            tp += 8;
+            int k = 0;
+            while (tp[k] && tp[k] != '"' && k < (int)sizeof(type) - 1) { type[k] = tp[k]; k++; }
+            type[k] = '\0';
+        }
+
+        char idstr[24]; _snprintf(idstr, sizeof(idstr) - 1, "%lld", id); idstr[sizeof(idstr) - 1] = '\0';
+        if (list[0]) strncat(list, ";", sizeof(list) - strlen(list) - 1);
+        strncat(list, idstr, sizeof(list) - strlen(list) - 1);
+
+        char one[160];
+        _snprintf(one, sizeof(one) - 1, "%s%s%s%s%s",
+                  idstr,
+                  type[0] ? " [" : "", type, type[0] ? "]" : "",
+                  name[0] ? "" : "");
+        one[sizeof(one) - 1] = '\0';
+        if (name[0])
+        {
+            // append " (name)" if it fits
+            size_t l = strlen(one);
+            _snprintf(one + l, sizeof(one) - 1 - l, " (%s)", name);
+            one[sizeof(one) - 1] = '\0';
+        }
+        if (summary[0]) strncat(summary, ", ", sizeof(summary) - strlen(summary) - 1);
+        strncat(summary, one, sizeof(summary) - strlen(summary) - 1);
     }
 
-    if (chatOut) { _snprintf(chatOut, chatLen - 1, "%lld", id); chatOut[chatLen - 1] = '\0'; }
-    if (errOut)  { _snprintf(errOut, errLen - 1, name[0] ? "Found: %lld (%s)" : "Found: %lld", id, name); errOut[errLen - 1] = '\0'; }
+    if (nSeen == 0) { if (errOut) _snprintf(errOut, errLen - 1, "No messages yet - send a message to the bot first"); return FALSE; }
+
+    if (chatOut) { _snprintf(chatOut, chatLen - 1, "%s", list);    chatOut[chatLen - 1] = '\0'; }
+    if (errOut)  { _snprintf(errOut,  errLen - 1,  "Found %d: %s", nSeen, summary); errOut[errLen - 1] = '\0'; }
     return TRUE;
 }

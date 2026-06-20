@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 3.6.7** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 4.0.0** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -62,7 +62,7 @@
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (3.6.5) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
+This version (4.0.0) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
 
 ---
 
@@ -424,7 +424,10 @@ supergroups through the Bot API (WinHTTP — no external libraries).
    never message a user first, so this step is required.
 3. Click **Discover...** to read the chat_id back via `getUpdates`, or paste numeric chat_id's
    manually. 1:1 chats are positive, groups negative, supergroups start with `-100`. Separate
-   multiple chat_id's with `;`.
+   multiple chat_id's with `;`. Discover lists *all* distinct chats found in the bot's recent updates
+   (id, type, name) and adds each new one to the field in one click - so a 1-on-1 chat is found even
+   when the bot also sits in a busy group. Telegram only keeps recent updates for about 24 hours; if a
+   chat no longer shows up, send a fresh message to the bot and click Discover again.
 
 | Setting | Description |
 |---------|-------------|
@@ -432,7 +435,7 @@ supergroups through the Bot API (WinHTTP — no external libraries).
 | Chat IDs | Numeric, `;`-separated |
 | Title | Bold first-line template (subject emulation). Empty = no title. Placeholders below |
 | Body | Message-body template (default `{message}`). Placeholders below |
-| Thread ID | Optional `message_thread_id` for supergroup topics (0 = none) |
+| Thread ID | Optional `message_thread_id` for supergroup topics (0 = none). Only applied to group/supergroup destinations; direct (1-on-1) chats never receive a topic, so they no longer fail with HTTP 400 when a topic is set |
 | Silent | Deliver without notification sound |
 | Disable link preview | Suppress web page previews |
 | Split long messages | Split over 4096 chars (off = truncate) |

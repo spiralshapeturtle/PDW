@@ -1,3 +1,70 @@
+# PDW 4.0.0 - Release Notes (final)
+
+PDW 4.0.0 is the first **final release** of the modernised fork. It does not add new features over
+3.7.0 - it marks the point where five years of work on the classic PDW 3.2 codebase have settled into
+one stable, dependency-free binary that has been hardened for unattended 24/7 operation. The version
+number is bumped to 4.0.0 to reflect that maturity.
+
+## What PDW does
+
+PDW turns a sound card or a serial-port hardware slicer into a full paging receiver and message
+distributor.
+
+### Decoding
+- **FLEX** 1600 / 3200 / 6400 bps - Alpha, Numeric, Tone, Short-Instruction, Frame-Info, group calls,
+  with multi-frame alpha fragment reassembly
+- **ReFLEX** - decoded through the same path (phase demux A/B/C/D)
+- **POCSAG** 512 / 1200 / 2400 bps - Alpha, Numeric, Tone
+- **ACARS**, **MOBITEX** and **ERMES** decoders
+- Sound-card (WaveIn) or serial-slicer / RS232 input; the COM port is held with exclusive access so a
+  second program cannot split the byte stream
+
+### Filtering
+Each filter matches on capcode, label or message text (`^` starts-with, `&` AND, `|` OR, `=` whole
+word, up to 256 characters) and can independently set a custom label and colour, play a WAV alert,
+send e-mail, run an external command, write to its own log file, route to specific output feeds, or
+act as monitor-only / reject. FLEX group-call subscribers can be hidden from the screen per filter
+("Ignore in Groupcall") while remaining in the logs and feeds.
+
+### Output feeds
+On-screen display, Windows 11 toast notifications, the message log, and eight distribution channels:
+- **SMTP e-mail** - STARTTLS (587) and implicit TLS (465), RFC-compliant EHLO, split Subject/Body,
+  reliable worker thread with TCP keepalive
+- **MQTT** - PDW-native and flat/Node-RED JSON
+- **Webhook** - HTTP(S) POST with CSV / per-capcode / subscriber-array modes
+- **Telnet server** (port 8024) - streams decoded messages in a structured wire-format (a custom
+  internal feature, not intended for general use), with half-open session cleanup via TCP keepalive
+- **MySQL / MariaDB** - Classic / Extended / Optimized schemas, no external client DLL
+- **SQLite** - a single local file, no server, LowWrite NVMe mode and optional auto-purge
+- **Telegram** (Bot API) and **Pushover** - Title/Body templates, per-filter routing and overrides,
+  one-message-per-group-call batching
+
+### Supporting features
+- Central **log manager** with date-rotated files, optional ISO timestamps, and write buffering to
+  reduce SSD write amplification on busy networks
+- **RX Quality Alert** - e-mail when signal quality stays poor for a sustained period
+- **High-DPI** support, configurable colours/fonts, scrollback, system-tray operation
+- A single binary under ~7 MB: OpenSSL, Paho MQTT, SQLite and the MySQL protocol are statically
+  compiled in - no separate DLLs to deploy
+
+## Changes since 3.7.0
+
+None functionally - 4.0.0 is 3.7.0 promoted to a final release (version strings and resource version
+info updated to 4.0.0). The feature delta that the 3.7.x line introduced over 3.6.x is summarised
+below and detailed in the 3.7.0 notes that follow:
+
+- Telnet server: half-open client sessions detected and cleaned up via TCP keepalive
+  (FIX [TelnetStaleSlot])
+- TCP keepalive on the SMTP connection (FIX [SmtpKeepAlive])
+- Telegram: direct (1-on-1) chats no longer fail with HTTP 400 (FIX [TelegramThreadOverflow])
+- Telegram: Discover now finds every chat, including your direct chat (FIX [TgDiscoverAllChats])
+- Per-filter Telegram routing - TG topic / TG chat overrides (FIX [TelegramRouting])
+- Pushover: HTML line breaks no longer add a stray space/blank line (FIX [PoHtmlNewlineSpace])
+- Filter dialog layout fixes - hit counter and PO priority/sound labels (FIX [FilterHitsClip] /
+  [FilterPoLabelClip])
+
+---
+
 # PDW 3.7.0 - Release Notes
 
 ## New in 3.7.0
@@ -23,6 +90,23 @@
   already detects a dead server on the next mail) and the server's own idle-session timeout.
 
 ### Telegram
+
+- **A direct (1-on-1) chat in the chat list no longer fails with HTTP 400 (FIX [TelegramThreadOverflow]):**
+  a forum topic / thread id (`message_thread_id`) is only valid for a group/supergroup. When a topic
+  was configured (globally or per filter) it was previously applied to *every* destination, so a
+  direct chat with the bot - which has no topics - was rejected by Telegram with HTTP 400 ("message
+  thread not found") and showed up as `failed` in the log. The topic is now applied only to
+  group/supergroup/channel destinations (negative chat ids); direct chats (positive ids) never get a
+  topic and send normally. This covers both the global chat list and per-filter chat overrides.
+
+- **Discover now finds every chat, including your direct chat (FIX [TgDiscoverAllChats]):** the
+  Discover button used to return only the *last* chat seen in the bot's recent updates, so once the
+  bot was added to an active group the group's messages always came last and a 1-on-1 chat was never
+  offered. Discover now lists *all* distinct chats from the updates (id, type, and name), de-duplicated,
+  and appends each new one to the chat-id field in a single click. The reply buffer was also enlarged
+  so a busy bot's updates are no longer truncated. Note: Telegram only keeps recent un-acknowledged
+  updates for about 24 hours - if a chat no longer appears, send a fresh message to the bot and click
+  Discover again.
 
 - **Per-filter Telegram routing (FIX [TelegramRouting]):** the Ctrl+F filter editor now has two new
   per-filter Telegram fields. *TG topic* sets a numeric forum topic / thread id

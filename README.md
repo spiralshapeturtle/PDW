@@ -4,7 +4,7 @@
 
 ---
 
-**Version 3.6.8** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 4.0.0** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -149,14 +149,16 @@ Push decoded pages to Telegram chats, groups, and supergroups via the Bot API (W
 libraries). Configure via **Telegram** in the menu.
 
 - Bot token from @BotFather; one or more numeric chat_id's (';'-separated)
-- **Discover** helper retrieves the chat_id via `getUpdates` after you send `/start` to the bot
+- **Discover** helper lists every distinct chat (id, type, name) from the bot's recent `getUpdates`
+  after you message the bot - so a 1-on-1 chat is found even when the bot also sits in a busy group
 - Separate **Title** and **Body** templates (default `<b>{label}</b>` / `{message}`) with placeholders
   `{message}/{label}/{capcode}/{time}/{date}/{mode}/{type}/{bitrate}`; `\n` forces a line break. E.g.
   leave Title empty and set Body `<b>{message}</b>\n{label}` for a bold page text with each capcode
   label on its own line underneath (see the manual's template cookbook for more examples)
 - HTML formatting with automatic plain-text fall-back; 4096-char split or truncate
 - HTTP 429 rate-limit back-off; automatic supergroup `migrate_to_chat_id` handling
-- Silent delivery, link-preview toggle, optional supergroup topic (`message_thread_id`), Test button
+- Silent delivery, link-preview toggle, optional supergroup topic (`message_thread_id`; applied only
+  to group/supergroup destinations so a direct chat in the list never fails with HTTP 400), Test button
 - Send-in modes mirror SMTP: All / Filtered / Filtered+Monitor / **Selected filters only**
 - **Per-capcode control**: each filter (Ctrl-F) has a *Send Telegram* checkbox, used only in
   "Selected filters only" mode (forward just a few capcodes); ignored in the other modes
@@ -522,6 +524,16 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 
 ## Changelog highlights
 
+### v4.0.0 (June 2026)
+First final release of the modernised fork. It consolidates five years of work on the classic PDW 3.2 codebase — six output feeds (SMTP, MQTT, webhook, Telnet, MySQL, SQLite) plus Telegram and Pushover, a central log manager, High-DPI support, RX quality monitoring and extensive 24/7-reliability hardening — into one stable, dependency-free binary. The changes carried over from the 3.7.x development line are:
+- **Telnet server: half-open client sessions detected and cleaned up** — an ungraceful client drop (router/NAT rebind, crash, or a blip that swallowed the TCP close) used to leave a "connected" slot that PDW kept sending to, while a reconnect was assigned a *second* slot — two simultaneous sessions, both shown active, with only one processed downstream. PDW now enables TCP keepalive on every accepted connection, so a dead peer is detected within ~45 s and its slot freed for reuse. Multiple genuine connections from one address (several clients behind a NAT, test setups) stay fully supported — each TCP connection is its own session
+- **TCP keepalive on the SMTP connection** — a safety net so a mail server that vanished without closing the link cannot leave a half-open connection lingering, on top of the existing 30 s receive timeout
+- **Telegram: direct (1-on-1) chats no longer fail with HTTP 400** — a configured forum topic / thread id is only valid for a group/supergroup, but was previously applied to *every* destination, so a direct chat with the bot was rejected and logged as `failed`. The topic is now applied only to group/supergroup/channel destinations (negative chat ids); direct chats (positive ids) send normally. Covers both the global chat list and per-filter chat overrides
+- **Telegram: Discover finds every chat, including your direct chat** — Discover used to return only the *last* chat in the bot's recent updates, so an active group always won and a 1-on-1 chat was never offered. It now lists *all* distinct chats (id, type, name), de-duplicated, and appends each new one in a single click; the reply buffer was enlarged so a busy bot's updates are no longer truncated
+- **Per-filter Telegram routing** — the Ctrl+F filter editor gained *TG topic* (route a capcode's messages to a specific forum topic / thread id) and *TG chat* (override the destination chat for this capcode — one or more `-100…` ids, `@channel` names, or several separated by `;`). Both are stored in `filters.ini` (new CSV fields 14-15) and apply inside FLEX group calls; old files load with the global routing as before
+- **Pushover: HTML line breaks no longer add a stray space/blank line** — with HTML formatting on, PDW used to translate every `\n` into a `<br>`, which stacked a second break on top of Pushover's own newline-to-break handling. Newlines are now sent verbatim in both plain and HTML mode: a single `\n` renders as one clean line break everywhere (use `\n\n` for a blank separator line)
+- **Filter dialog layout fixes** — the "Number of hits" field is back to its original width (multi-digit counts and last-hit date/time are fully visible again), and the "PO priority" / "PO sound" labels no longer run underneath the input next to them
+
 ### v3.6.9 (June 2026)
 - **Late / fragmented FLEX group messages keep their subscriber list** — a group call is announced by Short Instructions that say which frame the message will arrive in; PDW then lists the collected member capcodes under that message. A long message can be split into fragments sent in later frames, and a busy frame can also delay the message, so it may arrive a frame or more after the announced one. Previously PDW required an exact frame match, so a late message was shown bare (no members), its collected member list was never cleared, and that stale list later leaked onto the next group call reusing the same group slot (showing up minutes later under the wrong group). PDW now accepts the message within the same grace window it already uses for missed-call detection, shows the members under the correct message right away, clears the slot, and no longer mis-counts the call as "missed". Applies to all 16 group codes and to every output feed and database; the telnet wire feed was already correct
 
@@ -572,7 +584,7 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 - Date-stamped log files for all output feeds
 
 ### v3.4 (2026)
-- **Telnet server** on port 8024 — CS FlexDecoder-compatible wire-format
+- **Telnet server** on port 8024 — streams decoded messages in a structured wire-format (custom internal feature)
 - RX Quality (`<RXQ:NN>`), watchdog (`<WD>`), RS232 and Audio presence markers
 - Reconnect backlog replay window (60 s)
 
