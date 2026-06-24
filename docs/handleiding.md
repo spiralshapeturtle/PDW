@@ -40,6 +40,7 @@
     - 10.8 [Logbestanden en schrijfbuffering](#108-logbestanden-en-schrijfbuffering)
     - 10.9 [Programmaopties](#109-programmaopties)
 11. [Weergavemenu](#11-weergavemenu)
+    - 11.1 [Eigen filterlabelkleuren](#111-eigen-filterlabelkleuren)
 12. [Gedecodeerde protocollen](#12-gedecodeerde-protocollen)
     - 12.1 [POCSAG](#121-pocsag)
     - 12.2 [FLEX en ReFLEX](#122-flex-en-reflex)
@@ -757,19 +758,31 @@ Aanbevolen voor drukke POCSAG/FLEX-netwerken waar veel berichten per seconde hog
 | Kleuren | Bewerk het kleurenschema. De "Default" filterlabelkleur is een goed leesbaar azuurblauw; met "Better contrast" aan zijn alle 17 labelkleuren onderling verschillend |
 | Woordafbreking | Laat lange berichten doorlopen in de berichtkolom |
 
-### Eigen filterlabelkleuren (pdw.ini)
+#### 11.1 Eigen filterlabelkleuren (pdw.ini)
 
-De 17 filterlabelkleuren kunnen in `pdw.ini` worden overschreven zonder enige menu-instelling. Slot 0 gebruikt
-de sleutel `Color.FilterLabel`; slots 1-16 gebruiken `Color.FilterLabel1` tot en met `Color.FilterLabel16`. Elke
-waarde is `R,G,B` (0-255), bijvoorbeeld:
+De 17 filterlabelkleuren kunnen in `pdw.ini` worden overschreven zonder enige menu-instelling. Slot 0 gebruikt de sleutel `Color.FilterLabel`; slots 1-16 gebruiken `Color.FilterLabel1` tot en met `Color.FilterLabel16`. Elke waarde is `R,G,B` (0-255). Hier volgt een referentie van alle mogelijke sleuven met hun ingebouwde standaardkleuren:
 
+```ini
+Color.FilterLabel=64,128,255        ; 0  Default (Light Blue)
+Color.FilterLabel1=255,255,0        ; 1  Yellow
+Color.FilterLabel2=255,0,0          ; 2  Red
+Color.FilterLabel3=255,170,0        ; 3  Orange
+Color.FilterLabel4=0,0,255          ; 4  Blue
+Color.FilterLabel5=0,128,128        ; 5  Cyan
+Color.FilterLabel6=255,255,255      ; 6  White
+Color.FilterLabel7=0,255,0          ; 7  Green
+Color.FilterLabel8=192,192,192      ; 8  Gray
+Color.FilterLabel9=128,128,64       ; 9  Brown
+Color.FilterLabel10=0,255,255       ; 10 Light Cyan
+Color.FilterLabel11=0,51,153        ; 11 Dark Blue
+Color.FilterLabel12=255,0,255       ; 12 Magenta
+Color.FilterLabel13=51,204,153      ; 13 Sea Green
+Color.FilterLabel14=255,153,204     ; 14 Pink
+Color.FilterLabel15=153,255,255     ; 15 Ice Blue
+Color.FilterLabel16=128,128,255     ; 16 Light Blue (alt)
 ```
-Color.FilterLabel3=255,140,0
-```
 
-Laat een sleutel weg (of leeg) en dat slot houdt zijn ingebouwde kleur - er is niets om aan te zetten. Filters
-blijven naar een kleur verwijzen via het slotnummer, dus bestaande filters worden niet beinvloed. Eigen kleuren
-worden getoond zoals opgegeven; de "Better contrast"-remap past alleen de ingebouwde standaardkleuren aan.
+Laat een sleutel weg (of leeg) en dat slot houdt zijn ingebouwde kleur - er is niets om aan te zetten. Filters blijven naar een kleur verwijzen via het slotnummer, dus bestaande filters worden niet beinvloed. Eigen kleuren worden getoond zoals opgegeven; de "Better contrast"-remap past alleen de ingebouwde standaardkleuren aan.
 
 ---
 
