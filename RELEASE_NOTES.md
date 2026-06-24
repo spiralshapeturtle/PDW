@@ -1,3 +1,28 @@
+# PDW 4.0.1 - Release Notes
+
+## Filter label colors - readability and uniqueness (FIX [FilterBlueContrast])
+- The **Default** filter label color was pure blue (`0,0,255`), which is hard to read on the black
+  message background. It is now a readable azure (`64,128,255`). This also applies to the "Reset all
+  colors to Default" buttons in the color dialogs.
+- With **Better contrast** enabled, three blue slots (Default, Light Blue, Blue) previously remapped to
+  the exact same color. They are now distinct: Default = `140,180,255`, Light Blue = `80,148,255`
+  (unchanged), Blue = `48,112,224`. Every label color in the enhanced palette is now unique.
+- Note: the Default color is stored in `pdw.ini` (`Color.FilterLabel=`). Existing installations keep
+  their saved value; use "Reset all colors to Default" (or start from a fresh `pdw.ini`) to pick up the
+  new readable blue. The Light Blue and Blue slots are not stored and update automatically.
+
+## Custom filter label colors via pdw.ini (FIX [FilterPaletteIni])
+- All 17 filter label colors can now be overridden in `pdw.ini`. Slot 0 keeps the existing
+  `Color.FilterLabel=R,G,B` key; slots 1-16 use `Color.FilterLabel1=` .. `Color.FilterLabel16=`.
+- It is per-key autodetect: a missing, empty or invalid key keeps the built-in default, so an existing
+  `pdw.ini` behaves exactly as before. No GUI switch and no "enable custom colors" flag - leave a key
+  out and that slot stays default; add one and that slot is overridden.
+- Filters still reference a color by its slot number (the `filters.ini` format is unchanged), so this
+  is fully backward compatible. Custom colors are shown as-is; the "Better contrast" remap only adjusts
+  the built-in defaults.
+
+---
+
 # PDW 4.0.0 - Release Notes (final)
 
 PDW 4.0.0 is the first **final release** of the modernised fork. It does not add new features over

@@ -53,3 +53,8 @@ CLAUDE.md
 
 # Release zip
 PDW-*.zip
+
+# Release staging: holds the sanitized pdw.ini and assets used to build release
+# zips. Never tracked, so a live/personal pdw.ini dropped here can never be
+# committed (see CLAUDE.md: never share a pdw.ini with personal data).
+release-template/

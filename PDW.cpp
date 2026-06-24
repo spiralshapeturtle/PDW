@@ -690,7 +690,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.color_mb_sender		= RGB(rgbColor[RED][0],    rgbColor[RED][1],    rgbColor[RED][2]);
 
 	// Filter label colors
-	Profile.color_filterlabel[0]	= RGB(rgbColor[LTBLUE][0], rgbColor[LTBLUE][1], rgbColor[LTBLUE][2]);
+	Profile.color_filterlabel[0]	= RGB(64, 128, 255);	// FIX [FilterBlueContrast]: was pure blue (0,0,255), poorly readable on black; lift the Default slot to a readable azure
 	Profile.color_filterlabel[1]	= RGB(rgbColor[YELLOW][0], rgbColor[YELLOW][1], rgbColor[YELLOW][2]);
 	Profile.color_filterlabel[2]	= RGB(rgbColor[RED][0],    rgbColor[RED][1],    rgbColor[RED][2]);
 	Profile.color_filterlabel[3]	= RGB(0xFF, 0xAA, 0x00);      /* orange */
@@ -2992,8 +2992,9 @@ DWORD GetColorRGB(BYTE color)
 static COLORREF ApplyContrastRemap(COLORREF clr) {
 	if (!g_betterContrast) return clr;
 	switch (clr) {
-		case RGB(  0,   0, 255): return RGB( 80, 148, 255);	// pure blue / LTBLUE
-		case RGB(  0,  51, 153): return RGB( 80, 148, 255);	// Profile "Blue" (navy)
+		case RGB(  0,   0, 255): return RGB( 80, 148, 255);	// pure blue / LTBLUE (Light Blue label + timestamp)
+		case RGB( 64, 128, 255): return RGB(140, 180, 255);	// FIX [FilterBlueContrast]: Default filter slot - distinct light azure (keeps it unique vs Light Blue)
+		case RGB(  0,  51, 153): return RGB( 48, 112, 224);	// FIX [FilterBlueContrast]: Profile "Blue" (navy) - distinct royal blue (was 80,148,255, collided with Light Blue)
 		case RGB(  0, 128,   0): return RGB( 77, 255, 145);	// dark green
 		case RGB(  0, 255,   0): return RGB( 77, 255, 145);	// LTGREEN
 		case RGB(128, 128, 128): return RGB(192, 192, 192);	// medium gray
@@ -4565,7 +4566,7 @@ BOOL FAR PASCAL ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				tmp_misc		= RGB(rgbColor[BROWN][0],  rgbColor[BROWN][1],  rgbColor[BROWN][2]);
 				tmp_biterrors	= RGB(rgbColor[LTGRAY][0], rgbColor[LTGRAY][1], rgbColor[LTGRAY][2]);
 				tmp_filtermatch	= RGB(rgbColor[LTGREEN][0],rgbColor[LTGREEN][1],rgbColor[LTGREEN][2]);
-				tmp_filterlabel	= RGB(rgbColor[LTBLUE][0], rgbColor[LTBLUE][1], rgbColor[LTBLUE][2]);
+				tmp_filterlabel	= RGB(64, 128, 255);	// FIX [FilterBlueContrast]: reset Default filter label to readable azure (was pure blue 0,0,255)
 				tmp_misc		= RGB(rgbColor[LTCYAN][0], rgbColor[LTCYAN][1], rgbColor[LTCYAN][2]);
 
 				DeleteObject(hboxbr);
@@ -4964,9 +4965,7 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 				tmp_filtermatch	= RGB(rgbColor[LTGREEN][0],
 										rgbColor[LTGREEN][1],
 										rgbColor[LTGREEN][2]);
-				tmp_filterlabel	= RGB(rgbColor[LTBLUE][0],
-										rgbColor[LTBLUE][1],
-										rgbColor[LTBLUE][2]);
+				tmp_filterlabel	= RGB(64, 128, 255);	// FIX [FilterBlueContrast]: reset Default filter label to readable azure (was pure blue 0,0,255)
 				DeleteObject(hboxbr);
 				hboxbr = CreateSolidBrush(tmp_background);
 				SetClassLongPtr(hColorWnd, GCLP_HBRBACKGROUND, (LONG_PTR) hboxbr);
@@ -11587,6 +11586,21 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	GetPrivateProfileString(lpszAppTitle, TEXT("Color.FilterLabel"), "", color_str, 13, lpszIniPathName);
 	if (sscanf(color_str, "%d,%d,%d", &red, &green, &blue) == 3) pProfile->color_filterlabel[0] = RGB(red, green, blue);
 
+	// FIX [FilterPaletteIni]: allow overriding the remaining 16 filter label colors from pdw.ini
+	// (Color.FilterLabel1 .. Color.FilterLabel16). A missing/empty/invalid key keeps the built-in
+	// default, so an existing pdw.ini behaves exactly as before - per-key autodetect, no GUI toggle.
+	{
+		char flKey[24];
+		int  fl;
+		for (fl = 1; fl <= 16; fl++)
+		{
+			sprintf(flKey, "Color.FilterLabel%d", fl);
+			GetPrivateProfileString(lpszAppTitle, flKey, "", color_str, 13, lpszIniPathName);
+			if (sscanf(color_str, "%d,%d,%d", &red, &green, &blue) == 3)
+				pProfile->color_filterlabel[fl] = RGB(red, green, blue);
+		}
+	}
+
 	GetPrivateProfileString(lpszAppTitle, TEXT("Color.ACSEQNO"), "", color_str, 13, lpszIniPathName);
 	if (sscanf(color_str, "%d,%d,%d", &red, &green, &blue) == 3) pProfile->color_ac_message_nr = RGB(red, green, blue);
 
@@ -12235,6 +12249,15 @@ void WriteSettings()
 		fprintf(pFile, "Color.FilterLabel=%d,%d,%d\n",	GetRValue(Profile.color_filterlabel[0]),
 														GetGValue(Profile.color_filterlabel[0]),
 														GetBValue(Profile.color_filterlabel[0]));
+		// FIX [FilterPaletteIni]: persist the remaining 16 filter label colors so users can edit them in pdw.ini
+		{
+			int fl;
+			for (fl = 1; fl <= 16; fl++)
+				fprintf(pFile, "Color.FilterLabel%d=%d,%d,%d\n", fl,
+						GetRValue(Profile.color_filterlabel[fl]),
+						GetGValue(Profile.color_filterlabel[fl]),
+						GetBValue(Profile.color_filterlabel[fl]));
+		}
 		fprintf(pFile, "Color.ACSEQNO=%d,%d,%d\n",		GetRValue(Profile.color_ac_message_nr),
 														GetGValue(Profile.color_ac_message_nr),
 														GetBValue(Profile.color_ac_message_nr));

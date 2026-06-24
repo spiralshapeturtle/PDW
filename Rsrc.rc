@@ -1254,8 +1254,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 4,0,0,0
- PRODUCTVERSION 4,0,0,0
+ FILEVERSION 4,0,1,0
+ PRODUCTVERSION 4,0,1,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -1273,11 +1273,11 @@ BEGIN
             VALUE "Comments", "Supports Windows XP - WIN11"
             VALUE "CompanyName", "WitWarez"
             VALUE "FileDescription", "PDW"
-            VALUE "FileVersion", "4.0.0"
+            VALUE "FileVersion", "4.0.1"
             VALUE "InternalName", "PDW"
             VALUE "OriginalFilename", "PDW3_6.exe"
             VALUE "ProductName", "PDW"
-            VALUE "ProductVersion", "4.0.0"
+            VALUE "ProductVersion", "4.0.1"
         END
     END
     BLOCK "VarFileInfo"

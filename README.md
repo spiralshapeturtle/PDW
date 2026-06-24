@@ -4,7 +4,7 @@
 
 ---
 
-**Version 4.0.0** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 4.0.1** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -523,6 +523,10 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v4.0.1 (June 2026)
+- **Readable, unique filter label colours** — the **Default** filter label colour was pure blue (`0,0,255`), which reads poorly on the black message background; it is now a readable azure (`64,128,255`). With **Better contrast** enabled, three blue slots (Default, Light Blue, Blue) previously remapped to the *same* colour — they are now distinct, so every label colour in the enhanced palette is unique. Existing installations keep their saved Default colour; use **Reset all colours to Default** (or start from a fresh `pdw.ini`) to pick up the new blue
+- **Custom filter label colours via `pdw.ini`** — all 17 filter label colours can now be overridden in `pdw.ini` without any menu setting. Slot 0 keeps the existing `Color.FilterLabel=R,G,B` key; slots 1-16 use `Color.FilterLabel1=` .. `Color.FilterLabel16=`. It is per-key autodetect: a missing, empty or invalid key keeps the built-in default, so an existing config behaves exactly as before. Filters still reference a colour by its slot number (the `filters.ini` format is unchanged), so this is fully backward compatible
 
 ### v4.0.0 (June 2026)
 First final release of the modernised fork. It consolidates five years of work on the classic PDW 3.2 codebase — six output feeds (SMTP, MQTT, webhook, Telnet, MySQL, SQLite) plus Telegram and Pushover, a central log manager, High-DPI support, RX quality monitoring and extensive 24/7-reliability hardening — into one stable, dependency-free binary. The changes carried over from the 3.7.x development line are:

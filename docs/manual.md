@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 4.0.0** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 4.0.1** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -868,8 +868,21 @@ Recommended for busy POCSAG/FLEX networks where many messages per second can cau
 |------|-------------|
 | Font | Change the message list font |
 | Columns | Show or hide individual columns |
-| Colours | Edit the colour scheme |
+| Colours | Edit the colour scheme. The "Default" filter label colour is a readable azure; with "Better contrast" on, all 17 label colours are distinct |
 | Word wrap | Wrap long messages inside the message column |
+
+### Custom filter label colours (pdw.ini)
+
+The 17 filter label colours can be overridden in `pdw.ini` without any menu setting. Slot 0 uses the
+`Color.FilterLabel` key; slots 1-16 use `Color.FilterLabel1` to `Color.FilterLabel16`. Each value is
+`R,G,B` (0-255), for example:
+
+```
+Color.FilterLabel3=255,140,0
+```
+
+Leave a key out (or empty) and that slot keeps its built-in colour - there is nothing to switch on.
+Filters keep referring to a colour by its slot number, so existing filters are unaffected.
 
 ---
 

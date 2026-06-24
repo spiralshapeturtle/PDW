@@ -1,6 +1,6 @@
 # PDW Gebruikershandleiding
 
-**Versie 3.6.7** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Versie 4.0.1** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -695,8 +695,22 @@ Aanbevolen voor drukke POCSAG/FLEX-netwerken waar veel berichten per seconde hog
 |------|--------------|
 | Lettertype | Verander het berichtenlijst-lettertype |
 | Kolommen | Toon of verberg afzonderlijke kolommen |
-| Kleuren | Bewerk het kleurenschema |
+| Kleuren | Bewerk het kleurenschema. De "Default" filterlabelkleur is een goed leesbaar azuurblauw; met "Better contrast" aan zijn alle 17 labelkleuren onderling verschillend |
 | Woordafbreking | Laat lange berichten doorlopen in de berichtkolom |
+
+### Eigen filterlabelkleuren (pdw.ini)
+
+De 17 filterlabelkleuren kunnen in `pdw.ini` worden overschreven zonder enige menu-instelling. Slot 0 gebruikt
+de sleutel `Color.FilterLabel`; slots 1-16 gebruiken `Color.FilterLabel1` tot en met `Color.FilterLabel16`. Elke
+waarde is `R,G,B` (0-255), bijvoorbeeld:
+
+```
+Color.FilterLabel3=255,140,0
+```
+
+Laat een sleutel weg (of leeg) en dat slot houdt zijn ingebouwde kleur - er is niets om aan te zetten. Filters
+blijven naar een kleur verwijzen via het slotnummer, dus bestaande filters worden niet beinvloed. Eigen kleuren
+worden getoond zoals opgegeven; de "Better contrast"-remap past alleen de ingebouwde standaardkleuren aan.
 
 ---
 
