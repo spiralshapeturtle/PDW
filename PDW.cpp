@@ -5367,9 +5367,7 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 				tmp_filtermatch	= RGB(rgbColor[LTGREEN][0],
 										rgbColor[LTGREEN][1],
 										rgbColor[LTGREEN][2]);
-				tmp_filterlabel	= RGB(rgbColor[LTBLUE][0],
-										rgbColor[LTBLUE][1],
-										rgbColor[LTBLUE][2]);
+				tmp_filterlabel	= RGB(64, 128, 255);	// FIX [FilterBlueContrast]: reset Default filter label to readable azure (was pure blue 0,0,255)
 
 				DeleteObject(hboxbr);
 
@@ -5780,9 +5778,7 @@ BOOL FAR PASCAL ERMESColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 				tmp_filtermatch	= RGB(rgbColor[LTGREEN][0],
 										rgbColor[LTGREEN][1],
 										rgbColor[LTGREEN][2]);
-				tmp_filterlabel	= RGB(rgbColor[LTBLUE][0],
-										rgbColor[LTBLUE][1],
-										rgbColor[LTBLUE][2]);
+				tmp_filterlabel	= RGB(64, 128, 255);	// FIX [FilterBlueContrast]: reset Default filter label to readable azure (was pure blue 0,0,255)
 
 				DeleteObject(hboxbr);
 
