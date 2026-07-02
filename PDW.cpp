@@ -3636,7 +3636,11 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 					SetFocus(GetDlgItem(hDlg, IDC_LOGFILE));
 					return (FALSE);
 				}
-				else if (Need_Ext(szFileLog)) strcat(szFileLog,".log");
+				// FIX [ExtAppendBound]: GetDlgItemText may fill szFileLog completely (the edit
+				// control has no EM_LIMITTEXT), so an unconditional strcat of the extension wrote
+				// up to 4 bytes past the stack buffer. Only append when the extension still fits;
+				// GetEditSaveName() already reserves this room via nMaxFile-5.
+				else if (Need_Ext(szFileLog) && strlen(szFileLog) + 4 < sizeof(szFileLog)) strcat(szFileLog,".log");
 
 				if (stricmp(szFileLog, Profile.filterfile) == 0)
 				{
@@ -7881,7 +7885,8 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 				}
 				else
 				{
-					if (Need_Ext(szFileFilter)) strcat(szFileFilter,".flt");
+					// FIX [ExtAppendBound]: bounded append, see IDC_LOGFILE handler.
+					if (Need_Ext(szFileFilter) && strlen(szFileFilter) + 4 < sizeof(szFileFilter)) strcat(szFileFilter,".flt");
 					if (!FileExists(szLogPathName)) CreateDirectory(szLogPathName, NULL);
 				}
 
@@ -9466,7 +9471,11 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 								{
 									if (strcmp(tmp_sepfile[j], "Don't change"))
 									{
-										if (Need_Ext(tmp_sepfile[j]) && tmp_sepfile[j][0]) strcat(tmp_sepfile[j],".txt");
+										// FIX [ExtAppendBound]: the copy below lands in
+										// sep_filterfile[j][FILTER_FILE_LEN+1]; a 125-128 char
+										// name without extension grew past it after ".txt".
+										// Only append when the result still fits that field.
+										if (Need_Ext(tmp_sepfile[j]) && tmp_sepfile[j][0] && strlen(tmp_sepfile[j]) + 4 <= FILTER_FILE_LEN) strcat(tmp_sepfile[j],".txt");
 										strcpy(Profile.filters[index].sep_filterfile[j], tmp_sepfile[j]);
 									}
 								}
@@ -11322,7 +11331,8 @@ BOOL FAR PASCAL MonStatDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 				}
 				else
 				{
-					if (Need_Ext(szStatFile)) strcat(szStatFile,".st");
+					// FIX [ExtAppendBound]: bounded append, see IDC_LOGFILE handler.
+					if (Need_Ext(szStatFile) && strlen(szStatFile) + 3 < sizeof(szStatFile)) strcat(szStatFile,".st");
 
 					if ((pFileLog = fopen(szStatFile, "a")) == NULL)
 					{

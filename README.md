@@ -4,7 +4,7 @@
 
 ---
 
-**Version 4.0.1** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 4.0.2** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -523,6 +523,12 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v4.0.2 (July 2026)
+Stability release — hardening fixes from a full release-readiness audit (memory safety, bounds checking). No decoder-output or configuration changes; existing `pdw.ini` and `filters.ini` files work unchanged.
+- **Bounded filename-extension append** — the Logfile, Filterfile and Statistics dialogs appended their default extension (`.log`, `.flt`, `.st`) with an unchecked `strcat`; a maximum-length filename filled the buffer completely and the append wrote past it (a GUI-triggerable stack overrun). Same for the per-filter separate-filterfile fields (`.txt`). The extension is now only appended when it still fits
+- **Group-call sort bounded** — sorting a FLEX group-call member list could read one integer past the group array when a group was at its absolute maximum capacity (999 members); now explicitly bounded
+- **MOBITEX hardening** — a hand-edited MOBITEX filter capcode shorter than 2 characters made the matcher index before the string (now falls back to the default address+mode match), and the sweep-info decoder took its channel count from a raw decoded byte, letting a corrupted frame overrun the 15-entry channel table (now capped and bounded)
 
 ### v4.0.1 (June 2026)
 - **Readable, unique filter label colours** — the **Default** filter label colour was pure blue (`0,0,255`), which reads poorly on the black message background; it is now a readable azure (`64,128,255`). With **Better contrast** enabled, three blue slots (Default, Light Blue, Blue) previously remapped to the *same* colour — they are now distinct, so every label colour in the enhanced palette is unique. Existing installations keep their saved Default colour; use **Reset all colours to Default** (or start from a fresh `pdw.ini`) to pick up the new blue

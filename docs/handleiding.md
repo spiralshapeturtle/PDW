@@ -1,6 +1,6 @@
 # PDW Gebruikershandleiding
 
-**Versie 4.0.1** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Versie 4.0.2** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -63,7 +63,7 @@
 
 PDW is een software pagingdecoder die een geluidskaart of seriele poort omzet in een volwaardige FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES-ontvanger. Het decodeert, filtert en distribueert pagingberichten naar een breed scala aan uitvoerkanalen - van eenvoudige weergave op het scherm en e-mailmeldingen tot MQTT-brokers, webhooks, Telnet-clients, MySQL-databases en lokale SQLite-bestanden.
 
-Deze versie (4.0.1) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
+Deze versie (4.0.2) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
 
 ---
 

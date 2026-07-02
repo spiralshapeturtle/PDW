@@ -514,6 +514,13 @@ void MOBITEX::barfrog()
 				if ((iBlockNumber == 2) && !block[1])	// If we are in the second block in
 				{										// which the second byte should be 0
 					SWEEP.channels = block[0];			// The first byte tells the number of neighours
+					// FIX [MobitexSweepBounds]: block[0] is a raw decoded byte (0-255). It drives
+					// the neighbours[32] fill/read (2 entries per channel) and an unbounded strcat
+					// into szNeighbourList. A corrupt/oversized channel-count byte overran
+					// neighbours[], szNeighbourList[MAX_STR_LEN] and mb_msg_col[]. Cap to the array
+					// capacity: neighbours[32] holds at most 15 displayable channels (uses count and
+					// count+1, so index 30/31 max). Real MOBITEX bases advertise only a few.
+					if (SWEEP.channels > 15) SWEEP.channels = 15;
 				}
 
 				if (GetNeighbourChannels())	// true if the channellist has been received correctly
@@ -1275,7 +1282,10 @@ bool MOBITEX::GetNeighbourChannels()
 		count=0;
 	}
 
-	for (int i = !block[1] ? 2 : 0; i<18; i+=2, count++)
+	// FIX [MobitexSweepBounds]: 'count' is static and accumulates across sweep blocks
+	// (reset only at iBlockNumber==2), so without an array-index guard it could run past
+	// neighbours[32] regardless of the channel clamp. Bound the write index explicitly.
+	for (int i = !block[1] ? 2 : 0; i<18 && count < 32; i+=2, count++)
 	{
 		neighbours[count] = ((block[i] << 8) | block[i+1]);
 
@@ -1361,10 +1371,15 @@ bool MOBITEX::GetSlaveChannels()
 	static int count, neighbours[32];
 	char szChannel[64];
 
+	// FIX [MobitexSweepBounds]: block[7] (slave-channel count) is a raw decoded byte with no
+	// clamp; it drove the same neighbours[32]/szNeighbourList/mb_msg_col overruns as the
+	// neighbour list. Cap to the array capacity (15 displayable channels = index 30/31 max).
+	if (block[7] > 15) block[7] = 15;
+
 	memset(neighbours, 0, sizeof(neighbours));
 	count=0;
 
-	for (int i=8; i<18; i+=2, count++)
+	for (int i=8; i<18 && count < 32; i+=2, count++)
 	{
 		neighbours[count] = (((block[i] & 0x1F) << 8) | block[i+1]);
 

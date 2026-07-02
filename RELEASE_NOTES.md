@@ -1,3 +1,36 @@
+# PDW 4.0.2 - Release Notes
+
+PDW 4.0.2 is a stability release: no new features, only hardening fixes that came out of a full
+release-readiness audit of the codebase (memory safety, bounds checking). None of them change any
+decoder output or configuration format; existing `pdw.ini` and `filters.ini` files work unchanged.
+
+## Bounded filename-extension append (FIX [ExtAppendBound])
+- The Logfile, Filterfile and Statistics dialogs appended their default extension (`.log`, `.flt`,
+  `.st`) with an unchecked `strcat`. A filename typed or pasted at the maximum length (the edit
+  controls have no length limit) filled the buffer completely, and the append then wrote a few bytes
+  past it - a stack buffer overrun triggerable from the GUI. The extension is now only appended when
+  it still fits; nothing changes for normal-length names.
+- The same pattern in the per-filter separate-filterfile fields could overrun the stored filter
+  entry by up to 4 bytes when a name of 125-128 characters without an extension was entered. Also
+  bounded now.
+
+## Group-call sort: read past the group array (FIX [SortGroupBound])
+- Sorting a FLEX group-call member list relied on a 0-terminator behind the last member. A group at
+  the absolute maximum capacity (999 members) has no terminator, letting the sort read one integer
+  past the array. Read-only and practically unreachable with real paging traffic, but now explicitly
+  bounded.
+
+## MOBITEX hardening (FIX [MobitexFilterLen], FIX [MobitexSweepBounds])
+- A MOBITEX filter whose capcode was hand-edited in `filters.ini` to fewer than 2 characters made the
+  filter matcher index before the start of the string. Such a capcode now safely falls back to the
+  default address+mode match.
+- The MOBITEX sweep-info decoder took the neighbour/slave channel count directly from a raw decoded
+  byte (0-255) while the channel table holds at most 15 displayable entries; a corrupted frame could
+  overrun the table and the display buffers. The count is now capped to the table capacity and the
+  fill loops are explicitly bounded.
+
+---
+
 # PDW 4.0.1 - Release Notes
 
 ## Filter label colors - readability and uniqueness (FIX [FilterBlueContrast])

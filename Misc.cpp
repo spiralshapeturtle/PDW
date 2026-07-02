@@ -753,7 +753,10 @@ void SortGroupCall(int groupbit)	// PH: Sort aGroupCodes[groupbit]
 	for (int nCapcode=1; nCapcode <= aGroupCodes[groupbit][CAPCODES_INDEX]; nCapcode++)
 	{
 		int min, j;
-		for (min=nCapcode, j=nCapcode+1; aGroupCodes[groupbit][j] > 0; j++)
+		// FIX [SortGroupBound]: the 0-sentinel that terminates this scan is absent when the
+		// group is completely full (999 members), so bound j to the array size to avoid a
+		// 1-int read past aGroupCodes[groupbit][MAXIMUM_GROUPSIZE].
+		for (min=nCapcode, j=nCapcode+1; j < MAXIMUM_GROUPSIZE && aGroupCodes[groupbit][j] > 0; j++)
 		{
 			if (aGroupCodes[groupbit][j] < aGroupCodes[groupbit][min]) min = j;
 		}
@@ -2830,7 +2833,12 @@ int Check_4_Filtermatch()
 
 			if (mode == MOBITEX_FILTER)
 			{
-				switch (Profile.filters[iFilter].capcode[strlen(Profile.filters[iFilter].capcode)-2])
+				// FIX [MobitexFilterLen]: guard against a hand-edited filters.ini capcode shorter
+				// than 2 chars - strlen()-2 underflows (size_t) into a wild index. A too-short
+				// capcode falls through to the default (address+mode) match.
+				size_t mbLen  = strlen(Profile.filters[iFilter].capcode);
+				char   mbMark = (mbLen >= 2) ? Profile.filters[iFilter].capcode[mbLen - 2] : '\0';
+				switch (mbMark)
 				{
 					case 'R' :
 
