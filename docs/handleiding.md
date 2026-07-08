@@ -1,6 +1,6 @@
 # PDW Gebruikershandleiding
 
-**Versie 4.0.2** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Versie 4.0.3** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -63,7 +63,7 @@
 
 PDW is een software pagingdecoder die een geluidskaart of seriele poort omzet in een volwaardige FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES-ontvanger. Het decodeert, filtert en distribueert pagingberichten naar een breed scala aan uitvoerkanalen - van eenvoudige weergave op het scherm en e-mailmeldingen tot MQTT-brokers, webhooks, Telnet-clients, MySQL-databases en lokale SQLite-bestanden.
 
-Deze versie (4.0.2) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
+Deze versie (4.0.3) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
 
 ---
 
@@ -381,6 +381,8 @@ Publiceert elke gedecodeerde pagina naar een MQTT-broker. Gebruikt de statisch g
 | `subscribers` | JSON-array van `{capcode, label}` voor FLEX-groepsoproepen |
 
 Klik op **Verbinding testen** in het dialoogvenster om de brokerverbinding te verifiëren. Activiteit gelogd naar `JJMMDD_mqtt.log`.
+
+De MQTT-feed houdt één verbinding open naar de broker en houdt deze in leven met keepalive (45 s), in plaats van opnieuw te verbinden per bericht, zodat korte broker-hikjes (bijvoorbeeld een herstart van een Home Assistant add-on of een backup-venster) worden doorstaan zoals elke langlevende MQTT-client dat doet. Als de broker de verbinding verbreekt terwijl PDW inactief is (broker-herstart of -update), herstelt de feed deze automatisch binnen maximaal een minuut, zodat het volgende bericht weer een warme verbinding aantreft; een broker die uit blijft staan wordt hooguit eens per minuut opnieuw geprobeerd, zonder het log vol te loggen. Als een publicatie de verbinding toch verbroken aantreft, wordt opnieuw verbonden en tot vier keer geprobeerd met exponentiële back-off voordat wordt opgegeven. Schakel voor onbeheerd 24/7-gebruik **Loggen naar bestand** in (`MqttLogToFile=1`): een rustige, stille periode toont platte `SENT`-regels, en een normale reconnect toont één `RECONNECT` gevolgd door `SENT`. Als u de feed vanaf een ander systeem op inactiviteit bewaakt, houd die timeout dan ruim boven uw heartbeat-interval (reken op minstens twee gemiste berichten) zodat een enkele vertraagde publicatie nooit een vals alarm veroorzaakt.
 
 ### 10.3a Telegram
 
