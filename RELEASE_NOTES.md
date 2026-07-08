@@ -31,11 +31,19 @@ TCP handshake, CONNECT/CONNACK, auth) is the single fragile operation, and PDW u
 retry/timeout profile than the webhook. Over a week, one reconnect eventually coincided with a brief
 broker stall (e.g. a Home Assistant add-on reload or backup window) and the message was dropped.
 
-## Warm MQTT connection (FIX [MqttWarmConn])
-- The 3-minute idle disconnect is removed. The connection is kept open and pinged via keepalive
-  (lowered 60 s to 45 s, staying under Mosquitto's 1.5x grace and any NAT idle timeout), so the
-  session survives the multi-minute quiet periods instead of cold-reconnecting on every message.
+## Warm MQTT connection (FIX [MqttWarmConn], FIX [MqttKeepAlive])
+- The 3-minute idle disconnect is removed so the connection is no longer torn down between messages.
+- Keepalive is now actually driven. The Paho *synchronous* client does not send keepalive pings by
+  itself - its own header states the application must call `MQTTClient_yield()` periodically to emit
+  them. PDW, a pure publisher, never did, so broker logs showed the PDW session being reaped roughly
+  every 1.5x the keepalive ("exceeded timeout") during any quiet gap, and the next message then hit a
+  dead socket. The worker now calls `MQTTClient_yield()` about every 10 s while connected, so PINGREQ
+  goes out and the session survives multi-minute quiet periods (keepalive lowered 60 s to 45 s, well
+  under Mosquitto's 1.5x grace and any NAT idle timeout). This stays in synchronous mode, so the QoS
+  delivery confirmation in the send path keeps working.
 - A genuinely dead socket (real broker restart) is still detected and reconnected on the next publish.
+- Verify after upgrading: the Mosquitto log should stop showing `Client PDW ... exceeded timeout`
+  every few minutes, and PDW should stay connected across quiet periods.
 
 ## Hardened MQTT reconnect (FIX [MqttReconnHarden])
 - Connect timeout raised from 5 s to 10 s, matching the webhook feed's WinHTTP connect timeout.

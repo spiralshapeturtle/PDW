@@ -603,15 +603,24 @@ static void DoSend(const MqttJob *job)
 // reconnect is the single fragile operation (name resolution, TCP handshake, CONNECT/CONNACK, auth).
 // Every other MQTT client on the broker (e.g. a Pi) holds one connection open with keepalive and never
 // reconnects during quiet periods, so it rides out brief broker stalls (HA add-on reload/backup) within
-// the keepalive grace. PDW was the only client that tore down and cold-reconnected ~288x/day, so over a
-// week one reconnect eventually coincided with a stall and the QoS-0 message was silently dropped.
-// Now we keep the connection warm: Paho's sync client pings every keepAliveInterval (45 s), staying
-// under Mosquitto's 1.5x grace, so the session survives the multi-minute gaps and no cold reconnect
-// happens. A genuinely dead socket (real broker restart) is still detected and reconnected on the next
-// publish via EnsureConnected, now with the hardened 4-attempt/10 s retry profile in DoSend.
+// the keepalive grace. PDW was the only client that tore down and cold-reconnected ~288x/day.
+//
+// FIX [MqttKeepAlive]: keeping the connection open is only half the story. The Paho *synchronous*
+// MQTTClient does NOT send keepalive pings on its own - its own header states you must call
+// MQTTClient_yield() (or MQTTClient_receive(), or set async callbacks) periodically "to send MQTT
+// keepalive pings". PDW is a pure publisher that did none of these, so broker logs showed the PDW
+// session being reaped every ~1.5x keepAlive ("exceeded timeout") during any quiet gap, and the next
+// message then hit a dead socket (waitForCompletion rc=-3). We now call MQTTClient_yield() about every
+// 10 s while connected so PINGREQ actually goes out and the session survives the multi-minute gaps.
+// yield() blocks only ~100 ms and stays in synchronous mode, so MQTTClient_waitForCompletion() in
+// DoSend keeps working. A genuinely dead socket (real broker restart) is still detected and reconnected
+// on the next publish via EnsureConnected, with the hardened 4-attempt/10 s retry profile as backstop.
+#define MQTT_YIELD_INTERVAL_MS  10000u
 
 static DWORD WINAPI WorkerThreadProc(LPVOID)
 {
+    ULONGLONG dwLastYieldMs = 0;
+
     while (g_bRunning)
     {
         WaitForSingleObject(g_hEvent, 200);
@@ -634,6 +643,19 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
 
             if (!bHaveJob) break;
             DoSend(&job);
+        }
+
+        // FIX [MqttKeepAlive]: drive Paho's keepalive so the idle connection is not reaped by the
+        // broker. yield() only emits a PINGREQ when one is actually due, so the ~10 s cadence is safe;
+        // it blocks ~100 ms, after which we loop and any freshly queued job is picked up immediately.
+        if (g_mqttClient && MQTTClient_isConnected(g_mqttClient))
+        {
+            ULONGLONG now = GetTickCount64();
+            if (dwLastYieldMs == 0 || (now - dwLastYieldMs) >= MQTT_YIELD_INTERVAL_MS)
+            {
+                MQTTClient_yield();
+                dwLastYieldMs = now;
+            }
         }
     }
 
