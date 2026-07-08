@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 4.0.2** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 4.0.3** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -411,6 +411,8 @@ Publishes every decoded page to an MQTT broker. Uses the static-linked Paho C li
 | `subscribers` | JSON array of `{capcode, label}` for FLEX group calls |
 
 Click **Test connection** in the dialog to verify broker connectivity. Activity logged to `YYMMDD_mqtt.log`.
+
+The MQTT feed keeps one connection open to the broker and holds it alive with keepalive (45 s), rather than reconnecting per message, so it rides out brief broker hiccups (for example a Home Assistant add-on reload or backup window) the same way any long-lived MQTT client does. If a publish does find the connection dropped, it reconnects and retries up to four times with an exponential back-off before giving up. For unattended 24/7 use, enable **Log to file** (`MqttLogToFile=1`): a healthy quiet period shows plain `SENT` lines, and a routine reconnect shows a single `RECONNECT` followed by `SENT`. If you monitor the feed for inactivity from another system, keep that timeout well above your heartbeat interval (allow for at least two missed messages) so a single delayed publish never trips a false alarm.
 
 ### 10.3a Telegram
 
@@ -923,7 +925,7 @@ FLEX is a high-speed paging protocol developed by Motorola.
 
 PDW decodes all three rates simultaneously. Message types: **Alpha**, **Numeric**, **Tone**, **Short-Instruction**, **Frame-Info**, **Group calls**.
 
-**Multi-frame reassembly:** long FLEX alpha messages that span multiple frames are accumulated and displayed as a single complete string. A successfully reassembled message is marked on screen with an asterisk (`*`) directly after the capcode. A fragment that could not (yet) be completed is shown instead with a text marker next to the message - `[fragmented]`, or `[<type> fragment - incomplete]` for an orphan fragment with no prior chain - so you can tell a complete reassembly apart from a partial one.
+**Multi-frame reassembly:** long FLEX alpha messages that span multiple frames are accumulated and displayed as a single complete string. A successfully reassembled message can optionally be marked on screen with an asterisk (`*`) directly after the capcode. This marker is **off by default**; enable it with **Mark reassembled fragmented messages with '*' after the capcode** in **Display -> Screen Options** if you want to see at a glance which messages were rebuilt from fragments. Toggling the marker only changes the display - the fragment-reassembly logic itself always runs. A fragment that could not (yet) be completed is shown instead with a text marker next to the message - `[fragmented]`, or `[<type> fragment - incomplete]` for an orphan fragment with no prior chain - so you can tell a complete reassembly apart from a partial one.
 
 **Group calls:** a group capcode (range 2029568–2029583) addresses multiple individual pagers simultaneously. The network first sends Short Instructions ("listen to group X, the message follows in frame N"), which tell PDW which subscriber capcodes belong to the group and in which frame to expect the message; PDW then displays all subscriber capcodes and their labels together with the group message. Because a long message may be split into fragments sent in later frames - and a congested frame can delay it as well - the group message can legitimately arrive a frame or more after the announced one. PDW tolerates this within a small grace window, so the subscriber list always stays attached to the right message and is shown the moment the message completes.
 

@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  4
 #define PDW_VERSION_MINOR  0
-#define PDW_VERSION_PATCH  2
-#define PDW_VERSION_STR    "4.0.2"
+#define PDW_VERSION_PATCH  3
+#define PDW_VERSION_STR    "4.0.3"
 
 #define IDC_STATIC             -1
 
@@ -226,6 +226,7 @@
 #define IDC_FGM_LOGGING            811
 #define IDC_FGM_COMBINE            812
 #define IDC_FGM_HIDEGROUPCODES     813
+#define IDC_SHOW_FRAGMARKER        814   // FIX [FragMarkerOptional]: show '*' after capcode on reassembled FLEX fragments
 
 #define IDC_SCROLLPANE1            890
 #define IDC_SCROLLPANE2            891

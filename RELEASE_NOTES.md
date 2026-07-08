@@ -1,3 +1,70 @@
+# PDW 4.0.3 - Release Notes
+
+PDW 4.0.3 includes a targeted reliability fix for the MQTT output feed, plus a small display option
+that makes the on-screen fragment marker opt-in. On a quiet night the MQTT feed could occasionally
+miss a single message (seen downstream as a short gap), while the webhook feed to the same
+Node-RED/Home Assistant instance over the same network path stayed reliable. No decoder output or
+configuration format changes; existing `pdw.ini` and `filters.ini` files work unchanged.
+
+## Optional fragment marker (FIX [FragMarkerOptional])
+When a long FLEX alpha message is split across multiple frames, PDW reassembles it into a single
+complete message and, until now, always drew an asterisk (`*`) directly after the capcode to flag that
+the message had been rebuilt from fragments. That marker prompted recurring questions from users who
+did not know what it meant, so it is now **off by default** and controlled by a new checkbox in
+**Screen Options**: "Mark reassembled fragmented messages with '*' after the capcode".
+
+- The fragment-reassembly logic is completely unchanged - only the on-screen `*` is now gated behind
+  the new `ShowFragMarker` option (default `0`). Existing configs without the key keep the marker off.
+- The setting applies to both the classic (non-group) capcode column and the FlexGroupMode group view.
+- Enable it if you want the at-a-glance indication of which messages arrived as fragments; leave it off
+  for a cleaner display identical to a normal single-frame message.
+
+## MQTT feed reliability
+
+## Why only MQTT, and only at night (root cause)
+Every other MQTT client on the broker (and PDW's own webhook feed) holds a single connection open and
+rides out brief broker hiccups within the keepalive grace. PDW's MQTT feed was the exception: it
+proactively closed its connection after 3 minutes idle and cold-reconnected on the next message. On a
+quiet night, where the only recurring traffic is a periodic test call every few minutes, that meant a
+cold reconnect on *every* message - roughly 288 reconnects a day. A cold reconnect (name resolution,
+TCP handshake, CONNECT/CONNACK, auth) is the single fragile operation, and PDW used a thinner
+retry/timeout profile than the webhook. Over a week, one reconnect eventually coincided with a brief
+broker stall (e.g. a Home Assistant add-on reload or backup window) and the message was dropped.
+
+## Warm MQTT connection (FIX [MqttWarmConn])
+- The 3-minute idle disconnect is removed. The connection is kept open and pinged via keepalive
+  (lowered 60 s to 45 s, staying under Mosquitto's 1.5x grace and any NAT idle timeout), so the
+  session survives the multi-minute quiet periods instead of cold-reconnecting on every message.
+- A genuinely dead socket (real broker restart) is still detected and reconnected on the next publish.
+
+## Hardened MQTT reconnect (FIX [MqttReconnHarden])
+- Connect timeout raised from 5 s to 10 s, matching the webhook feed's WinHTTP connect timeout.
+- Publish attempts raised from 2 to 4 with exponential back-off (1/2/4 s between them), mirroring the
+  webhook feed's retry profile, so a brief broker stall is ridden out instead of dropping the message.
+- Shutdown and runtime reconfigure are unaffected: the back-off retries are skipped as soon as a stop
+  is in progress, so teardown stays prompt.
+
+## Retry on unconfirmed QoS delivery (FIX [MqttWaitRetry])
+- With QoS 1 or 2, `MQTTClient_publish` can return success (the message is queued locally) while the
+  broker acknowledgement never arrives - the classic half-open socket after an idle gap, where
+  `waitForCompletion` returns `rc=-3` (disconnected). Previously this was logged as a warning and the
+  message was dropped even though retries were still available.
+- Such an unconfirmed delivery now drops the stale connection and retries on a fresh one, up to the
+  same 4-attempt limit. Because QoS 1/2 is at-least-once, a rare duplicate is preferred over a miss.
+  This was the exact failure that appeared in the logs once QoS was raised above 0.
+
+## Self-explanatory MQTT log codes (FIX [MqttRcText])
+- The MQTT log now prints a short label next to each Paho return code, e.g. `rc=-3 (DISCONNECTED)`
+  and `rc=-1 (FAILURE)`, so a log line is readable without looking the code up.
+
+## Recommended alongside this release
+- Enable the MQTT log file (`MqttLogToFile=1`) to confirm behaviour: nighttime lines should now read
+  `SENT` without a preceding `RECONNECT`, proving the session survives the gaps.
+- If you monitor the feed for inactivity, keep the threshold comfortably above the heartbeat interval
+  (at least two missed beats) so a single delayed message never trips a false alert.
+
+---
+
 # PDW 4.0.2 - Release Notes
 
 PDW 4.0.2 is a stability release: no new features, only hardening fixes that came out of a full

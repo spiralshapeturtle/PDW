@@ -155,6 +155,7 @@ typedef struct
 
 	int  FlexTIME;					// Flag for FlexTIME as systemtime
 	int  FlexGroupMode;				// Flag for FlexGroupMode
+	int  ShowFragMarker;			// FIX [FragMarkerOptional]: show '*' after capcode on reassembled FLEX fragments (default off)
 
 	int  SMTP;						// SMTP-email
 

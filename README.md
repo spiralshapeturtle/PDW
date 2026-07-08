@@ -4,7 +4,7 @@
 
 ---
 
-**Version 4.0.2** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 4.0.3** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -523,6 +523,13 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v4.0.3 (July 2026)
+MQTT reliability fix plus a small display option. No decoder-output or configuration-format changes; existing `pdw.ini` and `filters.ini` files work unchanged.
+- **Optional fragment marker (FIX [FragMarkerOptional])** — the `*` that PDW draws after the capcode of a reassembled multi-frame FLEX message is now **off by default** and controlled by a new checkbox in **Screen Options** ("Mark reassembled fragmented messages with '*' after the capcode"). The fragment-reassembly logic itself is unchanged; only the on-screen marker is now opt-in. Enable it if you want to see at a glance which messages were rebuilt from fragments.
+- **Warm MQTT connection (FIX [MqttWarmConn])** — the 3-minute idle disconnect is removed; the connection is kept open with keepalive (now 45 s) so the session survives multi-minute quiet periods instead of cold-reconnecting on every message, matching how every other MQTT client behaves
+- **Hardened MQTT reconnect (FIX [MqttReconnHarden])** — connect timeout 5 s to 10 s and 2 to 4 publish attempts with exponential back-off (1/2/4 s), mirroring the webhook feed's retry profile, so a genuine broker restart is ridden out rather than dropped. Shutdown/reconfigure is unaffected (retries are skipped once a stop is in progress)
+- **Retry on unconfirmed QoS delivery (FIX [MqttWaitRetry])** — with QoS 1/2, a publish that is accepted locally but whose broker acknowledgement never arrives (a half-open connection after an idle gap) was previously dropped; it is now retried on a fresh connection instead of being lost. This was the exact failure seen in the logs once QoS was raised above 0
 
 ### v4.0.2 (July 2026)
 Stability release — hardening fixes from a full release-readiness audit (memory safety, bounds checking). No decoder-output or configuration changes; existing `pdw.ini` and `filters.ini` files work unchanged.

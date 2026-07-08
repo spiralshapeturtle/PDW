@@ -83,6 +83,10 @@ static int  g_iTopicSuffix     = 0;    // 0=base topic only, 1=base/{capcode}
 // ---------------------------------------------------------------------------
 
 #define MQTT_QUEUE_SIZE       64
+// FIX [MqttReconnHarden]: 4 publish/connect attempts per message with exponential backoff
+// (1/2/4 s between them). Mirrors the webhook feed's taaie retry-profiel so a brief broker
+// stall (HA add-on reload/backup) is ridden out instead of dropping the message.
+#define MQTT_MAX_ATTEMPTS     4
 // FIX [MqttGroupTrunc]: ADDR_LEN 512 -> 2048 en SUBSCRIBERS_LEN 2048 -> 32768 (gelijk aan
 // MySQL). Grote groepsoproepen (bv. GROUP15 met ~80 capcodes) overschreden beide buffers:
 // de spatie-gescheiden adreslijst kapte af na ~64 capcodes (data-verlies) en de subscribers-
@@ -419,9 +423,16 @@ static BOOL ClientConnect(void)
     if (!g_mqttClient && !ClientCreate()) return FALSE;
 
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    conn_opts.keepAliveInterval = 60;
+    // FIX [MqttWarmConn]: keepAlive 60 -> 45 s. Paho's sync client pings every keepAlive
+    // interval; 45 s keeps us well under Mosquitto's 1.5x grace (90 s at old 60, now 67 s)
+    // and under any NAT idle timeout, and detects a truly dead socket sooner.
+    conn_opts.keepAliveInterval = 45;
     conn_opts.cleansession      = 1;
-    conn_opts.connectTimeout    = 5;
+    // FIX [MqttReconnHarden]: connectTimeout 5 -> 10 s, matching the webhook feed's WinHTTP
+    // connect timeout (webhook.cpp WinHttpSetTimeouts 10000). A brief broker stall (e.g. an
+    // HA add-on reload / backup window) that WinHTTP rides out was exceeding Paho's 5 s and
+    // dropping the message on the sparse nighttime heartbeat.
+    conn_opts.connectTimeout    = 10;
 
     if (g_szUser[0])
     {
@@ -437,6 +448,22 @@ static BOOL EnsureConnected(void)
 {
     if (g_mqttClient && MQTTClient_isConnected(g_mqttClient)) return TRUE;
     return ClientConnect();
+}
+
+// FIX [MqttRcText]: translate the common Paho MQTTClient return codes to a short label so the log is
+// self-explanatory without a Paho lookup (e.g. rc=-3 reads DISCONNECTED). Unknown codes fall back to
+// a generic string; the numeric rc is always printed alongside it.
+static const char *MqttRcText(int rc)
+{
+    switch (rc)
+    {
+    case  0: return "SUCCESS";
+    case -1: return "FAILURE";          // MQTTCLIENT_FAILURE (e.g. socket/timeout)
+    case -3: return "DISCONNECTED";     // MQTTCLIENT_DISCONNECTED (half-open / dropped)
+    case -4: return "MAX_INFLIGHT";
+    case -9: return "BAD_QOS";
+    default: return "unknown";
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -488,23 +515,32 @@ static void DoSend(const MqttJob *job)
 
     PostStatus(MHS_SENDING, 0);
 
-    // FIX [MqttReconnLog]: een mislukte 1e poging gevolgd door een geslaagde retry is GEEN fout
+    // FIX [MqttReconnLog]: een mislukte poging gevolgd door een geslaagde retry is GEEN fout
     // maar routine — de broker/NAT/firewall verbreekt de idle TCP-sessie buiten ons om, waarna de
     // eerstvolgende publish een stale socket raakt (rc=-1). De retry reconnect en slaagt vrijwel
-    // altijd. We weten zeker dat het om reconnect-en-niet-een-nieuw-bericht gaat omdat beide
+    // altijd. We weten zeker dat het om reconnect-en-niet-een-nieuw-bericht gaat omdat alle
     // pogingen binnen DEZELFDE DoSend()-call voor HETZELFDE bericht vallen (een volgend pagingbericht
     // is een aparte DoSend met eigen SENT-regel). De attempt-teller bepaalt de severity:
-    //   attempt 0 mislukt  -> RECONNECT (rustig, verwacht)
-    //   attempt 1 mislukt  -> ERROR     (beide pogingen falen = echte storing)
-    for (int attempt = 0; attempt < 2; attempt++)
+    //   attempt < laatste mislukt  -> RECONNECT (rustig, verwacht)
+    //   laatste attempt mislukt    -> ERROR     (alle pogingen falen = echte storing)
+    // FIX [MqttReconnHarden]: 2 -> 3 pogingen met exponentiele backoff 1/2/4 s (was 1 vaste 1 s),
+    // gelijk aan de webhook-feed (webhook.cpp g_retryDelays {1000,2000,4000}). De webhook cold-connect
+    // per bericht en is toch betrouwbaar juist door dit taaiere retry-profiel; MQTT was krapper
+    // afgesteld (2 pogingen, 1 s) en dropte daarom af en toe een bericht dat de webhook wel afleverde.
+    static const DWORD s_retryDelays[MQTT_MAX_ATTEMPTS - 1] = { 1000, 2000, 4000 };
+    for (int attempt = 0; attempt < MQTT_MAX_ATTEMPTS; attempt++)
     {
-        BOOL bLast = (attempt == 1);
+        BOOL bLast = (attempt == MQTT_MAX_ATTEMPTS - 1);
 
         if (attempt > 0)
         {
+            // FIX [MqttReconnHarden]: don't burn the retry back-off sleeps once a
+            // shutdown/reconfigure is in progress (mirrors webhook.cpp). The first attempt
+            // (attempt 0) still runs during the exit-flush so queued messages get one send try.
+            if (!g_bRunning) break;
             PostStatus(MHS_RETRY, attempt);
             ClientDestroy();
-            Sleep(1000);
+            Sleep(s_retryDelays[attempt - 1]);
         }
 
         if (!EnsureConnected())
@@ -529,12 +565,21 @@ static void DoSend(const MqttJob *job)
                 int wrc = MQTTClient_waitForCompletion(g_mqttClient, token, 5000);
                 if (wrc != MQTTCLIENT_SUCCESS)
                 {
-                    WriteLog("WARN      QoS>0 waitForCompletion rc=%d topic=%s (delivery unconfirmed)", wrc, szTopic);
-                    // FIX [MqttWaitCheck]: drop the disconnected-but-alive handle so the next
-                    // message reconnects cleanly instead of burning a round-trip on a stale socket.
+                    // FIX [MqttWaitRetry]: a QoS>0 publish() that returns SUCCESS but whose ack never
+                    // arrives (waitForCompletion rc=-3 DISCONNECTED / rc=-1 timeout) is the exact
+                    // failure observed on the first message after an idle gap: the socket looked alive,
+                    // publish() queued locally, but the half-open connection dropped before the PUBACK.
+                    // Previously this returned immediately -> the message was lost even with retries
+                    // available. Now we drop the stale handle and RETRY on a fresh connection (the QoS
+                    // guarantee is at-least-once, so a possible duplicate is acceptable, a miss is not).
                     ClientDestroy();
-                    PostStatus(MHS_ERROR, 0);
-                    return;
+                    if (bLast)
+                    {
+                        WriteLog("ERROR     QoS>0 waitForCompletion rc=%d (%s) topic=%s (delivery unconfirmed after retries)", wrc, MqttRcText(wrc), szTopic);
+                        break;
+                    }
+                    WriteLog("RECONNECT QoS>0 waitForCompletion rc=%d (%s) (ack lost) - reconnecting", wrc, MqttRcText(wrc));
+                    continue;
                 }
             }
             WriteLog("SENT      %s (%d bytes)", szTopic, bodyLen);
@@ -542,8 +587,8 @@ static void DoSend(const MqttJob *job)
             return;
         }
 
-        if (bLast) WriteLog("ERROR     publish failed rc=%d topic=%s (after reconnect)", rc, szTopic);
-        else       WriteLog("RECONNECT publish rc=%d (stale connection) - reconnecting", rc);
+        if (bLast) WriteLog("ERROR     publish failed rc=%d (%s) topic=%s (after reconnect)", rc, MqttRcText(rc), szTopic);
+        else       WriteLog("RECONNECT publish rc=%d (%s) (stale connection) - reconnecting", rc, MqttRcText(rc));
     }
 
     PostStatus(MHS_ERROR, 0);
@@ -553,21 +598,26 @@ static void DoSend(const MqttJob *job)
 // Worker thread
 // ---------------------------------------------------------------------------
 
-// Close idle connection after 3 minutes — before broker's typical ~5 min server-side timeout.
-// Prevents the rc=-1 / RETRY cycle that happens when the broker closes the connection first.
-#define MQTT_IDLE_DISCONNECT_MS  (3 * 60 * 1000u)
+// FIX [MqttWarmConn]: NO proactive idle disconnect. The previous 3-minute idle ClientDestroy()
+// forced a COLD reconnect on every sparse nighttime heartbeat (e.g. a 5-min "test call"), and that
+// reconnect is the single fragile operation (name resolution, TCP handshake, CONNECT/CONNACK, auth).
+// Every other MQTT client on the broker (e.g. a Pi) holds one connection open with keepalive and never
+// reconnects during quiet periods, so it rides out brief broker stalls (HA add-on reload/backup) within
+// the keepalive grace. PDW was the only client that tore down and cold-reconnected ~288x/day, so over a
+// week one reconnect eventually coincided with a stall and the QoS-0 message was silently dropped.
+// Now we keep the connection warm: Paho's sync client pings every keepAliveInterval (45 s), staying
+// under Mosquitto's 1.5x grace, so the session survives the multi-minute gaps and no cold reconnect
+// happens. A genuinely dead socket (real broker restart) is still detected and reconnected on the next
+// publish via EnsureConnected, now with the hardened 4-attempt/10 s retry profile in DoSend.
 
 static DWORD WINAPI WorkerThreadProc(LPVOID)
 {
-    ULONGLONG dwLastActivityMs = 0;
-
     while (g_bRunning)
     {
         WaitForSingleObject(g_hEvent, 200);
 
         if (!g_bRunning) break;
 
-        BOOL bDidWork = FALSE;
         while (TRUE)
         {
             MqttJob job;
@@ -583,17 +633,7 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
             LeaveCriticalSection(&g_cs);
 
             if (!bHaveJob) break;
-            dwLastActivityMs = GetTickCount64();
-            bDidWork = TRUE;
             DoSend(&job);
-        }
-
-        if (!bDidWork && g_mqttClient &&
-            dwLastActivityMs != 0 &&
-            (GetTickCount64() - dwLastActivityMs) > MQTT_IDLE_DISCONNECT_MS)
-        {
-            ClientDestroy();
-            dwLastActivityMs = 0;
         }
     }
 
@@ -713,8 +753,11 @@ void MqttShutdown(void)
         // The old 5 s timeout returned while the worker could still be inside a Paho call, after which
         // CloseHandle + DeleteCriticalSection ran under a live thread (crash on exit) — and on a runtime
         // reconfigure MqttInit would start a SECOND worker sharing g_mqttClient/g_cs/g_queue. All Paho
-        // calls here are timeout-bounded (connectTimeout=5s, waitForCompletion=5s, disconnect=2s) plus a
-        // 200 ms event wait, so the worker always returns within ~12 s; INFINITE is safe and correct.
+        // calls here are timeout-bounded (connectTimeout=10s, waitForCompletion=5s, disconnect=2s) plus a
+        // 200 ms event wait. FIX [MqttReconnHarden]: the multi-attempt back-off does NOT extend shutdown —
+        // DoSend's `if (!g_bRunning) break` skips all retries once g_bRunning is FALSE, so during teardown
+        // each queued job gets at most ONE ~17 s attempt (10 s connect + 5 s wait + 2 s disconnect); the
+        // worker still returns quickly, INFINITE stays safe and correct.
         WaitForSingleObject(g_hThread, INFINITE);
         CloseHandle(g_hThread);
         g_hThread = NULL;

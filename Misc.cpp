@@ -1609,7 +1609,7 @@ void ShowMessage()
 						display_show_strV2(pPane, " ");
 					}
 					display_show_strV2(pPane, Current_MSG[Profile.ScreenColumns[i]]);
-					if (!Profile.FlexGroupMode && bAssembled && Profile.ScreenColumns[i] == MSG_CAPCODE)
+					if (Profile.ShowFragMarker && !Profile.FlexGroupMode && bAssembled && Profile.ScreenColumns[i] == MSG_CAPCODE)	// FIX [FragMarkerOptional]
 					{
 						display_color(pPane, COLOR_INSTRUCTIONS);
 						display_show_strV2(pPane, "*");
@@ -1668,7 +1668,7 @@ void ShowMessage()
 						}
 						display_color(pPane, messageitems_colors[MSG_CAPCODE]);
 						display_show_strV2(pPane, Current_MSG[MSG_CAPCODE]);
-						if (!iConvertingGroupcall && bAssembled)
+						if (Profile.ShowFragMarker && !iConvertingGroupcall && bAssembled)	// FIX [FragMarkerOptional]
 						{
 							display_color(pPane, COLOR_INSTRUCTIONS);
 							display_show_strV2(pPane, "*");

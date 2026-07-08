@@ -600,6 +600,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
+	Profile.ShowFragMarker		= 0;	// FIX [FragMarkerOptional]: '*' fragment marker off by default
 
 	Profile.xPos  = 0;
 	Profile.yPos  = 0;
@@ -2048,9 +2049,10 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			// The following code sets pane1 to n% percent of main win client area.
 			pane1Pos    = g_cyTopBand;	// FIX [DpiScale]: bovenrand pane1 = echte toolbar + titelbalk
+			// FIX [PaneBottomPad]: keep the sub-line remainder as blank bottom padding
+			// (like Pane2, which is never floored) so the newest row clears the divider
+			// instead of gluing to it after the auto-scroll-to-bottom.
 			pane1Height = (g_yNew * Profile.percent) / 100;
-			pane1Height /= cyChar;	// Divide by character height to get number of lines (without 'rest')
-			pane1Height *= cyChar;	// Multiply by character height again
 			MoveWindow(Pane1.hWnd, 0, pane1Pos, g_xNew, pane1Height, TRUE);
 
 			// The following code sets pane2 to n% percent of main win client area,
@@ -6485,6 +6487,7 @@ BOOL FAR PASCAL ScreenOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 		CheckDlgButton(hDlg, IDC_FGM_LOGGING,        Profile.FlexGroupMode & FLEXGROUPMODE_LOGGING);
 		CheckDlgButton(hDlg, IDC_FGM_COMBINE,        Profile.FlexGroupMode & FLEXGROUPMODE_COMBINE);
 		CheckDlgButton(hDlg, IDC_FGM_HIDEGROUPCODES, Profile.FlexGroupMode & FLEXGROUPMODE_HIDEGROUPCODES);
+		CheckDlgButton(hDlg, IDC_SHOW_FRAGMARKER,    Profile.ShowFragMarker);	// FIX [FragMarkerOptional]
 
 		if (Profile.monitor_paging)
 		{
@@ -6608,6 +6611,8 @@ BOOL FAR PASCAL ScreenOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 				Profile.FlexGroupMode += IsDlgButtonChecked(hDlg, IDC_FGM_COMBINE) ? FLEXGROUPMODE_COMBINE : 0;
 				Profile.FlexGroupMode += IsDlgButtonChecked(hDlg, IDC_FGM_HIDEGROUPCODES) ? FLEXGROUPMODE_HIDEGROUPCODES : 0;
 			}
+
+			Profile.ShowFragMarker = IsDlgButtonChecked(hDlg, IDC_SHOW_FRAGMARKER);	// FIX [FragMarkerOptional]
 
 			WriteSettings();
 
@@ -11674,6 +11679,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->BlockDuplicate= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("BlockDuplicate"), pProfile->BlockDuplicate, lpszIniPathName);
 	pProfile->FlexTIME		= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("FlexTIME"), pProfile->FlexTIME, lpszIniPathName);
 	pProfile->FlexGroupMode	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("FlexGroupMode"), pProfile->FlexGroupMode, lpszIniPathName);
+	pProfile->ShowFragMarker= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("ShowFragMarker"), pProfile->ShowFragMarker, lpszIniPathName);	// FIX [FragMarkerOptional]
 	pProfile->SystemTray	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("SystemTray"), pProfile->SystemTray, lpszIniPathName);
 	pProfile->SystemTrayRestore = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("SystemTrayRestore"), pProfile->SystemTrayRestore, lpszIniPathName);
 	pProfile->trayNotifyMode      = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("TrayNotifyMode"),      pProfile->trayNotifyMode,      lpszIniPathName); // FIX [TrayBalloon]
@@ -12325,6 +12331,7 @@ void WriteSettings()
 		fprintf(pFile, "BlockDuplicate=%i\n",			Profile.BlockDuplicate);
 		fprintf(pFile, "FlexTIME=%i\n",					Profile.FlexTIME);
 		fprintf(pFile, "FlexGroupMode=%i\n",			Profile.FlexGroupMode);
+		fprintf(pFile, "ShowFragMarker=%i\n",			Profile.ShowFragMarker);	// FIX [FragMarkerOptional]
 		fprintf(pFile, "SystemTray=%i\n",				Profile.SystemTray);
 		fprintf(pFile, "SystemTrayRestore=%i\n",		Profile.SystemTrayRestore);
 		fprintf(pFile, "TrayNotifyMode=%i\n",           Profile.trayNotifyMode);      // FIX [TrayBalloon]

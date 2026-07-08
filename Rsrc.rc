@@ -689,17 +689,11 @@ BEGIN
     EDITTEXT        IDC_FILTER_TG_THREAD,50,166,74,12,ES_AUTOHSCROLL | ES_NUMBER | WS_DISABLED
     LTEXT           "TG chat",IDC_STATIC,9,179,40,8
     EDITTEXT        IDC_FILTER_TG_CHAT,50,178,74,12,ES_AUTOHSCROLL | WS_DISABLED
-    // FIX [FilterPoLabelClip]: PO label width 100 ran the rect under the combo/edit,
-    // hiding the tail of the text behind the control. Narrow the labels to end before
-    // the input and nudge the inputs right so the full label stays visible.
     LTEXT           "PO priority",IDC_STATIC,132,167,42,8
     COMBOBOX        IDC_FILTER_PO_PRIORITY,176,166,65,65,CBS_DROPDOWNLIST | WS_DISABLED | WS_VSCROLL | WS_TABSTOP
     LTEXT           "PO sound",IDC_STATIC,132,179,42,8
     EDITTEXT        IDC_FILTER_PO_SOUND,176,178,60,12,ES_AUTOHSCROLL | WS_DISABLED
     GROUPBOX        "Hitcounter",IDC_HITCOUNTER_BOX,5,205,238,29,BS_NOTIFY
-    // FIX [FilterHitsClip]: hits label was narrowed 87->66 du in the TG/PO rework, so
-    // the "Number of hits: " prefix left room for only ~1 digit; counts >=2 digits were
-    // clipped. Restore the original column widths (value read/stored correctly all along).
     LTEXT           "Number of hits: 0",IDC_FILTERHITS,10,218,87,8
     LTEXT           "",IDC_FILTERLASTHIT,99,217,96,8
     PUSHBUTTON      "Reset",IDC_FILTERRESET,197,215,40,13,WS_DISABLED
@@ -819,12 +813,12 @@ BEGIN
     RTEXT           "0%",IDC_FILTERDUP_PCT,301,35,22,8
 END
 
-SCREENOPTIONSDLGBOX DIALOG 10, 10, 363, 131
+SCREENOPTIONSDLGBOX DIALOGEX 10, 10, 363, 149
 STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 CAPTION "PDW Screen Options"
-FONT 8, "Verdana"
+FONT 8, "Verdana", 0, 0, 0x0
 BEGIN
-    GROUPBOX        "Columns to be shown on screen",IDC_STATIC,5,7,353,96
+    GROUPBOX        "Columns to be shown on screen",IDC_STATIC,5,7,353,114
     LTEXT           "Column 1",IDC_STATIC,16,23,32,8
     COMBOBOX        801,13,38,45,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT           "Column 2",IDC_STATIC,65,23,32,8
@@ -846,8 +840,10 @@ BEGIN
                     "Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,146,66,173,10
     CONTROL         "Hide groupcodes within successfully converted groupcalls",IDC_FGM_HIDEGROUPCODES,
                     "Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,146,85,203,10
-    PUSHBUTTON      "OK",IDOK,140,110,38,14
-    PUSHBUTTON      "Cancel",IDCANCEL,194,110,38,14
+    CONTROL         "Mark reassembled fragmented messages with '*' after the capcode",IDC_SHOW_FRAGMARKER,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,103,335,10
+    PUSHBUTTON      "OK",IDOK,140,128,38,14
+    PUSHBUTTON      "Cancel",IDCANCEL,194,128,38,14
 END
 
 DISPLAYOPTIONSDLGBOX DIALOG 10, 10, 260, 106
@@ -1254,8 +1250,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 4,0,2,0
- PRODUCTVERSION 4,0,2,0
+ FILEVERSION 4,0,3,0
+ PRODUCTVERSION 4,0,3,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -1273,11 +1269,11 @@ BEGIN
             VALUE "Comments", "Supports Windows XP - WIN11"
             VALUE "CompanyName", "WitWarez"
             VALUE "FileDescription", "PDW"
-            VALUE "FileVersion", "4.0.2"
+            VALUE "FileVersion", "4.0.3"
             VALUE "InternalName", "PDW"
             VALUE "OriginalFilename", "PDW3_6.exe"
             VALUE "ProductName", "PDW"
-            VALUE "ProductVersion", "4.0.2"
+            VALUE "ProductVersion", "4.0.3"
         END
     END
     BLOCK "VarFileInfo"
@@ -1299,6 +1295,10 @@ BEGIN
     BEGIN
         RIGHTMARGIN, 265
         BOTTOMMARGIN, 114
+    END
+
+    CLEARSCREENDLGBOX, DIALOG
+    BEGIN
     END
 
     DEBUGDLGBOX, DIALOG
@@ -1337,6 +1337,10 @@ BEGIN
         HORZGUIDE, 215
     END
 
+    GENERALOPTIONSDLGBOX, DIALOG
+    BEGIN
+    END
+
     COLORSDLGBOX, DIALOG
     BEGIN
         VERTGUIDE, 8
@@ -1346,6 +1350,10 @@ BEGIN
         VERTGUIDE, 247
         VERTGUIDE, 303
         HORZGUIDE, 122
+    END
+
+    ACARS_COLORSDLGBOX, DIALOG
+    BEGIN
     END
 
     MOBITEX_COLORSDLGBOX, DIALOG
