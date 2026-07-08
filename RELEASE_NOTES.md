@@ -45,6 +45,16 @@ broker stall (e.g. a Home Assistant add-on reload or backup window) and the mess
 - Verify after upgrading: the Mosquitto log should stop showing `Client PDW ... exceeded timeout`
   every few minutes, and PDW should stay connected across quiet periods.
 
+## Proactive idle reconnect (FIX [MqttIdleReconnect])
+- If the broker drops the connection while PDW is idle (broker restart, add-on update), the worker now
+  re-establishes it proactively within at most 60 s, instead of leaving it dead until the next paging
+  message pays the cold-connect cost. This completes the warm-connection story: after any broker blip
+  the sparse nighttime heartbeat rides an already-warm session again.
+- A healthy connection is never touched - the reconnect only runs when the session is already down.
+- A broker that stays down is retried once per minute (no connect storm), logging one `WARN` on the
+  first failure and a `CONNECT` line when the connection is restored. The very first message after
+  PDW startup also benefits: the initial connection is now made right after the feed starts.
+
 ## Hardened MQTT reconnect (FIX [MqttReconnHarden])
 - Connect timeout raised from 5 s to 10 s, matching the webhook feed's WinHTTP connect timeout.
 - Publish attempts raised from 2 to 4 with exponential back-off (1/2/4 s between them), mirroring the

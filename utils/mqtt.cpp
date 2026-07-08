@@ -423,9 +423,11 @@ static BOOL ClientConnect(void)
     if (!g_mqttClient && !ClientCreate()) return FALSE;
 
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    // FIX [MqttWarmConn]: keepAlive 60 -> 45 s. Paho's sync client pings every keepAlive
-    // interval; 45 s keeps us well under Mosquitto's 1.5x grace (90 s at old 60, now 67 s)
-    // and under any NAT idle timeout, and detects a truly dead socket sooner.
+    // FIX [MqttWarmConn]: keepAlive 60 -> 45 s. NOTE: the synchronous Paho client does NOT
+    // transmit PINGREQ by itself - the worker thread must drive it via MQTTClient_yield()
+    // (see FIX [MqttKeepAlive] in WorkerThreadProc). With 45 s keepalive + worst-case ~10 s
+    // yield lag the ping goes out at most ~55 s after last traffic, safely under Mosquitto's
+    // 1.5x grace (67 s) and under any NAT idle timeout; a dead socket is detected sooner too.
     conn_opts.keepAliveInterval = 45;
     conn_opts.cleansession      = 1;
     // FIX [MqttReconnHarden]: connectTimeout 5 -> 10 s, matching the webhook feed's WinHTTP
@@ -617,9 +619,23 @@ static void DoSend(const MqttJob *job)
 // on the next publish via EnsureConnected, with the hardened 4-attempt/10 s retry profile as backstop.
 #define MQTT_YIELD_INTERVAL_MS  10000u
 
+// FIX [MqttIdleReconnect]: when the connection is DEAD during idle (broker restart/blip reaped
+// the session), re-establish it at most once per 60 s instead of leaving it cold until the next
+// paging message arrives. This completes the warm-connection story: after any broker outage the
+// sparse nighttime heartbeat rides an already-warm session again instead of paying the fragile
+// cold connect. Bounded to one attempt per 60 s so a genuinely down broker causes no connect
+// storm (each failed attempt costs at most connectTimeout=10 s in the idle loop; a job queued
+// during that window is picked up right after). Side benefit: the very first message after
+// startup also gets a warm connection, because the first attempt runs ~200 ms after the worker
+// starts. A HEALTHY connection is never touched - this branch only runs when isConnected() is
+// already FALSE.
+#define MQTT_IDLE_RECONNECT_MS  60000u
+
 static DWORD WINAPI WorkerThreadProc(LPVOID)
 {
-    ULONGLONG dwLastYieldMs = 0;
+    ULONGLONG dwLastYieldMs   = 0;
+    ULONGLONG dwLastReconnMs  = 0;   // FIX [MqttIdleReconnect]
+    BOOL      bIdleFailLogged = FALSE;
 
     while (g_bRunning)
     {
@@ -655,6 +671,29 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
             {
                 MQTTClient_yield();
                 dwLastYieldMs = now;
+            }
+        }
+        // FIX [MqttIdleReconnect]: connection dead (or not yet made) while idle - restore it
+        // proactively, max once per 60 s. Log the first failure only (one WARN, not one per
+        // minute while the broker is down); a successful (re)connect always logs and re-arms
+        // the failure log. DoSend's own 4-attempt profile still guards actual sends.
+        else if (g_bRunning)
+        {
+            ULONGLONG now = GetTickCount64();
+            if (dwLastReconnMs == 0 || (now - dwLastReconnMs) >= MQTT_IDLE_RECONNECT_MS)
+            {
+                dwLastReconnMs = now;
+                if (ClientConnect())
+                {
+                    WriteLog("CONNECT   idle (re)connect OK - warm connection established: %s:%d", g_szBroker, g_iPort);
+                    bIdleFailLogged = FALSE;
+                    dwLastYieldMs   = now;   // fresh session: restart the ping cadence
+                }
+                else if (!bIdleFailLogged)
+                {
+                    WriteLog("WARN      idle (re)connect failed (broker down?) - retrying every 60 s: %s:%d", g_szBroker, g_iPort);
+                    bIdleFailLogged = TRUE;
+                }
             }
         }
     }
