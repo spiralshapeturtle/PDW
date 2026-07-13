@@ -1016,6 +1016,24 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		}
 		break ;
 
+		case WM_ERASEBKGND:
+		{
+			// FIX [PaneGapBg]: ghWnd's own class brush (hbr) is a one-time snapshot of
+			// Profile.color_background taken at startup and is never updated for the
+			// "lighter background" charcoal toggle (g_lighterBackground/MsgListBg()),
+			// unlike Pane1/Pane2 which override WM_ERASEBKGND with MsgListBg() themselves.
+			// That mismatch was invisible while ghWnd only owned a hairline divider, but
+			// FIX [PaneBottomPad] moved a real gap band (PANE1_BOTTOM_GAP + the pane2
+			// floor-rounding remainder) into ghWnd's territory, exposing it as a black
+			// rectangle next to the (correctly charcoal-colored) pane content.
+			RECT rc;
+			GetClientRect(hWnd, &rc);
+			HBRUSH hb = CreateSolidBrush(MsgListBg());
+			FillRect((HDC)wParam, &rc, hb);
+			DeleteObject(hb);
+			return 1;
+		}
+
 		case WM_PAINT: // Keep main gfx data valid
 
 		PAINTSTRUCT pdw_ps;
@@ -1035,10 +1053,16 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			break;
 
 			default:
+			// FIX [NotifyRedraw]: toolbar hot-track/hover notifies arrive in bursts.
+			// The toolbar repaint only overdraws the parent-drawn graphics that lie ON
+			// the toolbar band (signal indicator + RX-Q warning square), so redraw just
+			// those. The full DrawTitleBarGfx that ran here on EVERY notify repainted
+			// both header rows below the toolbar for nothing - visible as flicker when
+			// hovering the toolbar buttons.
 			DrawSigInd(hWnd); // Draw the signal indicator
+			DrawPaneLabels(hWnd, PANERXQUAL);
 			break;
 		}
-		DrawTitleBarGfx(hWnd);		// Draw pane1/pane2 title bars
 		break;
 		
 		case WM_CREATE:
@@ -2045,20 +2069,41 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			GetClientRect(hWnd, &g_rect);
 			g_xNew = g_rect.right - g_rect.left;   // Width of client area
 			g_yNew = g_rect.bottom - g_rect.top;   // Height of client area
-			g_yNew -= g_cyTopBand+Scale(WIN_DIVIDER_SIZE); // FIX [DpiScale]: toolbar+titelbalk + geschaalde divider
+			g_yNew -= g_cyTopBand+Scale(WIN_DIVIDER_SIZE)+Scale(PANE1_BOTTOM_GAP); // FIX [DpiScale]/[PaneBottomPad]: toolbar+titelbalk + geschaalde divider + ondermarge pane1
 
 			// The following code sets pane1 to n% percent of main win client area.
 			pane1Pos    = g_cyTopBand;	// FIX [DpiScale]: bovenrand pane1 = echte toolbar + titelbalk
-			// FIX [PaneBottomPad]: keep the sub-line remainder as blank bottom padding
-			// (like Pane2, which is never floored) so the newest row clears the divider
-			// instead of gluing to it after the auto-scroll-to-bottom.
+			// FIX [PaneBottomPad]: round Pane1 to the NEAREST whole line (a large sub-line
+			// remainder becomes an extra visible line = more text) AND keep the height an
+			// exact multiple of the line height, so the bottom edge always lands on a line
+			// boundary (never a half-clipped row).
+			// FIX [PaneScrollbarAlign]: the PANE1_BOTTOM_GAP margin lives INSIDE the pane
+			// window (window = text lines + gap), NOT outside it: the standard vertical
+			// scrollbar always spans the full window height, so an external gap left the
+			// scrollbar detached from the Pane2 header below. PanePaint() clips text to
+			// whole lines, keeping the gap band blank. pane1Height keeps meaning "text
+			// height" for the rest of the layout math (the Pane2 header still starts at
+			// pane1Pos+pane1Height+gap, which is now exactly the pane window bottom).
 			pane1Height = (g_yNew * Profile.percent) / 100;
-			MoveWindow(Pane1.hWnd, 0, pane1Pos, g_xNew, pane1Height, TRUE);
+			pane1Height = ((pane1Height + cyChar / 2) / cyChar) * cyChar;	// nearest whole line
+			// FIX [PaneShrinkClamp]: on an extremely short window the nearest-line
+			// rounding can claim more than the space that remains for Pane2, driving
+			// pane2Height below zero (Pane2 and its header vanish before the window is
+			// truly out of room). Clamp to the whole lines that actually fit. Purely
+			// defensive - normal window sizes never hit this.
+			if (pane1Height > g_yNew-2) pane1Height = max(0, ((g_yNew-2) / cyChar) * cyChar);
+			MoveWindow(Pane1.hWnd, 0, pane1Pos, g_xNew, pane1Height+Scale(PANE1_BOTTOM_GAP), TRUE);
 
 			// The following code sets pane2 to n% percent of main win client area,
 			// it also allows for toolbar space and dividing space between both panes.
-			pane2Pos = g_cyTopBand+pane1Height+Scale(WIN_DIVIDER_SIZE);	// FIX [DpiScale]
+			pane2Pos = g_cyTopBand+pane1Height+Scale(WIN_DIVIDER_SIZE)+Scale(PANE1_BOTTOM_GAP);	// FIX [DpiScale]/[PaneBottomPad]
 			pane2Height = (g_yNew - pane1Height)-2;
+			// FIX [PaneScrollbarAlign]: give Pane2 the FULL remaining height so its
+			// scrollbar reaches the bottom edge of the client area (flooring the window
+			// to whole lines left the scrollbar up to a line height short). The sub-line
+			// remainder stays INSIDE the window as blank bottom padding: PanePaint()
+			// clips text to whole lines, so the bottom edge of the TEXT still lands on a
+			// line boundary and a half-clipped row can never render ([PaneBottomPad]).
 			MoveWindow(Pane2.hWnd, 0, pane2Pos, g_xNew, pane2Height, TRUE);
 
 			GetWindowRect(Pane1.hWnd, &g_rect);
@@ -2314,7 +2359,10 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 				pane1Height = 2 * GetSystemMetrics(SM_CYFRAME) + cyChar + scrollSize + 1;
 				pane1Pos = g_cyTopBand;		// FIX [DpiScale]
 
-				MoveWindow(hWnd, 0, pane1Pos, parent_rect.right, pane1Height, TRUE);
+				// FIX [PaneScrollbarAlign]: gap inside the window here too, so the window
+				// bottom (= scrollbar bottom) stays flush with the Pane2 header at
+				// pane1Pos+pane1Height+gap.
+				MoveWindow(hWnd, 0, pane1Pos, parent_rect.right, pane1Height+Scale(PANE1_BOTTOM_GAP), TRUE);
 
 				GetWindowRect(hWnd, &rect);
 				pane1Top = rect.top;
@@ -2332,9 +2380,15 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 			{
 				Pane2.iVscrollPos += iVscrollInc;
 				scroll_amt = cyChar * iVscrollInc;
-			
+
 				// Scroll pane 2.
-				ScrollWindow  (Pane2.hWnd, 0, -scroll_amt, NULL, NULL);
+				// FIX [PaneScrollbarAlign]: confine the blit to the whole-line text band
+				// so the blank bottom padding never scrolls into the last text row.
+				client_rect.left   = 0;
+				client_rect.top    = 0;
+				client_rect.right  = Pane2.cxClient;
+				client_rect.bottom = Pane2.cyLines * cyChar;
+				ScrollWindow  (Pane2.hWnd, 0, -scroll_amt, &client_rect, &client_rect);
 				SetScrollRange(Pane2.hWnd, SB_VERT, 0, Pane2.iVscrollMax, FALSE);
 				SetScrollPos  (Pane2.hWnd, SB_VERT, Pane2.iVscrollPos, TRUE);
 				UpdateWindow  (Pane2.hWnd);
@@ -2362,7 +2416,12 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 				scroll_amt = cyChar * iVscrollInc;
 
 				// Scroll pane1
-				ScrollWindow  (Pane1.hWnd, 0, -scroll_amt, NULL, NULL);
+				// FIX [PaneScrollbarAlign]: confine the blit to the whole-line text band.
+				client_rect.left   = 0;
+				client_rect.top    = 0;
+				client_rect.right  = Pane1.cxClient;
+				client_rect.bottom = Pane1.cyLines * cyChar;
+				ScrollWindow  (Pane1.hWnd, 0, -scroll_amt, &client_rect, &client_rect);
 				SetScrollRange(Pane1.hWnd, SB_VERT, 0, Pane1.iVscrollMax, FALSE);
 				SetScrollPos  (Pane1.hWnd, SB_VERT, Pane1.iVscrollPos, TRUE);
 				UpdateWindow  (Pane1.hWnd);
@@ -2865,6 +2924,11 @@ void PanePaint(PaneStruct *pane)
 	hDC = BeginPaint(pane->hWnd, &ps);
 	hOldFont = (HFONT)SelectObject(hDC, hfont);
 
+	// FIX [PaneScrollbarAlign]: the bottom padding band lives INSIDE the pane window
+	// (so the scrollbar spans down to the pane footer). Clip text to whole lines so
+	// the padding stays blank and a half-clipped bottom row can never render.
+	IntersectClipRect(hDC, 0, 0, pane->cxClient, pane->cyLines * cyChar);
+
 	num_lines = ps.rcPaint.top / cyChar;
 
 	iPaintBeg = max(0, pane->iVscrollPos + num_lines);
@@ -3105,6 +3169,7 @@ void PaneHScroll(PaneStruct *pane, WPARAM wParam)
 
 void PaneVScroll(PaneStruct *pane, WPARAM wParam, LPARAM lParam)
 {
+	RECT text_rect;	// FIX [PaneScrollbarAlign]
 	int iVscrollInc;
 	int scroll_amt;
 
@@ -3155,7 +3220,13 @@ void PaneVScroll(PaneStruct *pane, WPARAM wParam, LPARAM lParam)
 
 		pane->iVscrollPos += iVscrollInc;
 		scroll_amt = cyChar * iVscrollInc;
-		ScrollWindow (pane->hWnd, 0, -scroll_amt, NULL, NULL);
+		// FIX [PaneScrollbarAlign]: confine the blit to the whole-line text band so the
+		// blank bottom padding never scrolls into (or out of) the last text row.
+		text_rect.left   = 0;
+		text_rect.top    = 0;
+		text_rect.right  = pane->cxClient;
+		text_rect.bottom = pane->cyLines * cyChar;
+		ScrollWindow (pane->hWnd, 0, -scroll_amt, &text_rect, &text_rect);
 		SetScrollRange (pane->hWnd, SB_VERT, 0, pane->iVscrollMax, FALSE);
 		SetScrollPos (pane->hWnd, SB_VERT, pane->iVscrollPos, TRUE);
 

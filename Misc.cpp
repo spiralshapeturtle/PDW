@@ -367,7 +367,13 @@ void display_line(PaneStruct *pane)
 		pane->iVscrollPos += iVscrollInc;
 
 		scroll_amt = cyChar * iVscrollInc;
-		ScrollWindow(pane->hWnd, 0, -scroll_amt, NULL, NULL);
+		// FIX [PaneScrollbarAlign]: confine the blit to the whole-line text band so the
+		// blank bottom padding never scrolls into the last text row.
+		rect.left	= 0;
+		rect.top	= 0;
+		rect.right	= pane->cxClient;
+		rect.bottom	= pane->cyLines * cyChar;
+		ScrollWindow(pane->hWnd, 0, -scroll_amt, &rect, &rect);
 
 		rect.top	= (pane->cyLines - 1) * cyChar;
 		rect.bottom	= pane->cyClient;

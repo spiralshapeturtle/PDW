@@ -255,7 +255,7 @@ void DrawPaneLabels(HWND hwnd, int pane)
 
 	if (pane & PANE2)	// DRAW TITLE BAR AND GFX FOR PANE2
 	{
-		top_edge  = pane1Pos+pane1Height;	// Work out top edge for all labels
+		top_edge  = pane1Pos+pane1Height+Scale(PANE1_BOTTOM_GAP);	// FIX [PaneBottomPad]: small black gap under pane1's last row, above this header
 		left_edge = r.left + PL2_SCount;	// Work out left edge
 
 		for (i=0, w=cxChar; i<7; i++, w=0)
@@ -375,8 +375,13 @@ void DrawPaneLabels(HWND hwnd, int pane)
 	{
 		if (dRX_Quality && dRX_Quality < 90)
 		{
+			// FIX [RxqSquareRect]: identical rect + null_pen as the good-quality branch
+			// below. The two branches used 1px-different rects (Scale(50)/Scale(27) vs
+			// Scale(49)/Scale(28)) and this one drew with whatever pen was left in the
+			// DC, so the square's size and border varied with the call path.
+			SelectObject(hdc, null_pen);
 			SelectObject(hdc, black_brush);
-			Rectangle(hdc, r.right-Scale(75), r.top+Scale(5), r.right-Scale(50), r.top+Scale(27));	// FIX [DpiScale]
+			Rectangle(hdc, r.right-Scale(75), r.top+Scale(5), r.right-Scale(49), r.top+Scale(28));
 
 			if (hdc_mem = CreateCompatibleDC(hdc))
 			{
@@ -418,8 +423,22 @@ void DrawPaneLabels(HWND hwnd, int pane)
 				left_edge = r.right-Scale(44);	// FIX [DpiScale]
 			}
 		}
-		Draw3D_Box(hdc, r.right-Scale(46), g_cyToolbar+Scale(1), Scale(46), Scale(TITLE_BAR_SIZE), -1);	// FIX [DpiScale]: lijn uit met titelbalk
-		TextOut(hdc, left_edge, g_cyToolbar+Scale(3), qual, strlen(qual));	// FIX [DpiScale]
+		// FIX [RxqTitleAlign]: use the exact same vertical math as the PANE1 title-bar boxes
+		// (unscaled +1 below the divider line, text at +Scale(2) inside the box). The old
+		// g_cyToolbar+Scale(1)/+Scale(3) only matched at 100% DPI; at 150%+ the whole RX-Q
+		// box sat 1px lower than the title bar, showing a dark background sliver above it
+		// (divider line looked 2px thick) and a lower "100%" label.
+		Draw3D_Box(hdc, r.right-Scale(46), g_cyToolbar+1, Scale(46), Scale(TITLE_BAR_SIZE), -1);
+		TextOut(hdc, left_edge, g_cyToolbar+1+Scale(2), qual, strlen(qual));
+
+		// FIX [RxqBottomLine]: Draw3D_Box's fill covers the row of the title bar's
+		// full-width bottom gray line (drawn in the PANE1 block, which runs BEFORE
+		// this one - and this block also repaints alone every second). That left a
+		// Scale(46) gap in the line under this box. Redraw the segment so the
+		// separator line stays continuous to the right edge.
+		SelectObject(hdc,SysPEN[DARKGRAY]);
+		MoveToEx(hdc, r.right-Scale(46), g_cyToolbar+1+Scale(TITLE_BAR_SIZE), NULL);
+		LineTo(hdc, r.right, g_cyToolbar+1+Scale(TITLE_BAR_SIZE));
 	}
 	ReleaseDC(hwnd, hdc);
 }

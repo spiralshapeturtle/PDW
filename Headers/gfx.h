@@ -3,6 +3,10 @@
 
 #define TITLE_BAR_SIZE   18   // Size of pane1/pane2 title bars.
 #define DIVIDER_OFFSET   12
+// FIX [PaneBottomPad]: cosmetic black gap under Pane1's last (whole) line, drawn
+// ABOVE the Pane2 header. Kept OUTSIDE Pane1's client area so its height stays an
+// exact multiple of the line height (no half-clipped bottom row). DPI-scaled at use.
+#define PANE1_BOTTOM_GAP  5
 
 /*
 #define ADDRESS_TXT_POS			DIVIDER_OFFSET

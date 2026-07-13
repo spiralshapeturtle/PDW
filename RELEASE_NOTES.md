@@ -19,6 +19,33 @@ did not know what it meant, so it is now **off by default** and controlled by a 
 - Enable it if you want the at-a-glance indication of which messages arrived as fragments; leave it off
   for a cleaner display identical to a normal single-frame message.
 
+## Pane layout polish (FIX [PaneBottomPad], FIX [PaneScrollbarAlign])
+The two message panes (Monitored Messages / Filtered Messages) now size their text area to whole
+lines and keep a small margin between the newest row and the pane edge below it.
+
+- No more half-clipped bottom row: text is always drawn in whole lines, at any scroll position and
+  any window size ([PaneBottomPad]).
+- The bottom padding lives *inside* each pane window, so the standard vertical scrollbar - which
+  always spans the full window height - stays flush with the pane footer: the Filtered Messages
+  header bar for the top pane, the bottom window edge for the bottom pane ([PaneScrollbarAlign]).
+- Purely cosmetic; message handling, filtering, logging and all output feeds are untouched.
+- The RX-Q / percentage box at the right end of the Monitored Messages title bar now uses the exact
+  same vertical position math as the rest of the title bar ([RxqTitleAlign]). At display scaling
+  above 100% it sat 1px lower, which made the divider line above it look thicker and the "100%"
+  label sit visibly lower than the other column labels.
+- The gray separator line under the Monitored Messages title bar no longer has a gap under the
+  RX-Q box: the box's fill (repainted every second) overwrote its segment of the line, so the
+  separator stopped short of the right edge ([RxqBottomLine]).
+- The small RX-quality warning square on the toolbar is now drawn with one fixed rectangle and pen
+  in both quality states; the two branches used slightly different sizes and an unpredictable
+  border pen ([RxqSquareRect]).
+- Hovering the toolbar buttons no longer repaints both pane title bars on every hot-track
+  notification - only the graphics that actually overlap the toolbar band (signal indicator and
+  RX-quality square) are refreshed, removing hover flicker ([NotifyRedraw]).
+- Defensive clamp for extremely short windows: Pane1's whole-line rounding can no longer claim
+  more height than remains for Pane2, so Pane2 and its header stay visible down to the smallest
+  usable window size ([PaneShrinkClamp]).
+
 ## MQTT feed reliability
 
 ## Why only MQTT, and only at night (root cause)
