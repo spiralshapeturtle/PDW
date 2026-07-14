@@ -681,11 +681,16 @@ void AddResponse(char *buf)
 			GetTextExtentPoint32(hDC, buf, strlen(buf), &Size);
 			if(Size.cx > nMaxLen) {
 				nMaxLen = Size.cx ;
-				SendMessage(mail.hResponse, LB_SETHORIZONTALEXTENT, Size.cx, 0L) ;
+				// FIX [SmtpAddRespDeadlock]: SendMessageTimeout, not SendMessage. AddResponse runs on
+				// the SMTP worker thread; StartMail(0) (disable/exit) blocks the GUI thread in a
+				// non-pumping WaitForSingleObject(MailThread, INFINITE), so a blocking cross-thread
+				// SendMessage to this GUI listbox deadlocked the whole app - guaranteed on the normal
+				// disable path when the worker's smtpQuit() emits a line while the dialog is open.
+				SendMessageTimeout(mail.hResponse, LB_SETHORIZONTALEXTENT, Size.cx, 0L, SMTO_ABORTIFHUNG, 500, NULL) ;
 			}
 			ReleaseDC(mail.hResponse, hDC) ;
 		}
-		SendMessage(mail.hResponse, LB_ADDSTRING, 0, (LPARAM) (LPSTR) buf) ;
+		SendMessageTimeout(mail.hResponse, LB_ADDSTRING, 0, (LPARAM) (LPSTR) buf, SMTO_ABORTIFHUNG, 500, NULL) ;	// FIX [SmtpAddRespDeadlock]: see above
 		OUTPUTDEBUGMSG((("AddResponse() : >>> %s"),buf));
 	}
 
@@ -934,6 +939,17 @@ static SOCKET smtpConnect(char *smtp_server,int port)
 			if ((res = initOpenSSL()) == CSMTP_NO_ERROR)
 				res = openSSLConnect();
 			OUTPUTDEBUGMSG(("SSL Connect res = %d\n",res));
+			// FIX [SmtpImplicitTlsFail]: the handshake result was logged but IGNORED - the function
+			// fell through and returned the socket as "connected", so a failed 465 handshake either
+			// burned 30 s timeouts per command on a dead SSL or silently sent plaintext on the TLS
+			// port. Fail the connect cleanly instead (mirrors the STARTTLS failure path in smtpHelo).
+			if (res != CSMTP_NO_ERROR) {
+				AddResponse("smtpConnect() : implicit TLS handshake failed\n");
+				cleanupOpenSSL();
+				closesocket(sfd);
+				nSMTPerrors++;
+				return (INVALID_SOCKET);
+			}
 		} else {
 			// STARTTLS (submission 587 e.d.): TLS-upgrade gebeurt in smtpHelo() na de eerste EHLO
 			g_useStartTls = TRUE;
@@ -1206,11 +1222,17 @@ static int smtpRcptTo(int sfd, const char *szTo)
 		while(pEnd > pTmp1 && isspace((unsigned char)*pEnd)) pEnd--;
 		*(pEnd + 1) = '\0';
 
-		_snprintf(buf, sizeof(buf)-1, "RCPT TO: <%s>\r\n", pTmp1);
-		sockPuts(sfd,buf);
-		if (smtpResponse(sfd) != 0) {
-			smtpRset(sfd);
-			return (-1);
+		// FIX [SmtpEmptyRcpt]: skip empty tokens (e.g. "a@b;;c@d" or a leading/trailing ';').
+		// An empty token emitted "RCPT TO:<>" -> server 501/553 -> the ENTIRE mail (including the
+		// valid recipients) was requeued and eventually dropped, on every message, until the INI
+		// was corrected. Only send RCPT for a non-empty address.
+		if (*pTmp1) {
+			_snprintf(buf, sizeof(buf)-1, "RCPT TO: <%s>\r\n", pTmp1);
+			sockPuts(sfd,buf);
+			if (smtpResponse(sfd) != 0) {
+				smtpRset(sfd);
+				return (-1);
+			}
 		}
 		if(pTmp2) {
 			pTmp1 = pTmp2 ;

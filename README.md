@@ -4,7 +4,7 @@
 
 ---
 
-**Version 4.0.3** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 4.0.5** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -452,7 +452,7 @@ The system tray icon provides minimize-to-tray, click-to-restore, and optional p
 
 ### High-DPI support
 
-PDW declares `System DPI Aware` in its manifest. Fonts, toolbar, and layout are recalculated from the actual DPI at startup — no blurring or clipping on 125 %, 150 %, or 200 % scaled displays.
+PDW declares `System DPI Aware` in its manifest. Fonts, toolbar, and layout are recalculated from the actual DPI at startup — no blurring or clipping on 125 %, 150 %, or 200 % scaled displays. The toolbar buttons use a modern high-resolution icon set: each icon ships as a 72x72 32-bit image with a real alpha channel and is smoothly downscaled to the exact button size for the current DPI, so the icons stay crisp and anti-aliased at every scale factor instead of being stretched up from tiny 18x18 bitmaps.
 
 ---
 
@@ -524,10 +524,24 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 
 ## Changelog highlights
 
+### v4.0.5 (July 2026)
+Stability and hardening release from a full source-code audit (memory safety, buffer handling, and rare corner cases across decoders, output feeds, and input paths), bundled with the high-resolution toolbar and window-position safety fixes. Most fixes target unusual conditions - corrupt/truncated over-the-air frames, feeds under stress, reconnect timing, and malformed `pdw.ini` / `filters.ini` - so everyday behaviour is unchanged. No decoder-output or configuration-format changes; existing `pdw.ini` and `filters.ini` files work unchanged. See `RELEASE_NOTES.md` for the full list; highlights:
+- **Signal-meter alignment (FIX [SigindBandAlign])** — the signal-strength meter in the top-right corner is now centered in the actual toolbar band instead of a fixed offset, so it no longer drifts past the divider into the title-bar band once the toolbar settles to its themed steady-state height (also re-triggered by the repaint after a brief COM-port drop).
+- **Divider line under the meter (FIX [SigindDividerClip])** — the horizontal divider line under the toolbar no longer breaks off beneath the signal meter. On the shorter themed toolbar the meter's background box could paint over that divider segment (and toolbar hover kept it broken); the box is now held above the divider row and the meter repaint restores the line beneath it.
+- **Filtered-pane scrollbar accuracy (FIX [PaneFilterScrollbarSync])** — the Filtered pane's vertical scrollbar is now refreshed on every appended line, so it always reflects whether older messages have scrolled off the top. The busy Monitored pane already did this implicitly; the low-traffic Filtered pane could in edge cases be left with a scrollbar that lagged the true content extent.
+- **Group-call logging (FIX [GroupcallLogFilename])** — later members of a FLEX group call no longer risk being logged through a stale filename (which could route monitor-log lines into the filter file). Screen and feeds were unaffected.
+- **POCSAG corrupt capcodes (FIX [PocsagCapcodeGuard])** — a RIC with an uncorrectable bit error is again shown as `???????` instead of a plausible-but-wrong capcode.
+- **SMTP monitor-window freeze (FIX [SmtpAddRespDeadlock])** — disabling SMTP or exiting with the SMTP monitor/test window open could deadlock the whole app; the status update is now non-blocking.
+- **SQLite size cap (FIX [SqliteSizeCap])** — the optional maximum-size limit no longer risks emptying the whole table on a database without incremental auto-vacuum.
+- **COM port lock-out (FIX [ComPortReopenLeak])** — a force-stopped serial reader mid-reconnect no longer leaks an exclusive COM handle that locked PDW out of its own port until restart.
+- Plus hardening for MOBITEX/ACARS decoding, MySQL/Telnet/MQTT/Telegram/Pushover feeds, sound-card restart, printing (pagination), clipboard copy, several dialogs, and language-table loading.
+
 ### v4.0.3 (July 2026)
 MQTT reliability fix plus a small display option. No decoder-output or configuration-format changes; existing `pdw.ini` and `filters.ini` files work unchanged.
 - **Optional fragment marker (FIX [FragMarkerOptional])** — the `*` that PDW draws after the capcode of a reassembled multi-frame FLEX message is now **off by default** and controlled by a new checkbox in **Screen Options** ("Mark reassembled fragmented messages with '*' after the capcode"). The fragment-reassembly logic itself is unchanged; only the on-screen marker is now opt-in. Enable it if you want to see at a glance which messages were rebuilt from fragments.
 - **Pane layout polish (FIX [PaneBottomPad], FIX [PaneScrollbarAlign])** — both message panes now size their text area to whole lines (no more half-clipped bottom row at any scroll position) and keep a small margin between the newest row and the pane edge below it. The padding lives inside the pane window, so each pane's vertical scrollbar stays flush with the pane footer (the Filtered Messages header, resp. the window bottom edge). The RX-Q / percentage box in the Monitored Messages title bar is now pixel-aligned with the rest of the bar at any display scaling (FIX [RxqTitleAlign]), the separator line under the title bar stays continuous beneath it (FIX [RxqBottomLine]), the toolbar's RX-quality warning square is drawn consistently in both states (FIX [RxqSquareRect]), and hovering the toolbar no longer flickers the title bars (FIX [NotifyRedraw])
+- **Main window could start invisible (FIX [WindowPosMinimized])** — exiting PDW while minimized to the taskbar saved the Windows minimized-window position (-32000,-32000) to `pdw.ini`, so the next start created the main window far off-screen: only the tray icon was reachable while decoding kept running. The position is no longer recorded while minimized/trayed, and at startup a saved position that does not touch any monitor now falls back to the primary work area
+- **High-resolution toolbar icons (FIX [ToolbarHiResIcons])** — the 13 toolbar buttons have a new, modern icon set. The old assets were 18x18 pixel, 16-color bitmaps that were stretched up on scaled displays, which made them look blocky and dated; the new icons are 72x72 32-bit images with a real alpha channel that are smoothly downscaled (box filter) to the exact DPI-scaled button size, so they render crisp and anti-aliased at 100 %, 125 %, 150 % and 200 % scaling. PDW now also declares the Common Controls v6 dependency in its manifest, which enables alpha-blended toolbar icons and gives all dialogs the modern themed Windows look instead of the classic style
 - **Warm MQTT connection (FIX [MqttWarmConn], FIX [MqttKeepAlive])** — the 3-minute idle disconnect is removed and keepalive is now actually driven (the Paho synchronous client only emits keepalive pings when the app calls `MQTTClient_yield()`, which PDW as a pure publisher never did, so the broker kept reaping the idle session as "exceeded timeout"). The worker now yields ~every 10 s so pings go out and the session survives multi-minute quiet periods (keepalive 45 s), matching how every other MQTT client behaves
 - **Proactive idle reconnect (FIX [MqttIdleReconnect])** — if the broker drops the connection while PDW is idle (broker restart/update), the worker now quietly re-establishes it within at most 60 s instead of leaving it cold until the next message arrives. A healthy connection is never touched, and a broker that stays down is retried only once per minute (no connect storm, one log line instead of one per attempt)
 - **Hardened MQTT reconnect (FIX [MqttReconnHarden])** — connect timeout 5 s to 10 s and 2 to 4 publish attempts with exponential back-off (1/2/4 s), mirroring the webhook feed's retry profile, so a genuine broker restart is ridden out rather than dropped. Shutdown/reconfigure is unaffected (retries are skipped once a stop is in progress)

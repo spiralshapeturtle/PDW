@@ -89,7 +89,7 @@ void read_language_tables(void)
 	// We use the ACARS path string as it is no longer in use. 
 	wsprintf(szACARSPath, TEXT("%s\\%s"), szPath, "language.df");
 
-	if ((lang_fp = fopen(szACARSPath,"r+")) == NULL) return;
+	if ((lang_fp = fopen(szACARSPath,"r")) == NULL) return;	// FIX [LangFopenMode]: was "r+" (read-write) - failed silently in a read-only install dir (Program Files), leaving the language menu empty; the file is only ever read
 
 
 	while((lang_cnt < 10) && (ok))
@@ -150,7 +150,8 @@ void free_lang_db_info(struct lang_db_info *p_info)
 // Find/Read string.
 BOOL find_read_string(char *name,char *id,int id_len)
 {
-	char *s, c;
+	char *s;
+	int c;	// FIX [LangGetcEof]: was char - getc() returns int, and byte 0xFF stored in a signed char equals EOF, truncating the parse on any high-bit char in language.df
 	char idbuf[40];
 	int cnt;
 
@@ -229,7 +230,8 @@ BOOL find_read_string(char *name,char *id,int id_len)
 struct lang_db_info *read_lang_tbl(int *ok)
 {
 	struct lang_db_info *rp_info=NULL,*p_info=NULL, *last_p=NULL;
-	char c, *s;
+	char *s;
+	int c;	// FIX [LangGetcEof]: was char - byte 0xFF stored in a signed char equals EOF, truncating the parse
 	char inbuf[40];
 	int cnt,db_label_cnt=0;
 

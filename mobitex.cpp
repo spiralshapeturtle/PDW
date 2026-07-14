@@ -71,7 +71,7 @@ int iBlockNumber, nCharacters=0;
 unsigned int ESN_manufacturerscode, ESN_modelnumber, ESN_IDnumber;
 bool bBadDestination=false, bBadSender=false, bBadHeader;
 bool bFirstMPAK=true, bPrimaryBlock;
-char szDestination[10], szSender[10], szType[10], szMPAK[32];
+char szDestination[10], szSender[10], szType[10], szMPAK[64];	// FIX [MobitexMpakOverflow]: was [32]; LOW POWER/ROAMING lines with a full ESN reach ~58 bytes
 char szNeighbourList[MAX_STR_LEN], szBaseIdName[128]="";
 char szLastBaseID[8], szTmpIdName[128];
 
@@ -441,7 +441,7 @@ void MOBITEX::barfrog()
 
 				for (int i=0; i<10; i++)
 				{
-					if (aPreviousMAN[RX][i] = LINK_CONTROL_INFO.Destination)
+					if (aPreviousMAN[RX][i] == LINK_CONTROL_INFO.Destination)	// FIX [MobitexResCompare]: was '=' (assignment) - it overwrote the RX-MAN history and always matched slot 0
 					{
 						_snprintf_s(szSender, sizeof(szSender), _TRUNCATE, "%07u", aPreviousMAN[TX][i]);	// Get TX-MAN
 						break;
@@ -828,6 +828,7 @@ void MOBITEX::frame_sync(int bit)
 				bBadDestination=false;
 				bBadSender=false;
 				iBlockNumber=0;
+					szMPAK[0]=0;	// FIX [MobitexStaleMpak]: clear per frame so a dropped DTESERV frame never leaks its MPAK text onto the next frame
 				nCharacters=0;
 				nu = 0;
 				mb_bs(-1);
@@ -1033,6 +1034,7 @@ void MOBITEX::GetFrameHeader(void)
 	bBadDestination=false;
 	bBadSender=false;
 	iBlockNumber=0;
+					szMPAK[0]=0;	// FIX [MobitexStaleMpak]: clear per frame so a dropped DTESERV frame never leaks its MPAK text onto the next frame
 	nCharacters=0;
 //	nu = 0;
 	mb_bs(-1);
@@ -1055,15 +1057,18 @@ char *MOBITEX::GetBaseID(char *szBaseID, char *szBaseIdName)
 	{
 		while (fgets(szLine, sizeof(szLine), pFile) != NULL)
 		{
-			szLine[strlen(szLine)-1] = '\0';
+			// FIX [MobitexBaseIdParse]: guard the newline strip (an empty line made strlen()-1
+			// write szLine[-1]) and require a 5th char so the name copy at index 5 cannot run
+			// past the terminator into stale szLine bytes.
+			{ size_t szLen = strlen(szLine); if (szLen > 0) szLine[szLen-1] = '\0'; }
 
-			if (szLine[0] == '#' || !szLine[3])	// If comment or line is too short
+			if (szLine[0] == '#' || !szLine[3] || !szLine[4])	// If comment or line is too short
 			{
 				continue;	// Skip comment
 			}
 			if (strncmp((char*)szBaseID, &szLine[0], 4) == 0)	// Find BaseID
 			{
-				for (int j=5; szLine[j]!=0; j++)		// Found BaseID
+				for (int j=5; szLine[j]!=0 && (pBase - szBaseIdName) < 127; j++)		// Found BaseID; FIX [MobitexBaseIdParse]: bound the copy
 				{
 					*pBase++ = szLine[j];				// Add Base Name
  				}

@@ -124,7 +124,12 @@ BOOL NEAR InitApplication(HINSTANCE hInstance)
 
 	LPCTSTR lpszIniFileExt  = TEXT("INI");
 	LPCTSTR lpszHelpFileExt = TEXT("HLP");
-	TCHAR szApiFailedMsg[]	= TEXT("A Windows API Failed");
+	// FIX [ApiFailedShadow]: removed the LOCAL szApiFailedMsg[] that shadowed the global
+	// szApiFailedMsg[64]. LoadString filled only the local, so the global that WinMain passes to
+	// ErrorMessageBox on a startup failure stayed empty (blank error box). Seed a fallback into
+	// the global, then load the resource into it.
+	strncpy(szApiFailedMsg, TEXT("A Windows API Failed"), sizeof(szApiFailedMsg)-1);
+	szApiFailedMsg[sizeof(szApiFailedMsg)-1] = '\0';
 
 	//-- Load the "A Windows API Failed" resource string
 
@@ -262,6 +267,29 @@ HWND NEAR InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 	// load accelerators
 	ghAccel = LoadAccelerators(hInstance, MAKEINTRESOURCE( PDWACCEL ));
+
+	// FIX [WindowPosMinimized]: sanity-check the saved window position. A pdw.ini written
+	// by an older build while the window was minimized contains xPos/yPos=-32000; creating
+	// the window there makes PDW invisible (only the tray icon works). If the saved rect
+	// does not touch any monitor, fall back to the top-left of the primary work area.
+	{
+		RECT rcSaved;
+		// FIX [WindowPosMinimized]: also sanitize a bad saved size. A corrupt/hand-edited pdw.ini
+		// with xSize/ySize <= 0 builds a degenerate (empty) rect - MonitorFromRect then returns
+		// NULL and, worse, CreateWindow gets a zero/garbage size and the window is invisible. Clamp
+		// to the 593x442 startup defaults before the monitor check.
+		if (Profile.xSize < 100) Profile.xSize = 593;
+		if (Profile.ySize < 100) Profile.ySize = 442;
+		rcSaved.left   = Profile.xPos;
+		rcSaved.top    = Profile.yPos;
+		rcSaved.right  = Profile.xPos + Profile.xSize;
+		rcSaved.bottom = Profile.yPos + Profile.ySize;
+		if (MonitorFromRect(&rcSaved, MONITOR_DEFAULTTONULL) == NULL)
+		{
+			Profile.xPos = 0;
+			Profile.yPos = 0;
+		}
+	}
 
 	ghWnd = CreateWindow(gszPDWClass, szAppName,
 						 WS_OVERLAPPEDWINDOW,

@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 4.0.3** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Version 4.0.5** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -1064,6 +1064,8 @@ The system tray icon provides:
 
 PDW declares `System DPI Aware` in its application manifest. Fonts, toolbar, and layout are recalculated from the actual display DPI at startup. PDW displays correctly on 125 %, 150 %, and 200 % scaled (4K / HiDPI) monitors without blurring or clipping.
 
+The toolbar buttons use a high-resolution icon set: each icon is stored as a 72x72, 32-bit image with an alpha channel and is smoothly downscaled to the exact button size for your display scaling, so the icons stay sharp and anti-aliased at every scale factor. PDW also uses the modern themed Windows look (Common Controls v6) for its dialogs.
+
 ---
 
 ## 18. Multi-instance / title bar
@@ -1123,6 +1125,9 @@ PDW opens its COM port for exclusive access. While PDW is running and connected,
 
 **High-DPI layout looks wrong**
 - Make sure you are running the release build. Debug builds may not include the DPI-aware manifest.
+
+**Main window is not visible after starting (only the tray icon works)**
+- An older PDW build could save the Windows minimized-window position (-32000,-32000) to `pdw.ini` when it was closed while minimized; the next start then created the window far off-screen. Current builds fix this automatically at startup (the window falls back to the top-left of the primary monitor). If you are on an older build, close PDW, open `pdw.ini` and set `xPos=0` and `yPos=0`.
 
 ---
 

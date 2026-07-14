@@ -365,6 +365,7 @@ void ACARS::ac_out_msg(void)
 
 	messageitems_colors[6] = mode_parity_error ? COLOR_BITERRORS : COLOR_MODETYPEBIT;
 	Current_MSG[MSG_BITRATE][0] = (char)(mode[0] & 0x7F);
+	Current_MSG[MSG_BITRATE][1] = '\0';	// FIX [AcarsBitrateTerm]: terminate; otherwise a prior decoder's bitrate tail (e.g. "6250") stayed appended
 
 	//************* Label *****************
 

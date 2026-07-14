@@ -376,8 +376,6 @@ static void DoSend(const PushoverJob *job)
 
     PostStatus(PUS_SENDING, 0);
 
-    if (!EnsureConnection()) { CloseConnection(); PostStatus(PUS_ERROR, 0); return; }
-
     char resp[2048];
     for (int attempt = 0; attempt < MAX_RETRIES; attempt++)
     {
@@ -386,8 +384,13 @@ static void DoSend(const PushoverJob *job)
             if (!g_bRunning) return;
             PostStatus(PUS_RETRY, attempt);
             InterruptibleSleep(g_retryDelays[attempt - 1]);
-            if (!EnsureConnection()) { CloseConnection(); continue; }
         }
+
+        // FIX [PushoverFirstConnectRetry]: EnsureConnection on EVERY attempt. The old pre-loop
+        // early-return dropped the message on the first transient connect failure (a network blip
+        // or resolver hiccup), unlike telegram/webhook which retry. A failed connect now falls
+        // through to the retry loop and, after all attempts, the "all retries failed" path below.
+        if (!EnsureConnection()) { CloseConnection(); continue; }
 
         int status = HttpPostForm(g_hConnect, body, p, resp, sizeof(resp));
 

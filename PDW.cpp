@@ -896,8 +896,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 	extern bool bEmpty_Frame;		// Set if FLEX-Frame=EMTPY / ERMES-Batch=0
 
 	char szFile[MAX_PATH];
-	char filters_reload[64];		// PH: Buffer for reloading filters
-	char filters_temp[64];			// PH: Buffer for reloading filters
+	char filters_reload[128];		// PH: Buffer for reloading filters; FIX [ReloadBufSize]: was [64], exact-fit at a 5-digit filter count
+	char filters_temp[128];			// PH: Buffer for reloading filters
 
 	bool pane1=false;
 
@@ -1926,11 +1926,20 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		break;
 
-		case WM_MOVE:	
+		case WM_MOVE:
 		{
-			GetWindowRect(hWnd, &g_rect);
-			Profile.xPos = (INT) g_rect.left;
-			Profile.yPos = (INT) g_rect.top;
+			// FIX [WindowPosMinimized]: never record the position of a minimized or trayed
+			// window. Windows parks minimized windows at -32000,-32000; recording that and
+			// exiting while minimized persisted it to pdw.ini (the WM_DESTROY guard only
+			// covers the minimize-to-tray path, which sets minimize_flg - a plain taskbar
+			// minimize does not), so the next start created the main window far off-screen:
+			// "PDW gone", only the tray icon reachable.
+			if (!IsIconic(hWnd) && !bTrayed)
+			{
+				GetWindowRect(hWnd, &g_rect);
+				Profile.xPos = (INT) g_rect.left;
+				Profile.yPos = (INT) g_rect.top;
+			}
 		}
 		break;
 
@@ -2854,9 +2863,23 @@ void CopyToClipboard(PaneStruct *pane, UINT min_col, UINT max_col, UINT min_row,
 		return;
 	}
 
-	num_lines = (max_col - min_col + 1);
+	// FIX [ClipboardBounds]: the clipboard buffer needs one slot per selected ROW (each row emits
+	// up to LINE_SIZE chars + CRLF), but num_lines was computed from COLUMNS - a tall, narrow
+	// selection therefore overflowed the GlobalAlloc block. Size from rows, and clamp the extents
+	// so a drag above/left of the pane (negative coords read as huge unsigned via HIWORD/LOWORD)
+	// or a resize-underflow of the selection cannot read past pane->buff_char either.
+	if (max_col > (UINT)LINE_SIZE) max_col = (UINT)LINE_SIZE;
+	if (min_col > max_col) min_col = max_col;
+	{
+		UINT rowsAvail = (pane->buff_lines > (UINT)pane->iVscrollPos) ? (pane->buff_lines - (UINT)pane->iVscrollPos) : 0;
+		if (rowsAvail > 0) rowsAvail--;			// last valid index
+		if (max_row > rowsAvail) max_row = rowsAvail;
+	}
+	if (min_row > max_row) min_row = max_row;
 
-	if (!(hClipBuffer = GlobalAlloc(GMEM_DDESHARE, num_lines * (LINE_SIZE+3))))
+	num_lines = (max_row - min_row + 1);
+
+	if (!(hClipBuffer = GlobalAlloc(GMEM_DDESHARE, num_lines * (LINE_SIZE+3) + 1)))
 	{
 		MessageBox(ghWnd,"Could not get Clipboard Memory!", "PDW Clipboard",MB_ICONWARNING);
 		CloseClipboard();
@@ -2986,7 +3009,7 @@ void PanePaint(PaneStruct *pane)
 
 DWORD GetColorRGB(BYTE color)
 {
-	DWORD rgb;
+	DWORD rgb = Profile.color_message;	// FIX [GetColorDefault]: default so an out-of-enum color byte cannot return an uninitialized value
 
 	switch (color)
 	{
@@ -3718,7 +3741,7 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 				if (stricmp(szFileLog, Profile.filterfile) == 0)
 				{
 					SetDlgItemText(hDlg, IDC_LOGFILE, "");
-					sprintf(tmp_message, "Logfile can't be same as Filterfile!\n( %s )", szFileLog);
+					_snprintf_s(tmp_message, sizeof(tmp_message), _TRUNCATE, "Logfile can't be same as Filterfile!\n( %s )", szFileLog);	// FIX [LogDlgMsgBound]: szFileLog can be 256 chars into tmp_message[128]
 					MessageBox(hDlg, tmp_message, "PDW Logfile",MB_ICONERROR);
 					SendDlgItemMessage(hDlg,  IDC_LOGFILE, EM_SETSEL, 0, -1);
 					SetFocus(GetDlgItem(hDlg, IDC_LOGFILE));
@@ -3731,13 +3754,13 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 					{
 						strcpy(temp_logfile, szFileLog); // Full path
 					}
-					else sprintf(temp_logfile, "%s\\%s", szPath, szFileLog);
+					else _snprintf_s(temp_logfile, sizeof(temp_logfile), _TRUNCATE, "%s\\%s", szPath, szFileLog);	// FIX [LogDlgPathBound]
 				}
-				else sprintf(temp_logfile, "%s\\%s", szLogPathName, szFileLog);
+				else _snprintf_s(temp_logfile, sizeof(temp_logfile), _TRUNCATE, "%s\\%s", szLogPathName, szFileLog);	// FIX [LogDlgPathBound]
 
 				if (!(pFileLog = fopen(temp_logfile, "a")))
 				{
-					sprintf(tmp_message, "Error opening logfile!\n( %s )", szFileLog);
+					_snprintf_s(tmp_message, sizeof(tmp_message), _TRUNCATE, "Error opening logfile!\n( %s )", szFileLog);	// FIX [LogDlgMsgBound]: bound (see above)
 					MessageBox(hDlg, tmp_message, "PDW Logfile",MB_ICONERROR);
 					SetFocus(GetDlgItem(hDlg, IDC_LOGFILE));
 					return (FALSE);
@@ -3830,10 +3853,13 @@ BOOL FAR PASCAL CustomAudioDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 		SendDlgItemMessage(hDlg, IDC_RESYNC1600,    CB_SETCURSEL, (WPARAM) Profile.audioResync[INDEX1600], 0L);
 		SendDlgItemMessage(hDlg, IDC_RESYNC2400,    CB_SETCURSEL, (WPARAM) Profile.audioResync[INDEX2400], 0L);
 
-		SendDlgItemMessage(hDlg, IDC_CENTERING512,  CB_SETCURSEL, (WPARAM) Profile.audioResync[INDEX512],  0L);
-		SendDlgItemMessage(hDlg, IDC_CENTERING1200, CB_SETCURSEL, (WPARAM) Profile.audioResync[INDEX1200], 0L);
-		SendDlgItemMessage(hDlg, IDC_CENTERING1600, CB_SETCURSEL, (WPARAM) Profile.audioResync[INDEX1600], 0L);
-		SendDlgItemMessage(hDlg, IDC_CENTERING2400, CB_SETCURSEL, (WPARAM) Profile.audioResync[INDEX2400], 0L);
+		// FIX [CenteringInit]: seed the CENTERING combos from audioCentering, not audioResync.
+		// IDOK reads them back into audioCentering, so the old copy-paste silently overwrote the
+		// user's centering values with the resync values on every OK.
+		SendDlgItemMessage(hDlg, IDC_CENTERING512,  CB_SETCURSEL, (WPARAM) Profile.audioCentering[INDEX512],  0L);
+		SendDlgItemMessage(hDlg, IDC_CENTERING1200, CB_SETCURSEL, (WPARAM) Profile.audioCentering[INDEX1200], 0L);
+		SendDlgItemMessage(hDlg, IDC_CENTERING1600, CB_SETCURSEL, (WPARAM) Profile.audioCentering[INDEX1600], 0L);
+		SendDlgItemMessage(hDlg, IDC_CENTERING2400, CB_SETCURSEL, (WPARAM) Profile.audioCentering[INDEX2400], 0L);
 
 		return (TRUE);
 
@@ -4249,7 +4275,14 @@ BOOL FAR PASCAL SetupDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 						return (FALSE);
 					}
 					sscanf(temp, "%x", &Profile.comPortAddr);
-					Profile.comPortIRQ = irqs[value];
+					// FIX [SetupIrqIndex]: 'value' is the COM-port combo index, not the IRQ combo
+					// selection - the chosen IRQ was ignored. Read the IRQ combo (CB_ERR already
+					// rejected above) and bound it to irqs[9].
+					{
+						int irqSel = (int)SendDlgItemMessage(hDlg, IDC_COMIRQ, CB_GETCURSEL, 0, 0L);
+						if (irqSel < 0 || irqSel > 8) irqSel = 0;
+						Profile.comPortIRQ = irqs[irqSel];
+					}
 				}
 			}
 			else	// OS => 2000
@@ -4288,7 +4321,10 @@ BOOL FAR PASCAL SetupDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			Profile.audioEnabled   = IsDlgButtonChecked(hDlg, IDC_AUDIOENABLE);
 			Profile.audioDevice    = SendDlgItemMessage(hDlg, IDC_AUDIODEVICES, CB_GETCURSEL, 0, 0L);
 
-			if (Profile.audioDevice != old_device)
+			// FIX [AudioDeviceGate]: only (re)start capture when audio is the active input. A
+			// device-combo change while COM input is active used to open and hold the audio
+			// device for nothing (buffers filled once, never re-queued; blocks exclusive drivers).
+			if (Profile.audioEnabled && Profile.audioDevice != old_device)
 			{
 				if (bCapturing)
 				{
@@ -6421,7 +6457,8 @@ BOOL FAR PASCAL GeneralOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 			{
 				if (SHGetPathFromIDList(pidl, tmp_path))
 				{
-					if (tmp_path[strlen(tmp_path)-1] != '\\') strcat(tmp_path, "\\");
+					// FIX [BrowsePathEdge]: guard the empty-path read (tmp_path[-1]) and the strcat overflow at MAX_PATH.
+					{ size_t tpl = strlen(tmp_path); if (tpl > 0 && tpl + 2 <= sizeof(tmp_path) && tmp_path[tpl-1] != '\\') strcat(tmp_path, "\\"); }
 					SetDlgItemText(hDlg, IDC_LOGFILEPATH, tmp_path);
 				}
 
@@ -6498,7 +6535,10 @@ BOOL FAR PASCAL GeneralOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 						return (FALSE);
 					}
 				}
-				Profile.BlockDuplicate += SendDlgItemMessage(hDlg, IDC_BLOCKDUPOPTION, CB_GETCURSEL, 0, 0L);
+				// FIX [BlockDupCbErr]: CB_GETCURSEL returns CB_ERR(-1) when nothing is selected
+				// (a corrupt BlockDuplicate value can leave the combo with no selection); adding -1
+				// corrupted the mode encoding. Treat CB_ERR as 0.
+				{ int dupOpt = (int)SendDlgItemMessage(hDlg, IDC_BLOCKDUPOPTION, CB_GETCURSEL, 0, 0L); if (dupOpt == CB_ERR) dupOpt = 0; Profile.BlockDuplicate += dupOpt; }
 				Profile.BlockDuplicate += IsDlgButtonChecked(hDlg, IDC_BLOCKEDTXT) ? 4 : 0;
 				Profile.BlockDuplicate += GetDlgItemInt(hDlg, IDC_BLOCKDUPTIMER, NULL, FALSE) << 4;
 			}
@@ -6526,7 +6566,7 @@ BOOL FAR PASCAL GeneralOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 
 BOOL FAR PASCAL ScreenOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	int i, j, cursel, nextsel, lastsel, state, mode=0;
+	int i, j, cursel, nextsel, lastsel=0, state, mode=0;	// FIX [ScreenOptLastsel]: init - an all-"-" column config read lastsel uninitialized at IDOK
 	char tbuf[100];
 //								 PAGING		 MOBITEX	 ACARS
 	char columns[8][3][10] = {	"-",		"-",		"-",
@@ -7019,11 +7059,13 @@ void BuildFilterString(char *temp_str, size_t bufsize, FILTER filter)
 	bfs_cat(temp_str, bufsize, " ");
 	bfs_cat(temp_str, bufsize, filter.capcode[0] ? filter.capcode : "         ");
 
-	if ((filter.type == MOBITEX_FILTER) && filter.capcode[strlen(filter.capcode)-1] == 'X')
+	// FIX [FilterCapcodeLen]: guard the negative-index reads. A malformed filters.ini can carry an
+	// empty/1-char capcode for these types (the dialog validates length, ReadFilters does not).
+	if ((filter.type == MOBITEX_FILTER) && strlen(filter.capcode) >= 1 && filter.capcode[strlen(filter.capcode)-1] == 'X')
 	{
 		temp_str[strlen(temp_str)-2] = '\0';
 	}
-	else if ((filter.type == POCSAG_FILTER) && filter.capcode[strlen(filter.capcode)-2] == '-')
+	else if ((filter.type == POCSAG_FILTER) && strlen(filter.capcode) >= 2 && filter.capcode[strlen(filter.capcode)-2] == '-')
 	{
 		temp_str[strlen(temp_str)-2] = '\0';
 	}
@@ -7073,7 +7115,10 @@ void BuildFilterString(char *temp_str, size_t bufsize, FILTER filter)
 		}
 		else
 		{
-			bfs_cat(temp_str, bufsize, filter.wave_number == -1 ? "NoSound" : wave_names[filter.wave_number]);
+			// FIX [WaveNumberBound]: wave_names[] has 11 entries (0..10). A filters.ini wave_number
+			// outside that range (corrupt/hand-edited, or a CB_ERR -1 decremented to -2) indexed
+			// past the array and strlen'd a wild pointer. Treat anything out of range as NoSound.
+			bfs_cat(temp_str, bufsize, (filter.wave_number < 0 || filter.wave_number > 10) ? "NoSound" : wave_names[filter.wave_number]);
 		}
 
 		// FIX [GroupcallScreenHide]: flag this capcode as hidden from the on-screen group view
@@ -7291,7 +7336,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 			{
 				sprintf(szTEMP, "PDW Filters (%u) - ", (unsigned int)Profile.filters.size());
 
-				if (filter.type == TEXT_FILTER)
+				if (index < (int)Profile.filters.size() && Profile.filters[index].type == TEXT_FILTER)	// FIX [LvnItemBounds]: bound the vector access and branch on the SELECTED row's type, not the global 'filter'
 				{
 					strcat(szTEMP, "\"");
 					strcat(szTEMP, Profile.filters[index].text);
@@ -7981,9 +8026,9 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 					{
 						strcpy(temp_filename, szFileFilter); // Full path
 					}
-					else sprintf(temp_filename, "%s\\%s", szPath, szFileFilter);
+					else _snprintf_s(temp_filename, sizeof(temp_filename), _TRUNCATE, "%s\\%s", szPath, szFileFilter);	// FIX [FilterPathBound]
 				}
-				else sprintf(temp_filename, "%s\\%s", szLogPathName, szFileFilter);
+				else _snprintf_s(temp_filename, sizeof(temp_filename), _TRUNCATE, "%s\\%s", szLogPathName, szFileFilter);	// FIX [FilterPathBound]
 
 				if ((pFileFilter = fopen(temp_filename, "a")) == NULL)
 				{
@@ -8100,7 +8145,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 									  "Light Cyan","Blue",     "Magenta", "Sea Green", "Pink",
 									  "Ice Blue",  "Turqoise", "Don't Change"};
 
-	static int capcode_len[7] = { 0, Profile.FlexGroupMode ? 7 : 9, 7, 0, 7, 6, 7 };
+	int capcode_len[7] = { 0, Profile.FlexGroupMode ? 7 : 9, 7, 0, 7, 6, 7 };	// FIX [CapcodeLenStale]: was static - the FlexGroupMode-dependent FLEX entry froze at its boot-time value until restart
 
 	int i, index=-1, str_len, pos, idcControl=IDC_SEPFILTERFILE1;
 	int capcode=0, text=0, captxt=0, label=0;
@@ -8673,7 +8718,8 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 		if (filter.type == MOBITEX_FILTER)
 		{
-			switch (filter.capcode[strlen(filter.capcode)-2])
+			// FIX [FilterCapcodeLen]: guard the -2 index against a malformed short capcode
+			switch (strlen(filter.capcode) >= 2 ? filter.capcode[strlen(filter.capcode)-2] : 0)
 			{
 				case 'R' :
 				CheckDlgButton(hDlg, IDC_FILTERRXTXMAN, BST_UNCHECKED);
@@ -8696,7 +8742,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "3");
 			SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "4");
 
-			if (filter.capcode[strlen(filter.capcode)-2] == '-')	// Contains function number
+			if (strlen(filter.capcode) >= 2 && filter.capcode[strlen(filter.capcode)-2] == '-')	// Contains function number; FIX [FilterCapcodeLen]: guard -2 index
 			{
 				 SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_SETCURSEL, (WPARAM) atoi(&filter.capcode[8]), 0L);
 			}
@@ -9210,7 +9256,7 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 						// Convert 9-digit short addresses to 7-digits
 						if ((strlen(filter.capcode) == 9) && memcmp(filter.capcode, "00", 2) == 0)
 						{
-							if (CompareCapcodes(filter.capcode, "002101249") < 0) memmove(filter.capcode, &filter.capcode[2], strlen(filter.capcode));
+							if (CompareCapcodes(filter.capcode, "002101249") < 0 && strlen(filter.capcode) > 0) memmove(filter.capcode, &filter.capcode[2], strlen(filter.capcode)-1);	// FIX [FlexShortAddrMove]: count was strlen (read 1 byte past capcode[10]); -1 = 7 digits + NUL
 //							if (atoi(filter.capcode) < 2101249) memmove(filter.capcode, &filter.capcode[2], strlen(filter.capcode));
 						}
 					}
@@ -9765,7 +9811,15 @@ BOOL FAR PASCAL FilterCheckDuplicateDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam,
 		}
 		else
 		{
-			if ((strstr(szFilter1, Profile.filters[index1].label) == 0)   ||
+			// FIX [DupDlgStaleIndex]: index1/index2 are statics that survive across dialog opens.
+			// After duplicates were found and the user deleted filters, they can now exceed the
+			// (shrunk) vector, so the strstr calls below would index Profile.filters[] out of
+			// bounds. Invalidate stale indices before touching the vector.
+			if (index1 >= (int)Profile.filters.size() || index2 >= (int)Profile.filters.size())
+			{
+				bDuplicate=false;
+			}
+			else if ((strstr(szFilter1, Profile.filters[index1].label) == 0)   ||
 				(strstr(szFilter2, Profile.filters[index2].label) == 0)   ||
 				(strstr(szFilter1, Profile.filters[index1].capcode) == 0) ||
 				(strstr(szFilter2, Profile.filters[index2].capcode) == 0))
@@ -10675,14 +10729,14 @@ static void TelnetServerDlg_RefreshLists(HWND hDlg)
 	{
 		const TsClientInfo *c = &clients[i];
 		const char *roleStr = (c->role == 1) ? "MASTER" :
-		                     (c->role == 0) ? "SLAVE"  : "—";
+		                     (c->role == 0) ? "SLAVE"  : "-";	// FIX [AsciiRuntime]: was em-dash (mojibake in ANSI listbox)
 		const char *stateStr = c->disconnected ? " (buffered)" : "";
 		char line[160];
 		_snprintf_s(line, sizeof(line), _TRUNCATE,
 			"%s:%d\t%s\t%s%s",
 			c->ip[0] ? c->ip : "?",
 			c->port,
-			c->name[0] ? c->name : "—",
+			c->name[0] ? c->name : "-",	// FIX [AsciiRuntime]: was em-dash
 			roleStr,
 			stateStr);
 		SendMessage(hClients, LB_ADDSTRING, 0, (LPARAM)line);
@@ -10779,7 +10833,7 @@ BOOL FAR PASCAL TelnetServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 			TelnetServerDlg_RefreshLists(hDlg);  // refresh immediately on state change
 			break;
 		case TSS_ERROR:
-			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Error — see pdw_telnet_server.log");
+			SetDlgItemText(hDlg, IDC_TS_STATUS, "Status: Error - see pdw_telnet_server.log");	// FIX [AsciiRuntime]: was em-dash
 			break;
 		}
 		break;
@@ -11494,7 +11548,7 @@ BOOL CenterWindow(HWND hWnd)
 
 BOOL ErrorMessageBox(LPCTSTR lpszText, LPCTSTR lpszTitle, LPCTSTR lpszFile, INT Line)
 {
-	#define ERROR_BUFFER_SIZE 512
+	#define ERROR_BUFFER_SIZE 2048	// FIX [ErrBoxOverflow]: was 512; wsprintf can emit up to 1024 chars and the pre-check counted only lpszText+Format (not lpszFile or the system message)
 
 	static TCHAR Format[] =
 	TEXT("%s\n\n"                                 )
@@ -11518,6 +11572,8 @@ BOOL ErrorMessageBox(LPCTSTR lpszText, LPCTSTR lpszTitle, LPCTSTR lpszFile, INT 
 	//-- allocate the message box buffer
 	hMessageBoxBuffer  = LocalAlloc(LMEM_FIXED, ERROR_BUFFER_SIZE);
 	lpMessageBoxBuffer = LocalLock(hMessageBoxBuffer);
+
+	if (!hMessageBoxBuffer || !lpMessageBoxBuffer) return (FALSE);	// FIX [ErrBoxOverflow]: don't wsprintf into a failed allocation
 
 	//-- get the system error and system error message
 	dwGetLastError = GetLastError();
@@ -12033,7 +12089,7 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 								// Convert 9-digit short addresses to 7-digits
 								if ((strlen(filter.capcode) == 9) && memcmp(filter.capcode, "00", 2) == 0)
 								{
-									if (CompareCapcodes(filter.capcode, "002101249") < 0) memmove(filter.capcode, &filter.capcode[2], strlen(filter.capcode));
+									if (CompareCapcodes(filter.capcode, "002101249") < 0 && strlen(filter.capcode) > 0) memmove(filter.capcode, &filter.capcode[2], strlen(filter.capcode)-1);	// FIX [FlexShortAddrMove]: count was strlen (read 1 byte past capcode[10]); -1 = 7 digits + NUL
 //									if (atoi(filter.capcode) < 2101249) memmove(filter.capcode, &filter.capcode[2], strlen(filter.capcode));
 //									memmove(filter.capcode, &filter.capcode[2], strlen(filter.capcode));
 								}

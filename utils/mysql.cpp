@@ -570,7 +570,12 @@ static BOOL SendQuery(SOCKET s, const char *sql, int sqlLen)
    errOut receives a human-readable message on FALSE (may be NULL). */
 static BOOL ReadQueryResult(SOCKET s, char *errOut, int errOutLen)
 {
-    BYTE pkt[512];
+    // FIX [MysqlErrPktWedge]: was [512]. ReadPacket rejects (without draining) any packet >= bufCap,
+    // and an ERR packet can carry a ~512-byte message (MYSQL_ERRMSG_SIZE) + 9-byte header = ~521
+    // bytes. That rejection was reported as "recv timeout/error" (a TRANSPORT failure), which the
+    // worker retries by reconnecting forever instead of counting it as a server error and dropping
+    // the row after MYSQL_MAX_JOB_RETRIES -> the feed wedged permanently behind one bad row.
+    BYTE pkt[1024];
     int  pktLen = 0;
 
     if (!ReadPacket(s, pkt, sizeof(pkt), &pktLen)) {

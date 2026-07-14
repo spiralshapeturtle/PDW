@@ -453,7 +453,20 @@ static void ApplyMigration(const char *oldId, LONGLONG newId)
     char newStr[32];
     sprintf(newStr, "%lld", newId);
     EnterCriticalSection(&g_cs);
-    char *pos = strstr(g_szChatIds, oldId);
+    // FIX [TgMigrateToken]: match oldId as a COMPLETE ';'/','/space-delimited token, not any
+    // substring. strstr matched the first substring anywhere, so a chat id that is a substring of
+    // another (e.g. -123456 inside -1234567, or a positive id inside a -100... supergroup id)
+    // spliced the middle of a DIFFERENT id and corrupted the persisted chat list.
+    size_t oldLen = strlen(oldId);
+    char *pos = NULL;
+    for (char *scan = g_szChatIds; oldLen > 0 && (scan = strstr(scan, oldId)) != NULL; scan += oldLen)
+    {
+        char before = (scan == g_szChatIds) ? '\0' : scan[-1];
+        char after  = scan[oldLen];
+        BOOL startOk = (scan == g_szChatIds) || before == ';' || before == ',' || before == ' ';
+        BOOL endOk   = (after == '\0') || after == ';' || after == ',' || after == ' ';
+        if (startOk && endOk) { pos = scan; break; }
+    }
     if (pos)
     {
         char tail[512];

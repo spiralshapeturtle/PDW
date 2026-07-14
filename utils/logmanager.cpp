@@ -127,12 +127,19 @@ void LogManager::Reconfigure(const char* path, uint32_t enableMask, int monthNum
     delete[] oldDrain;
 
     // Apply new settings.
+    // FIX [ReconfigureLock]: BuildPath()/Emit() run on the sink WORKER threads and snapshot
+    // m_path/m_monthNumber/m_enableMask under m_cs ([BuildPathSnapshot]); rewriting them here
+    // WITHOUT the lock left that protection one-sided, so a concurrent Write() could read a
+    // half-rewritten m_path and produce a garbage log filename. The LM drain worker is already
+    // joined above, so taking m_cs here cannot deadlock.
+    EnterCriticalSection(&m_cs);
     strncpy_s(m_path, sizeof(m_path), path ? path : "", _TRUNCATE);
     m_enableMask  = enableMask;
     m_monthNumber = monthNumber;
     m_bufEnabled  = bufEnabled;
     m_flushMs     = flushMs ? flushMs : 2000;
     m_stop        = false;
+    LeaveCriticalSection(&m_cs);
 
     if (bufEnabled && bufSlots > 0) {
         m_slots  = bufSlots;

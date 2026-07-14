@@ -860,8 +860,10 @@ LRESULT CALLBACK TmpDlgChildWinProc(HWND hwnd, UINT message, WPARAM wParam, LPAR
 		case WM_CREATE:
 		break;
 
-		case WM_CLOSE:                  // Fall through.
-		if(hbm_chw != NULL)
+		case WM_DESTROY:                // FIX [AboutBmpLeak]: the About dialog ends via EndDialog,
+		case WM_CLOSE:                  // which sends WM_DESTROY (not WM_CLOSE) to this child window,
+		                                // so the bitmap was only freed on WM_CLOSE - one HBITMAP leaked
+		if(hbm_chw != NULL)             // per About open. Free on WM_DESTROY too. Fall through.
 		{      // Delete bitmap.
 			DeleteObject(hbm_chw);
 			hbm_chw = NULL;

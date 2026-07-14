@@ -177,6 +177,7 @@ BOOL Start_Capturing(void)
 
 		if(!lp_memory_block)
 		{
+			waveInReset(hWaveIn);	// FIX [WaveInErrReset]: reclaim queued buffers before close, else waveInClose fails (WAVERR_STILLPLAYING) and free_audio_buffers frees blocks the driver still holds
 			waveInClose(hWaveIn);
 			free_audio_buffers();
 			// FIX [WaveOutLeak]: close hWaveOut on this error path too — waveOutOpen() above
@@ -202,6 +203,7 @@ BOOL Start_Capturing(void)
 		if (waveInPrepareHeader(hWaveIn, &WaveHeader[ctr], (UINT)sizeof(WaveHeader[ctr])) != MMSYSERR_NOERROR ||
 		    waveInAddBuffer   (hWaveIn, &WaveHeader[ctr], (UINT)sizeof(WaveHeader[ctr])) != MMSYSERR_NOERROR)
 		{
+			waveInReset(hWaveIn);	// FIX [WaveInErrReset]: reclaim queued buffers before close (see above)
 			waveInClose(hWaveIn);
 			free_audio_buffers();
 			// FIX [WaveOutLeak]: close hWaveOut on this error path too (see above).
@@ -211,6 +213,7 @@ BOOL Start_Capturing(void)
 	}
 
 	last_buff_processed = -1;
+	buffers_ready = 0;	// FIX [BuffersReadyReset]: clear any stale count from a prior session's waveInReset flush so the first Process_ReadyBuffers does not re-queue an already-queued WAVEHDR
 
 	Reset_ATB(); // Reset all variables used by Audio_To_Bits().
 
@@ -252,18 +255,19 @@ BOOL Stop_Capturing(void)
 
 	// Close audio connection
 	// FIX [AudioCaptureError]: was if(!(waveInClose(...))) — MMSYSERR_NOERROR==0, so !0==true caused early return, leaking buffers
-	if (waveInClose(hWaveIn) != MMSYSERR_NOERROR)
-	{
-		return(FALSE);
-	}
+	BOOL bClosed = (waveInClose(hWaveIn) == MMSYSERR_NOERROR);
 
-	// Free memory used for audio buffers.
+	// FIX [StopCapBufferLeak]: free the buffers UNCONDITIONALLY, even when waveInClose reports
+	// an error. The old early-return skipped free_audio_buffers(), leaving audio_buffer_cnt at
+	// NUMBER_BUFFERS; the next Start_Capturing then incremented it past the array bound, so a
+	// later free_audio_buffers() walked h_audio_memory_block[] out of bounds (heap corruption).
+	// waveInReset() above already reclaimed every queued buffer, so freeing here is safe.
 	free_audio_buffers();
 
 	buffers_ready = 0;
 	last_buff_processed = -1;
 
-	return(TRUE);
+	return(bClosed);
 }
 
 // Freeup audio buffers and reset "audio_buffer_cnt".

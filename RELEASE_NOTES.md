@@ -1,3 +1,107 @@
+# PDW 4.0.5 - Release Notes
+
+PDW 4.0.5 is a stability and hardening release. It bundles the new high-resolution toolbar and a
+window-position safety fix with the results of a full source-code audit: a broad sweep for memory
+safety, buffer handling, and rare corner-case defects across the decoders, the output feeds, and the
+input paths. Most fixes target unusual conditions - corrupt or truncated over-the-air frames, feeds
+under stress, reconnect timing, and misconfigured or corrupt `pdw.ini` / `filters.ini` files - so the
+day-to-day behaviour is unchanged. No decoder output or configuration format changes; existing
+`pdw.ini` and `filters.ini` files work unchanged.
+
+## New high-resolution toolbar + themed dialogs (FIX [ToolbarHiResIcons])
+The toolbar now uses 72x72 32-bit icons with a real alpha channel, box-filtered down to the current
+DPI, and the application manifest opts in to Common Controls v6 - so every dialog also gets the modern
+themed look instead of the classic Windows 2000 style.
+
+## Window never opens off-screen (FIX [WindowPosMinimized])
+If PDW was closed while minimized, an older build could save an off-screen window position
+(-32000,-32000) and start up invisible (only the tray icon reachable). The saved position is now
+sanity-checked against the connected monitors, and a corrupt or zero window size falls back to the
+default. PDW always opens on a visible part of the desktop.
+
+## Signal-meter stays aligned in the toolbar (FIX [SigindBandAlign])
+The small signal-strength meter in the top-right corner is now vertically centered in the actual
+toolbar band instead of being pinned to a fixed offset. Previously, once the toolbar settled to its
+themed steady-state height (slightly shorter than at startup, also re-triggered by the repaint after a
+brief COM-port drop), the meter could drift down past the divider into the title-bar band. It now
+shares the same anchor as the divider and RX-Q box, so it stays put.
+
+## Divider line stays continuous under the signal meter (FIX [SigindDividerClip])
+The horizontal divider line directly under the toolbar could break off (leave a gap) beneath the
+signal meter. Once the toolbar settled to its shorter themed steady-state, the meter's black
+background box reached down onto the divider row and painted over that segment; because the meter is
+repainted on toolbar hover without redrawing the divider, the gap stuck until the next full repaint.
+The meter box is now kept strictly above the divider row, and the meter repaint also restores the
+divider segment beneath it, so the line stays unbroken. Correct at startup as before.
+
+## Filtered-pane scrollbar accuracy (FIX [PaneFilterScrollbarSync])
+The vertical scrollbar of the Filtered pane is now refreshed on every appended line, so it always
+reflects whether older messages have scrolled off the top. The busy Monitored pane already did this
+implicitly via its constant auto-scroll; the low-traffic Filtered pane could, in edge cases (after a
+buffer wrap, or while scrolled up), be left with a scrollbar that lagged the true content extent.
+
+## Group-call logging fix (FIX [GroupcallLogFilename])
+During a FLEX group-call conversion the message/filter log could, for the 2nd and later members of a
+group, write log lines using a stale internal filename - occasionally routing monitor-log lines into
+the filter file. The log filename is now re-derived for every member. Screen and feed output were not
+affected.
+
+## Decoder robustness on corrupt frames
+- **POCSAG uncorrectable capcodes (FIX [PocsagCapcodeGuard])** - a RIC address word with an
+  uncorrectable bit error is again shown as `???????` instead of a plausible-but-wrong capcode. The
+  guard had been rendered ineffective by an earlier change.
+- **POCSAG long-message safety (FIX [PocsagAlpBound])** - a long run of message codewords without an
+  intervening address word can no longer overrun the internal alpha buffer.
+- **MOBITEX (FIX [MobitexMpakOverflow], [MobitexStaleMpak], [MobitexResCompare], [MobitexBaseIdParse])** -
+  fixed a buffer overflow on certain rare MPAK service messages with a full ESN, a stale MPAK label
+  that could carry over to the next frame, an RX/TX-MAN comparison bug, and hardened the optional
+  `base-ids.txt` parser against malformed lines.
+- **ACARS (FIX [AcarsBitrateTerm])** - the bitrate field is now terminated, so a previous protocol's
+  value can no longer stick to it after a mode switch.
+
+## Output-feed reliability
+- **SMTP monitor-window freeze (FIX [SmtpAddRespDeadlock])** - disabling SMTP (or exiting) while the
+  SMTP monitor/test window was open could deadlock the whole application. The status-line update is
+  now non-blocking.
+- **SMTP TLS + recipients (FIX [SmtpImplicitTlsFail], [SmtpEmptyRcpt])** - a failed implicit-TLS
+  (port 465) handshake now fails cleanly instead of hanging on timeouts or silently falling back to
+  plaintext; an empty recipient in a `;`-separated list is skipped instead of dropping the whole mail.
+- **Pushover (FIX [PushoverFirstConnectRetry])** - a transient network hiccup on the first connection
+  attempt no longer silently drops a single message; it now retries like the other feeds.
+- **SQLite (FIX [SqliteSizeCap], [SqliteStopDrain])** - the optional maximum-size cap no longer risks
+  emptying the whole table on a database without incremental auto-vacuum (it now measures real data
+  size); queued rows are flushed on shutdown/reconfigure instead of being discarded.
+- **MySQL (FIX [MysqlErrPktWedge])** - an oversized server error reply no longer wedges the feed in an
+  endless reconnect loop behind one row.
+- **Telnet server (FIX [TelnetPartialSend], [TelnetReplayDup])** - a slow client can no longer receive
+  a torn, half-sent line, and backlog replay after a reconnect no longer duplicates the lines that
+  arrive during the replay.
+- **MQTT (FIX [MqttSubRollback])** - an oversized group-subscriber list degrades to a dropped entry
+  instead of malformed JSON.
+- **Telegram (FIX [TgMigrateToken])** - a chat migration now matches the exact chat id rather than any
+  substring, so it can no longer corrupt a different id in the list.
+- **Central log (FIX [ReconfigureLock])** - applying new log settings while a feed is writing can no
+  longer produce a garbled log filename.
+
+## Input-path hardening
+- **COM port lock-out (FIX [ComPortReopenLeak])** - if the serial reader thread had to be force-stopped
+  in the middle of a reconnect, an exclusively-opened COM handle could leak and lock PDW out of its own
+  port until a restart. The in-flight handle is now always released.
+- **Sound card (FIX [WaveInErrReset], [StopCapBufferLeak], [BuffersReadyReset])** - audio buffers are
+  correctly reset/released on device errors and restarts, preventing a rare buffer-tracking overrun and
+  stale-audio processing after a stop/start cycle.
+
+## Miscellaneous safety fixes
+- Bounds and termination hardening across clipboard copy, several dialogs (logfile, filter, scrollback
+  options), the error dialog, filter-label substitution, and path building - all guarding against
+  overly long paths, malformed `filters.ini` fields, or unusual selections.
+- Printer output now paginates instead of clipping everything past the first page.
+- Language table loading is read-only (works from a read-only install folder) and handles high-bit
+  characters correctly.
+- The About-dialog logo bitmap is freed on close (was leaking one handle per open).
+
+---
+
 # PDW 4.0.3 - Release Notes
 
 PDW 4.0.3 includes a targeted reliability fix for the MQTT output feed, plus a small display option
@@ -45,6 +149,45 @@ lines and keep a small margin between the newest row and the pane edge below it.
 - Defensive clamp for extremely short windows: Pane1's whole-line rounding can no longer claim
   more height than remains for Pane2, so Pane2 and its header stay visible down to the smallest
   usable window size ([PaneShrinkClamp]).
+
+## Main window could start invisible / far off-screen (FIX [WindowPosMinimized])
+Exiting PDW while the main window was minimized to the taskbar could make the next start appear
+"windowless": the process ran (tray icon, dialogs and decoding all worked) but the main window was
+nowhere to be seen. Cause: Windows parks a minimized window at the virtual position
+-32000,-32000, PDW's `WM_MOVE` handler recorded that as the window position, and an exit while
+minimized persisted it to `pdw.ini` - the next start then created the window 32000 pixels
+off-screen. An existing exit-time guard only covered the minimize-to-**tray** path, not a plain
+taskbar minimize. This was a long-standing latent bug, not tied to any recent feature.
+
+- The window position is no longer recorded while the window is minimized or in the tray, so the
+  last real on-screen position is what gets saved ([WindowPosMinimized] in `PDW.cpp`).
+- Defense in depth at startup: if the position saved in `pdw.ini` does not touch any monitor
+  (e.g. a config poisoned by an older build, or a saved position on a since-removed second
+  monitor), PDW falls back to the top-left of the primary work area instead of creating the
+  window out of sight ([WindowPosMinimized] in `Initapp.cpp`).
+
+## High-resolution toolbar icons (FIX [ToolbarHiResIcons])
+The 13 toolbar buttons have a completely new icon set. The old icons were 18x18 pixel, 16-color
+bitmaps from the original PDW era; on scaled displays they were stretched up pixel-by-pixel, which
+made them look blocky and blurry, and even at 100 % they showed their age.
+
+- New assets: each icon is a 72x72, 32-bit image with a real (premultiplied) alpha channel, drawn
+  in a clean modern outline style (folder, copy, pane-copy up/down, save, print, options, filter,
+  statistics, pause, help, clear, mode).
+- At startup the icons are smoothly **downscaled** (area-averaging box filter) to the exact
+  DPI-scaled button size - 18/23/27/36 px at 100/125/150/200 % - instead of being stretched up,
+  so they render crisp and anti-aliased at every scale factor. GDI's `StretchBlt` is deliberately
+  not used for this: its fast mode is blocky and its smooth mode does not reliably preserve the
+  alpha channel.
+- The imagelist is now a true 32-bit alpha imagelist (no more color-key transparency keyed off the
+  corner pixel), which removes the jagged icon outlines.
+- `pdw.manifest` now declares the **Common Controls v6** dependency. This is required for
+  alpha-blended toolbar imagelists and, as a side effect, gives all PDW dialogs the modern themed
+  Windows look (visual styles) instead of the classic Windows-2000 style. Behavior of the dialogs
+  is unchanged.
+- The old 18x18 16-color icon set has been retired: on Windows 10/11 (and the themed Common
+  Controls v6 look) the new icons fit the platform, and maintaining two render paths is not
+  worth it. The original bitmaps remain available in the git history.
 
 ## MQTT feed reliability
 

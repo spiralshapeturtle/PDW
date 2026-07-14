@@ -402,6 +402,17 @@ void display_line(PaneStruct *pane)
 		rect.right	= pane->cxClient;
 
 		InvalidateRect(pane->hWnd, &rect, TRUE);
+
+		// FIX [PaneFilterScrollbarSync]: keep the on-screen vertical scrollbar authoritative
+		// on EVERY appended line, not just when auto-scrolling at the bottom. The high-traffic
+		// Monitored pane effectively refreshes its range on every message via the auto-scroll
+		// branch above; the low-traffic Filtered pane could otherwise be left with an OS scroll
+		// range that lags the true iVscrollMax (e.g. after a buffer wrap or while scrolled up),
+		// so its scrollbar failed to reflect that content had scrolled off the top. Re-asserting
+		// the current range here is a no-op when nothing changed and cannot mis-show the bar
+		// (range 0 hides it, >0 shows it) - it only makes the bar match reality.
+		SetScrollRange(pane->hWnd, SB_VERT, 0, pane->iVscrollMax, FALSE);
+		SetScrollPos  (pane->hWnd, SB_VERT,    pane->iVscrollPos, TRUE);
 	}
 	UpdateWindow(pane->hWnd);
 
@@ -798,12 +809,17 @@ void Check4_MissedGroupcalls()
 
 			assignedframe = GroupFrame[groupbit];	// Get assigned frame
 			int origAssigned = assignedframe;
-			int origCurrent  = currentframe;
+			// FIX [MissedGroupWrap]: operate on a per-iteration copy. The +128 cycle-wrap
+			// adjustment below used to mutate the shared 'currentframe', so once one groupbit
+			// triggered it every later groupbit in the same pass compared against an inflated
+			// frame -> a future group falsely declared MISSED and its members wiped.
+			int cf = currentframe;
+			int origCurrent  = cf;
 
-			if ((assignedframe > 120) && (currentframe < 8)) currentframe  += 128;	// Assigned frame was in previous cycle
-			if ((assignedframe < 8) && (currentframe > 120)) assignedframe += 128;	// Assigned frame is in next cycle
+			if ((assignedframe > 120) && (cf < 8)) cf += 128;	// Assigned frame was in previous cycle
+			if ((assignedframe < 8) && (cf > 120)) assignedframe += 128;	// Assigned frame is in next cycle
 
-			difference = assignedframe-currentframe;	// >0 = expected in future; <=0 = at/past expected
+			difference = assignedframe-cf;	// >0 = expected in future; <=0 = at/past expected
 
 			// Declare missed only when we are MORE than GROUP_GRACE_FRAMES past the
 			// expected frame. Previously this fired at difference <= 0, which marked
@@ -881,7 +897,10 @@ void Remove_MissedGroupcall(int groupbit)
 	                          szCurrentDate, szCurrentTime,
 	                          groupbit + 2029568, GroupFrame[groupbit]);
 	if (lmPos < 0) lmPos = 0;
-	for (int nCapcode = 1; aGroupCodes[groupbit][nCapcode] > 0; nCapcode++)
+	// FIX [MissedGroupScanBound]: bound the member scan (same fix shape as [SortGroupBound]).
+	// A full slot (indices 1..MAXIMUM_GROUPSIZE-1 with no 0 sentinel) otherwise read one int
+	// past the row into the next groupbit's counter and could keep walking.
+	for (int nCapcode = 1; nCapcode < MAXIMUM_GROUPSIZE && aGroupCodes[groupbit][nCapcode] > 0; nCapcode++)
 	{
 		int n;
 		if (aGroupCodes[groupbit][nCapcode] == 9999999)
@@ -941,7 +960,7 @@ void ShowMessage()
 	bool bMATCH=false, bMONITOR_ONLY=false, bFILTERED=false;
 	bool bShowMessage=true, bFragment=false, bAssembled=false, bGroupcode;
 	bool bNumeric=false;
-	bool bNewFile, bNewLine;					// PH: To indicate if the logfile is new / already exists
+	bool bNewFile = false, bNewLine;			// PH: To indicate if the logfile is new / already exists
 	bool bSeparator[2] = { true, true };		// PH: Set if a separator is needed
 	bool bCombine[2] = { false, false };		// PH: Used for grouping not-group messages (per pane)
 	// Per-pane combine decision: each pane only collapses against its own Previous_MSG[pane].
@@ -1765,7 +1784,15 @@ void ShowMessage()
 			CreateDateFilename("", NULL);	// Get current date to use as filename
 		}
 
-		if (Profile.logfile_enabled && bMONITOR && !pLogFile)
+		// FIX [GroupcallLogFilename]: always (re)derive szFilename here, even when the
+		// monitor log is already open. In a group-call conversion ShowMessage runs once per
+		// subscriber and the end-of-function CLOSE_FILES is skipped while iConvertingGroupcall,
+		// so pLogFile stays LM_FILE_OPEN across subscribers. The old "&& !pLogFile" gate then
+		// left this call's LOCAL szFilename uninitialised (or, after the filter block below
+		// overwrote it, holding the .flt path) yet still passed it to WriteLineTo -> monitor
+		// lines written to a garbage/wrong path. Re-deriving only recomputes the name (see
+		// the [LogRejected] path, which already does this).
+		if (Profile.logfile_enabled && bMONITOR)
 		{
 			LogFileHandling(MONITOR, szFilename, OPEN_FILE);
 			bNewFile = (!FileExists(szFilename)) ? true : false;
@@ -1865,7 +1892,10 @@ void ShowMessage()
 
 			if (bFILTERED)
 			{
-				if (Profile.filterfile_enabled && !pFilterFile)
+				// FIX [GroupcallLogFilename]: re-derive szFilename every call (see monitor-log
+				// note above); dropping "&& !pFilterFile" stops group-call subscribers 2..N from
+				// writing through a stale szFilename.
+				if (Profile.filterfile_enabled)
 				{
 					LogFileHandling(FILTER, szFilename, OPEN_FILE);
 					bNewFile = (!FileExists(szFilename)) ? true : false;
@@ -2495,16 +2525,23 @@ char LogFileHandling(int file, char *szFileName, int action)
 
 		if (!FileExists(Profile.LogfilePath)) CreateDirectory(Profile.LogfilePath, NULL);
 
-		if (strstr(filename, "\\") == 0)	// if "\" is in filename
+		// FIX [LogPathBound]: bound the path build. Callers pass a MAX_PATH buffer, but a
+		// LogfilePath near MAX_PATH plus a long filename/date+ext could overflow the old
+		// unchecked sprintf/strcat pair. _snprintf_s(_TRUNCATE) caps at MAX_PATH-1 + NUL.
+		if (strstr(filename, "\\") == 0)	// if no "\" is in filename
 		{
-			sprintf(szFileName, "%s\\", Profile.LogfilePath);
+			_snprintf_s(szFileName, MAX_PATH, _TRUNCATE, "%s\\", Profile.LogfilePath);
 		}
 		if (UseDate)
 		{
-			strcat(szFileName, szFilenameDate);
-			strcat(szFileName, ext);
+			size_t n = strlen(szFileName);
+			_snprintf_s(szFileName + n, MAX_PATH - n, _TRUNCATE, "%s%s", szFilenameDate, ext);
 		}
-		else strcat(szFileName, filename);
+		else
+		{
+			size_t n = strlen(szFileName);
+			_snprintf_s(szFileName + n, MAX_PATH - n, _TRUNCATE, "%s", filename);
+		}
 
 		return(*szFileName);
 	}
@@ -2556,7 +2593,10 @@ char *MakeFilterLabel(char *szLabel, char *szCapcode, char *szNewLabel)
 				*szNewLabel++ = szCapcode[tmp];
 				szLabel++;
 			}
-			*szNewLabel++ = *szLabel++;
+			// FIX [FilterLabelTerm]: a label ending in '%' or '%<digit>' leaves szLabel on the
+			// NUL here; the old unconditional copy emitted the terminator AND advanced past it,
+			// so the outer while then read bytes beyond the label string. Stop at the NUL.
+			if (*szLabel) *szNewLabel++ = *szLabel++;
 		}
 		else *szNewLabel++ = *szLabel++;
 	}
@@ -2621,9 +2661,16 @@ bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay)
 			}
 			_snprintf_s(szWavefileTMP[CURRENT], sizeof(szWavefileTMP[CURRENT]), _TRUNCATE, "%s\\%s%s.wav", szWavePathName, Current_MSG[MSG_CAPCODE], szText);
 
+			// FIX [WavCapcodeOffset]: only take the tail-of-capcode offset when the filter capcode
+			// is at least as long as MSG_CAPCODE. A shorter filter capcode (e.g. a Mobitex 'T'-mark
+			// or a short TEXT_FILTER capcode with '?') made the offset negative -> strcpy from before
+			// the capcode[] field. Fall back to the whole filter capcode otherwise.
 			if ((!FileExists(szWavefileTMP[CURRENT])) && (strstr(Profile.filters[iMatch].capcode, "?")))
 			{
-				strcpy(szCapcode, Profile.filters[iMatch].capcode+(strlen(Profile.filters[iMatch].capcode)-strlen(Current_MSG[MSG_CAPCODE])));
+				if (strlen(Profile.filters[iMatch].capcode) >= strlen(Current_MSG[MSG_CAPCODE]))
+					strcpy(szCapcode, Profile.filters[iMatch].capcode+(strlen(Profile.filters[iMatch].capcode)-strlen(Current_MSG[MSG_CAPCODE])));
+				else
+					strcpy(szCapcode, Profile.filters[iMatch].capcode);
 
 				while ((p=strchr(szCapcode, '?')))
 				{
@@ -3347,7 +3394,8 @@ void CollectLogfileLine(char *string, bool bFilter)
 			{
 				if (Profile.monitor_acars)
 				{
-					for (int pos=0; Current_MSG[MSG_MESSAGE][pos]!=0; pos++)
+					// FIX [LogLinefeedBound]: cap growth - each newline char expands to "\n"+spacing spaces.
+					for (int pos=0; Current_MSG[MSG_MESSAGE][pos]!=0 && strlen(szLogFileLine)+(size_t)spacing+3 < sizeof(szLogFileLine); pos++)
 					{
 						if (Current_MSG[MSG_MESSAGE][pos] == char(23))
 						{
@@ -3361,7 +3409,8 @@ void CollectLogfileLine(char *string, bool bFilter)
 				{
 					if (Current_MSG[MSG_MOBITEX][0] && bFilter)
 					{
-						for (int pos=0; Current_MSG[MSG_MOBITEX][pos]!=0; pos++)
+						// FIX [LogLinefeedBound]: cap growth - each 0xbb expands to "\n"+spacing spaces.
+						for (int pos=0; Current_MSG[MSG_MOBITEX][pos]!=0 && strlen(szLogFileLine)+(size_t)spacing+3 < sizeof(szLogFileLine); pos++)
 						{
 							if (Current_MSG[MSG_MOBITEX][pos] == '\xbb')
 							{
@@ -3378,7 +3427,8 @@ void CollectLogfileLine(char *string, bool bFilter)
 				}
 				else if ((strstr(Current_MSG[MSG_MESSAGE], "\xbb") != 0) && Profile.Linefeed)
 				{
-					for (int pos=0; Current_MSG[MSG_MESSAGE][pos]!=0; pos++)
+					// FIX [LogLinefeedBound]: cap growth - each newline char expands to "\n"+spacing spaces.
+					for (int pos=0; Current_MSG[MSG_MESSAGE][pos]!=0 && strlen(szLogFileLine)+(size_t)spacing+3 < sizeof(szLogFileLine); pos++)
 					{
 						if (Current_MSG[MSG_MESSAGE][pos] == '\xbb')
 						{

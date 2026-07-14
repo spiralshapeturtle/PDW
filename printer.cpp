@@ -71,6 +71,15 @@ void PrintBuffer(LPSTR lpBuffer)
 			{
 				prtX = 0;
 				prtY += tm.tmHeight + tm.tmExternalLeading;
+				// FIX [PrinterPaging]: break to a new physical page once we pass the printable
+				// height. Without this the loop kept advancing prtY with no EndPage/StartPage, so
+				// everything beyond the first page was drawn off-page and silently clipped.
+				if (prtY + (tm.tmHeight + tm.tmExternalLeading) > GetDeviceCaps(printdlg.hDC, VERTRES))
+				{
+					EndPage(printdlg.hDC);
+					StartPage(printdlg.hDC);
+					prtY = 0;
+				}
 				s++;
 				continue;
 			}

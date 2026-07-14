@@ -41,7 +41,12 @@ void GetFilePath(const char* filepath, char* buffer, int buffersize)
 
 	if ((filepath[1] == ':') || (filepath[1] == '\\'))
 	{
-		int i = (int)(strrchr(filepath, '\\') - filepath);
+		// FIX [GetFilePathNull]: a drive-relative path with no backslash (e.g. "C:name.log")
+		// makes strrchr return NULL, and NULL-filepath is a garbage/negative offset that then
+		// drove strncpy with a bogus length. Guard the NULL case.
+		const char *bs = strrchr(filepath, '\\');
+		if (!bs) { buffer[0] = '\0'; return; }
+		int i = (int)(bs - filepath);
 		int n = (i < buffersize - 1) ? i : buffersize - 1;
 		strncpy(buffer, filepath, n);
 		buffer[n] = '\0';

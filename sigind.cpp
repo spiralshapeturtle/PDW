@@ -115,7 +115,25 @@ void DrawSigInd(HWND hwnd)
 {
 	HDC hdc;
 	RECT r;
-	int x=Scale(5),y=Scale(4),bw=Scale(bms.bmWidth),bh=Scale(bms.bmHeight);	// FIX [DpiScale]: geschaalde sigind
+	int x=Scale(5),bw=Scale(bms.bmWidth),bh=Scale(bms.bmHeight);	// FIX [DpiScale]: geschaalde sigind
+	// FIX [SigindBandAlign]: center the meter vertically in the ACTUAL toolbar band
+	// (g_cyToolbar) instead of a fixed top offset. y = Scale(4) was tuned for the toolbar
+	// height at startup; when the toolbar re-autosizes shorter to its themed steady-state
+	// (e.g. after a WM_THEMECHANGED or a COM-port-loss-triggered repaint), the divider/RX-Q
+	// box (anchored to g_cyToolbar) moved up while the meter stayed at the fixed offset, so
+	// the meter box overflowed past the divider into the title-bar band. Same anchor = no drift.
+	int y = (g_cyToolbar - bh) / 2;
+	if (y < Scale(1)) y = Scale(1);
+	// FIX [SigindDividerClip]: keep the black meter box STRICTLY ABOVE the g_cyToolbar
+	// divider row. The centered y above, floor-clamped, was fine at startup (tall toolbar)
+	// but when the toolbar re-autosizes to its shorter themed steady-state the box bottom
+	// (bh+y, the Rectangle fill runs to bh+y since bottom=bh+y+1 is exclusive) reached or
+	// crossed g_cyToolbar, so the black fill erased the divider line under the gauge. Only
+	// the PANE1 path draws that full-width divider; the hover (WM_NOTIFY) and per-second
+	// (PANERXQUAL) repaints never redraw it, so the gap stuck (the line "stopped" under the
+	// gauge). Clamp y down so the fill stays clear of the divider row.
+	if (y + bh > g_cyToolbar - 1) y = g_cyToolbar - 1 - bh;
+	if (y < 0) y = 0;
 	si_index=0;  // this is used by UpdateSigInd().
 	extern double dRX_Quality;
 
@@ -152,6 +170,17 @@ void DrawSigInd(HWND hwnd)
 			StretchBlt(hdc,sig_rect.left,sig_rect.top, bw, bh, hdcMemory, 0, 0, bms.bmWidth, bms.bmHeight, SRCPAINT);
 			DeleteDC(hdcMemory);
 		}
+
+		// FIX [SigindDividerClip]: proactively restore the toolbar/title-bar divider segment
+		// under the gauge. Only the PANE1 path draws this dark-gray line (at g_cyToolbar,
+		// full width); the hover (WM_NOTIFY) and per-second (PANERXQUAL) repaints never do.
+		// Redrawing it here lets an already-broken line self-heal on the next meter repaint
+		// instead of waiting for a full WM_PAINT. The box now stays above g_cyToolbar (see
+		// the y clamp above), so this line sits cleanly just below the gauge, matching PANE1.
+		SelectObject(hdc, SysPEN[DARKGRAY]);
+		MoveToEx(hdc, sig_rect.left, g_cyToolbar, NULL);
+		LineTo(hdc, r.right, g_cyToolbar);
+
 		ReleaseDC(hwnd,hdc);
 		show_sigind(0, 0);	// show sigind needle
 	}

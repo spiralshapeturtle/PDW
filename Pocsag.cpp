@@ -205,11 +205,14 @@ void POCSAG::process_word(int fn2)
 				if (errl > 2)
 				{
 //					sr ^= 0x1000;	// keep error correcting info also
-					message_color_alp[nalp]=COLOR_BITERRORS;
+					// FIX [PocsagAlpBound]: alp[]/message_color_alp[] are MAX_STR_LEN; nalp only
+					// resets in reset() (address/IDLE/-1), so a long run of message codewords
+					// with no address word could overrun them. Cap all writes at the buffer size.
+					if (nalp < MAX_STR_LEN-1) message_color_alp[nalp]=COLOR_BITERRORS;
 				}
-				else message_color_alp[nalp]=COLOR_MESSAGE;
+				else if (nalp < MAX_STR_LEN-1) message_color_alp[nalp]=COLOR_MESSAGE;
 
-				alp[nalp++] = sr;
+				if (nalp < MAX_STR_LEN-1) alp[nalp++] = sr;
 
 				srca = 0;
 			}
@@ -316,11 +319,17 @@ void POCSAG::show_addr(bool bAlpha)
 	// process_word) is wiped by the mask below, so detect it FIRST and apply the
 	// telnet RXQ penalty here. Mirrors p2kflexDecoder Pocsag.cpp:283
 	// (RXQ_ApplyPenaltyBits(100)). Telnet RXQ only — display logic unchanged.
-	if (pocaddr > 0x3fffffl) Rxq_ApplyPenaltyBits(100);
+	// FIX [PocsagCapcodeGuard]: the uncorrectable-RIC flag (bit 0x400000, set in
+	// process_word) is wiped by the mask below, so the old "> 0x3fffffl" test that ran
+	// AFTER the mask was dead code and every bad capcode rendered as a valid one. Capture
+	// the flag FIRST (mirrors p2kflexDecoder show_addr, which tests before masking); this
+	// also drives the telnet RXQ penalty that FIX [RxqPocsagCapcode] added.
+	bool bBadCapcode = (pocaddr > 0x3fffffl);
+	if (bBadCapcode) Rxq_ApplyPenaltyBits(100);
 
 	pocaddr = pocaddr & 0x1fffffl;
 
-	if (pocaddr > 0x3fffffl)	// If error in capcode don`t display it.
+	if (bBadCapcode)	// If error in capcode don`t display it.
 	{
 		strcpy(Current_MSG[MSG_CAPCODE], "???????");
 		function=0;

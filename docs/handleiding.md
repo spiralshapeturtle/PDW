@@ -964,6 +964,8 @@ Het systeemvakpictogram biedt:
 
 PDW declareert `System DPI Aware` in zijn toepassingsmanifest. Lettertypen, werkbalk en indeling worden herberekend vanuit de werkelijke scherm-DPI bij het opstarten. PDW wordt correct weergegeven op monitoren met 125 %, 150 % en 200 % schaling (4K / HiDPI) zonder vervaging of afkapping.
 
+De werkbalkknoppen gebruiken een hoge-resolutie-iconenset: elk icoon is opgeslagen als een 72x72 32-bits afbeelding met alfakanaal en wordt vloeiend verkleind naar de exacte knopgrootte voor uw schermschaling, zodat de iconen bij elke schaalfactor scherp en anti-aliased blijven. PDW gebruikt daarnaast de moderne Windows-stijl (Common Controls v6) voor zijn dialoogvensters.
+
 ---
 
 ## 18. Meerdere instanties / titelbalk
@@ -1025,6 +1027,9 @@ PDW opent de COM-poort met `GENERIC_READ | GENERIC_WRITE`-machtigingen en share-
 
 **Hoge-DPI-indeling ziet er verkeerd uit**
 - Zorg ervoor dat u de release-build uitvoert. Debug-builds bevatten mogelijk niet het DPI-bewuste manifest.
+
+**Hoofdvenster is niet zichtbaar na het starten (alleen het tray-icoon werkt)**
+- Een oudere PDW-build kon de Windows-positie van een geminimaliseerd venster (-32000,-32000) opslaan in `pdw.ini` wanneer PDW geminimaliseerd werd afgesloten; de volgende start plaatste het venster dan ver buiten beeld. Huidige builds herstellen dit automatisch bij het opstarten (het venster valt terug naar linksboven op de primaire monitor). Gebruikt u een oudere build: sluit PDW, open `pdw.ini` en zet `xPos=0` en `yPos=0`.
 
 ---
 

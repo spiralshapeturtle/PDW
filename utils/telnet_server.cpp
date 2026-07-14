@@ -83,6 +83,7 @@ typedef struct {
     ULONGLONG   disconnectTickMs;
     BOOL        reconnectReplay;               /* emit <BUFFER_START> on next tick */
     int         replayCursor;                  /* index in g_tsBacklog when replaying */
+    int         replayEndHead;                 /* FIX [TelnetReplayDup]: backlog head snapshot at replay start; replay terminates here, not at the live (moving) head */
     int         replayLineCount;               /* incremented per replayed line, reported in event */
     /* per-client recv buffer for line-based CLIENT:/ROLE: parsing */
     char        rxbuf[256];
@@ -282,11 +283,16 @@ static BOOL SendToClient(int idx, const char *data, int len)
             /* Non-blocking socket: WOULDBLOCK means the kernel buffer is full.
             ** That's effectively a slow/stuck client — drop the partial line and
             ** count an error. Three strikes -> disconnect. */
+            // FIX [TelnetPartialSend]: if PART of this line already went on the wire (sent > 0) and
+            // we now hit WOULDBLOCK, the client holds a torn, unterminated prefix - continuing would
+            // glue the next line onto it (garbled capcode/marker). Disconnect immediately so the
+            // client reconnects and replays cleanly from the backlog, instead of leaving a torn line.
+            // A send that placed nothing (sent == 0) keeps the old strike-and-skip behaviour.
             c->sendErrCount++;
-            TsLog("send() to %s:%d failed err=%d (count=%d)",
+            TsLog("send() to %s:%d failed err=%d (count=%d, sent=%d)",
                   inet_ntoa(c->addr.sin_addr), ntohs(c->addr.sin_port),
-                  err, c->sendErrCount);
-            if (c->sendErrCount > 2) {
+                  err, c->sendErrCount, sent);
+            if (sent > 0 || c->sendErrCount > 2) {
                 closesocket(c->sock);
                 c->sock = INVALID_SOCKET;
                 c->disconnected = TRUE;
@@ -1127,19 +1133,20 @@ static void FlushReplay(void)
                 n--;
             }
             c->replayCursor    = idx;
+			c->replayEndHead   = g_tsBacklogHead;   /* FIX [TelnetReplayDup]: snapshot the head at replay start */
             c->replayLineCount = 0;
         }
 
         /* Emit up to 16 entries per tick */
         int budget = 16;
         while (budget-- > 0) {
-            if (c->replayCursor == g_tsBacklogHead) {
+            if (c->replayCursor == c->replayEndHead) {	/* FIX [TelnetReplayDup]: snapshot, not live head - lines arriving mid-replay go out live via FanOutLine; chasing the moving head re-sent them (dupes) */
                 /* done */
                 static const char ftr[] = "<BUFFER_STOP>\r";
                 SendToClient(i, ftr, (int)sizeof(ftr) - 1);
                 char ev[128];
                 _snprintf_s(ev, sizeof(ev), _TRUNCATE,
-                            "Replay to slot %d (%s) — %d lines",
+                            "Replay to slot %d (%s) - %d lines",	/* FIX [AsciiRuntime]: was em-dash */
                             i, c->clientName[0] ? c->clientName : "?", c->replayLineCount);
                 TsEventPush_Locked(ev);
                 TsLog("%s", ev);

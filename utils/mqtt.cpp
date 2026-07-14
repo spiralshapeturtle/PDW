@@ -249,6 +249,10 @@ static void AppendJSONRaw(char *dst, int *pos, int maxLen, const char *key, cons
 static void AppendSubscriberEntry(char *dst, int *pos, int maxLen,
                                    const char *capcode, const char *label, BOOL isFirst)
 {
+    // FIX [MqttSubRollback]: remember the start so we can drop this entry whole if it does not
+    // fit. Otherwise an oversized subscribers list stopped mid-object and MqttFlushGroup appended
+    // ']' onto a dangling '{...' -> invalid JSON. Mirrors the MySQL/SQLite sPosBack rollback.
+    int startPos = *pos;
     if (!isFirst && *pos < maxLen - 2) dst[(*pos)++] = ',';
     const char *open = "{\"address\":\"";
     for (int i = 0; open[i] && *pos < maxLen - 2; i++) dst[(*pos)++] = open[i];
@@ -263,7 +267,11 @@ static void AppendSubscriberEntry(char *dst, int *pos, int maxLen,
     for (int i = 0; mid[i] && *pos < maxLen - 2; i++) dst[(*pos)++] = mid[i];
     AppendEscaped(dst, pos, maxLen, label ? label : "");
     const char *close = "\"}";
-    for (int i = 0; close[i] && *pos < maxLen - 2; i++) dst[(*pos)++] = close[i];
+    int ci = 0;
+    for (; close[ci] && *pos < maxLen - 2; ci++) dst[(*pos)++] = close[ci];
+    // FIX [MqttSubRollback]: if the closing "} did not fully fit, the entry is truncated - roll
+    // back so the caller sees no partial object (the entry is dropped, JSON stays well-formed).
+    if (close[ci] != '\0') *pos = startPos;
 }
 
 // PDW-native JSON: {"payload":"...","data":{"new_state":{"state":"...","attributes":{...}}}}

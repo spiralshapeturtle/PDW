@@ -17,6 +17,14 @@ volatile HANDLE m_hRxThread = INVALID_HANDLE_VALUE;
 ULONG WINAPI RxThread(LPVOID pCl);
 volatile BOOL   m_bConnectedToComport = FALSE;
 volatile HANDLE m_ComPortHandle = INVALID_HANDLE_VALUE;
+// FIX [ComPortReopenLeak]: the reconnect opens its handle OUTSIDE g_handleCs (so a mid-open
+// TerminateThread can't orphan the lock). That leaves a window where CreateFile has succeeded but
+// the result is not yet published to m_ComPortHandle. If the worker is force-terminated there, the
+// exclusive (GENERIC_READ|WRITE, share 0) handle would leak and lock PDW out of its own COM port
+// until a full restart. We stash the in-flight handle here so rs232_disconnect can close it after
+// TerminateThread. Only touched by the worker during reopen and by the main thread once the worker
+// is confirmed dead - no live race.
+volatile HANDLE g_pendingOpenHandle = INVALID_HANDLE_VALUE;
 DWORD           m_dwThreadId = 0;
 volatile BOOL   bKeepThreadAlive;
 
@@ -204,8 +212,10 @@ static int rs232_worker_reopen(void)
 		DebugLog("[rs232_worker_reopen] CreateFile(%s) failed: %08lX", pcComPort, GetLastError());
 		return RS232_NO_DUT;
 	}
+	g_pendingOpenHandle = hNew;	// FIX [ComPortReopenLeak]: expose in-flight handle for disconnect
 	int rc = rs232_apply_dcb_and_timeouts(hNew);
 	if (rc != RS232_SUCCESS) {
+		g_pendingOpenHandle = INVALID_HANDLE_VALUE;
 		CloseHandle(hNew);
 		return rc;
 	}
@@ -214,11 +224,13 @@ static int rs232_worker_reopen(void)
 	EnterCriticalSection(&g_handleCs);
 	if (!bKeepThreadAlive) {
 		// Shutdown was requested while we were opening — discard the fresh handle.
+		g_pendingOpenHandle = INVALID_HANDLE_VALUE;
 		LeaveCriticalSection(&g_handleCs);
 		CloseHandle(hNew);
 		return RS232_NO_CONNECTION;
 	}
 	m_ComPortHandle = hNew;
+	g_pendingOpenHandle = INVALID_HANDLE_VALUE;	// FIX [ComPortReopenLeak]: now owned by m_ComPortHandle
 	// Reset both timers so the stall watchdog skips the Moxa TCP warmup.
 	g_connectTickMs  = GetTickCount64();
 	g_lastDataTickMs = g_connectTickMs;
@@ -452,6 +464,15 @@ int rs232_disconnect()
 			OUTPUTDEBUGMSG(("main thread : error closing handle!\n"));
 		}
 		m_ComPortHandle = INVALID_HANDLE_VALUE;
+	}
+	// FIX [ComPortReopenLeak]: if the worker was force-terminated mid-reopen, an exclusive handle
+	// may have been opened but never published to m_ComPortHandle. Close it here so the port is
+	// released instead of staying locked until PDW restarts. The worker is dead by now (joined or
+	// terminated above), so this read/close is race-free.
+	if (g_pendingOpenHandle != INVALID_HANDLE_VALUE) {
+		DebugLog("[rs232_disconnect] closing orphaned in-flight COM handle from a terminated reopen");
+		CloseHandle(g_pendingOpenHandle);
+		g_pendingOpenHandle = INVALID_HANDLE_VALUE;
 	}
 	m_bConnectedToComport = FALSE;
 	if (gotLock) LeaveCriticalSection(&g_handleCs);

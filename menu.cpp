@@ -94,7 +94,10 @@ void set_menu_items(void)
 	// Check correct Langauge item.
 	// Also set the current language table.
 
-	if (Profile.lang_mi_index > lang_cnt) Profile.lang_mi_index = 0;
+	// FIX [LangIndexBound]: also reset on a negative index. GetPrivateProfileInt parses a
+	// minus sign, so a corrupt/hand-edited "LangIndex=-1" passed the upper-bound-only check
+	// and drove lang_tbl_index negative -> OOB reads of lang_rev[]/lang_table[] per character.
+	if (Profile.lang_mi_index < 0 || Profile.lang_mi_index > lang_cnt) Profile.lang_mi_index = 0;
 
 	Profile.reverse_msg = FALSE;
 	Profile.lang_tbl_index = 0;

@@ -417,12 +417,22 @@ static void RunMaintenance(void)
     }
 
     if (g_iMaxSizeMB > 0) {
-        sqlite3_int64 pageCount = QueryInt(g_db, "PRAGMA page_count;");
         sqlite3_int64 pageSize  = QueryInt(g_db, "PRAGMA page_size;");
-        if (pageCount > 0 && pageSize > 0) {
+        if (pageSize > 0) {
             sqlite3_int64 limit = (sqlite3_int64)g_iMaxSizeMB * 1024 * 1024;
             int guard = 0;
-            while ((pageCount * pageSize) > limit && guard++ < 1000) {
+            // FIX [SqliteSizeCap]: measure USED pages (page_count - freelist_count), not total
+            // file pages. On a db without active auto_vacuum (e.g. one created via the Test button)
+            // incremental_vacuum frees nothing and page_count never drops, so the old loop kept
+            // deleting 1000 rows per pass until the table was EMPTY - the whole message history
+            // wiped every hour while the file stayed over the limit. Freelist pages grow as rows
+            // are deleted, so used-pages shrinks and the loop now stops at the real data size.
+            for (;;) {
+                sqlite3_int64 pageCount = QueryInt(g_db, "PRAGMA page_count;");
+                sqlite3_int64 freeList  = QueryInt(g_db, "PRAGMA freelist_count;");
+                sqlite3_int64 usedPages = pageCount - freeList;
+                if (usedPages < 0) usedPages = pageCount;
+                if ((usedPages * pageSize) <= limit || guard++ >= 1000) break;
                 char sql[256];
                 _snprintf(sql, sizeof(sql) - 1,
                     "DELETE FROM \"%s\" WHERE id IN (SELECT id FROM \"%s\" ORDER BY id LIMIT 1000);",
@@ -431,7 +441,6 @@ static void RunMaintenance(void)
                 if (sqlite3_changes(g_db) == 0) break;   /* table empty -- nothing left to delete */
                 didDelete = TRUE;
                 sqlite3_exec(g_db, "PRAGMA incremental_vacuum;", NULL, NULL, NULL);
-                pageCount = QueryInt(g_db, "PRAGMA page_count;");
             }
             if (didDelete) WriteLog("PURGE size  max_mb=%d", g_iMaxSizeMB);
         }
@@ -557,6 +566,23 @@ static DWORD WINAPI SqliteWorker(LPVOID)
             RunMaintenance();
             lastMaintMs = now;
         }
+    }
+
+    // FIX [SqliteStopDrain]: drain any jobs enqueued since the last pass before closing (mirrors
+    // MysqlWorker/MQTT). The old code broke straight to CloseDb() and SqliteStop() then zeroed the
+    // ring, silently dropping the last <=200 ms of messages on every shutdown/reconfigure.
+    if (g_db) {
+        for (;;) {
+            SqliteJob job;
+            EnterCriticalSection(&g_cs);
+            BOOL have = (g_qHead != g_qTail);
+            if (have) { job = g_queue[g_qHead]; g_qHead = (g_qHead + 1) % SQLITE_QUEUE_SIZE; }
+            LeaveCriticalSection(&g_cs);
+            if (!have) break;
+            TxnBegin();
+            if (InsertJob(&job) != SQLITE_DONE) break;
+        }
+        TxnCommit();
     }
 
     CloseDb();
