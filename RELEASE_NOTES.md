@@ -1,3 +1,59 @@
+# PDW 4.0.6 - Release Notes
+
+PDW 4.0.6 finishes the top-right corner display glitch first addressed in 4.0.5 (signal-meter
+alignment and the divider line under the meter). No decoder output or configuration format changes;
+existing `pdw.ini` and `filters.ini` files work unchanged.
+
+## Divider line stays continuous left of the signal meter (FIX [RxqSquareBandClamp], [RxqSquareDividerClip])
+Companion fix to 4.0.5's [SigindDividerClip], for a similar break just LEFT of the signal meter. The
+small RX-quality indicator square (light gray when reception is good, a warning icon when poor) sits
+at a fixed vertical offset tuned for the taller toolbar band. Once the toolbar settled to its shorter
+themed steady-state (e.g. after a Remote Desktop disconnect at high DPI), the square's bottom reached
+a few pixels below the divider and painted over both the divider row and the top edge of the header
+box underneath - a short gap in the line just left of the meter that every once-per-second repaint
+re-created, so neither a resize nor the re-sync fixes below could heal it. The square (and the warning
+icon) is now clamped to stay strictly above the divider, and the divider segment under its span is
+re-asserted on every repaint. At the taller startup height the rendering is unchanged.
+
+## Title bar re-syncs after a Remote Desktop / theme change (FIX [ToolbarResync])
+The main fix for the long-standing display glitch: a full-width black band under the toolbar plus a
+broken divider line by the signal meter, appearing after the machine had been left running - often
+seen over a Remote Desktop session (e.g. a Retina client). Root cause: when Windows changes the theme
+or display mode (which a Remote Desktop connect/disconnect does), the toolbar quietly resizes to a
+different height, but PDW only recomputed its toolbar height on a window resize. The header, divider,
+RX-quality box and signal meter are all positioned from that height, so they ended up several pixels
+below where the toolbar now ended - a black gap that only a manual resize cleared. PDW now detects the
+toolbar-height change on its own and re-aligns the whole layout automatically within about a second,
+so the glitch corrects itself without any manual resize.
+
+## Faster title-bar re-sync after Remote Desktop / theme change (FIX [ToolbarResyncProactive])
+The [ToolbarResync] heal above ran on a once-per-second check, so the corner could stay visibly wrong
+for up to a second after a Remote Desktop connect/disconnect. PDW now also reacts directly to the
+system events that cause the resize (theme, display-mode, DPI, system-setting and colour changes):
+a short, self-cancelling timer re-aligns the layout about 150 ms after the toolbar settles to its new
+height, instead of waiting for the next one-second check. The once-per-second check stays as a
+fallback. The result is that the meter, divider and header snap back into place almost immediately
+when reconnecting or disconnecting a session.
+
+## Title-bar header self-heals (FIX [TitleBarSelfHeal])
+As an extra safety net, the whole header row under the toolbar (Time / Date / Address / Monitored
+Messages and the divider line) is now refreshed once per second instead of only its RX-quality corner,
+so a momentarily blanked header repairs itself within a second.
+
+## Signal-meter/RX-Q bitmaps reload after a display change (FIX [DisplayBitmapReload])
+Hygiene fix found while diagnosing the above: the signal-meter and RX-quality warning-icon bitmaps are
+now recreated for the new display whenever Windows reports a display-driver change (e.g. an RDP
+connect/disconnect), instead of only at startup.
+
+## Window close no longer runs unrelated re-sync code (FIX [WmCloseFallthrough])
+Internal correctness fix, no user-visible behaviour change: closing the main window shared a code path
+with the new toolbar re-sync handlers above (a C `switch` falls through case labels regardless of which
+one matched), so every ordinary close briefly ran that handler's code before exiting. Harmless in
+practice (its one-shot timer was already cancelled on window teardown) but fragile, so window close now
+returns directly instead of falling through.
+
+---
+
 # PDW 4.0.5 - Release Notes
 
 PDW 4.0.5 is a stability and hardening release. It bundles the new high-resolution toolbar and a

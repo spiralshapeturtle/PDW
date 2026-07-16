@@ -78,6 +78,7 @@ bool GetLogFONTS(void);
 void FreeLogFONTS(void);
 void FreeSysObjects(void);
 void Free_Drawing_Objects(void);
+void ReloadExclamBitmap(void);	// FIX [DisplayBitmapReload]: recreate DDB after a display-driver swap (RDP)
 void Draw3D_Box(HDC hdc, int x, int y, int w, int h, int item);
 void Draw3D_Box_INV(HDC hdc,int x, int y, int w, int h);
 void DrawTitleBarGfx(HWND hwnd);

@@ -373,6 +373,27 @@ void DrawPaneLabels(HWND hwnd, int pane)
 
 	if (pane & PANERXQUAL)	// DRAW RX-Quality
 	{
+		// FIX [RxqSquareBandClamp]: the RX-Q indicator square/icon sat at a FIXED
+		// r.top+Scale(5)..r.top+Scale(28) offset (fill rows 10..54 at 200% DPI), tuned for
+		// the taller toolbar band (g_cyToolbar 59). At the shorter themed steady-state
+		// (g_cyToolbar 51, e.g. after an RDP disconnect) the fill poked below the band:
+		// onto the divider row g_cyToolbar itself (healed by [RxqSquareDividerClip] below)
+		// AND onto the WHITE top-highlight row of the PANE1 "Monitored Messages"
+		// Draw3D_Box at g_cyToolbar+1. PANE1 redraws that highlight FIRST and this block
+		// then re-erased its x-span on every repaint, so a light-gray notch stayed visible
+		// just left of the meter box on all paint paths - a row the divider-row redraw can
+		// never restore. Clamp the square (and the exclam icon blit, same origin) upward
+		// so it stays strictly above the divider, mirroring [SigindDividerClip].
+		int sqTop = r.top + Scale(5);
+		int sqBot = r.top + Scale(28);
+		if (sqBot > g_cyToolbar - 1)
+		{
+			int dy = sqBot - (g_cyToolbar - 1);
+			sqTop -= dy;
+			sqBot -= dy;
+			if (sqTop < r.top + 1) sqTop = r.top + 1;
+		}
+
 		if (dRX_Quality && dRX_Quality < 90)
 		{
 			// FIX [RxqSquareRect]: identical rect + null_pen as the good-quality branch
@@ -381,13 +402,13 @@ void DrawPaneLabels(HWND hwnd, int pane)
 			// DC, so the square's size and border varied with the call path.
 			SelectObject(hdc, null_pen);
 			SelectObject(hdc, black_brush);
-			Rectangle(hdc, r.right-Scale(75), r.top+Scale(5), r.right-Scale(49), r.top+Scale(28));
+			Rectangle(hdc, r.right-Scale(75), sqTop, r.right-Scale(49), sqBot);	// FIX [RxqSquareBandClamp]
 
 			if (hdc_mem = CreateCompatibleDC(hdc))
 			{
 				SelectObject(hdc_mem, hbm_exclam);
 				SetStretchBltMode(hdc, COLORONCOLOR);	// FIX [DpiScale]
-				StretchBlt(hdc, r.right-Scale(75), r.top+Scale(5), Scale(bme.bmWidth), Scale(bme.bmHeight), hdc_mem, 0, 0, bme.bmWidth, bme.bmHeight, SRCPAINT);
+				StretchBlt(hdc, r.right-Scale(75), sqTop, Scale(bme.bmWidth), Scale(bme.bmHeight), hdc_mem, 0, 0, bme.bmWidth, bme.bmHeight, SRCPAINT);	// FIX [RxqSquareBandClamp]
 				DeleteDC(hdc_mem);
 			}
 		}
@@ -395,7 +416,7 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		{
 			SelectObject(hdc, null_pen);
 			SelectObject(hdc, lgray_brush);
-			Rectangle(hdc, r.right-Scale(75), r.top+Scale(5), r.right-Scale(49), r.top+Scale(28));	// FIX [DpiScale]
+			Rectangle(hdc, r.right-Scale(75), sqTop, r.right-Scale(49), sqBot);	// FIX [DpiScale] [RxqSquareBandClamp]
 		}
 
 		/* Set new font/pen */
@@ -439,6 +460,25 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		SelectObject(hdc,SysPEN[DARKGRAY]);
 		MoveToEx(hdc, r.right-Scale(46), g_cyToolbar+1+Scale(TITLE_BAR_SIZE), NULL);
 		LineTo(hdc, r.right, g_cyToolbar+1+Scale(TITLE_BAR_SIZE));
+
+		// FIX [RxqSquareDividerClip]: the RX-Q indicator square/icon above is positioned at a
+		// FIXED r.top+Scale(5)..r.top+Scale(28) offset (tuned for the taller toolbar band). When
+		// the toolbar re-autosizes to its shorter themed steady-state (g_cyToolbar ~51 at 200%
+		// DPI, e.g. after an RDP disconnect) the square's bottom pokes a few px BELOW the divider
+		// row, and its lgray fill erases the divider segment just LEFT of the signal meter. PANE1
+		// draws that divider first but this PANERXQUAL block runs AFTER and paints over it, and
+		// DrawSigInd only redraws the divider from the meter box rightward - so the gap stuck (a
+		// broken line "a bit left of the meter"). Restore the divider under the square's x-span.
+		// Mirrors [SigindDividerClip] (meter box) and [RxqBottomLine] (this box's bottom line).
+		// Redraw one continuous divider segment from the RX-Q square's left edge all the way to
+		// the window's right edge - covering the square, the "100%" box column and under the
+		// meter - so no sub-gap can survive between the patched span and DrawSigInd's own
+		// meter-segment redraw. Row g_cyToolbar is above the RX-Q/100% boxes (row +1) and above
+		// the meter box bottom (clamped by [SigindDividerClip]), so this only ever repaints the
+		// divider itself, never a box interior or the gauge.
+		SelectObject(hdc,SysPEN[DARKGRAY]);
+		MoveToEx(hdc, r.right-Scale(75), g_cyToolbar, NULL);
+		LineTo(hdc, r.right, g_cyToolbar);
 	}
 	ReleaseDC(hwnd, hdc);
 }
@@ -585,6 +625,16 @@ bool GetSysObjects(HWND hwnd)
 	return(true);
 }
 
+
+// FIX [DisplayBitmapReload]: hbm_exclam is a LoadBitmap DDB; recreate it for the current display
+// after a display-driver swap (RDP connect/disconnect) invalidates the old one. See the matching
+// ReloadSigInd() in sigind.cpp for the full rationale (restart-only heal, resize does not help).
+void ReloadExclamBitmap(void)
+{
+	if (hbm_exclam) { DeleteObject(hbm_exclam); hbm_exclam = NULL; }
+	hbm_exclam = LoadBitmap(ghInstance, MAKEINTRESOURCE((WORD)IDS_EXCLAM));
+	if (hbm_exclam) GetObject(hbm_exclam, sizeof(bme), &bme);
+}
 
 void FreeSysObjects(void)	// Free objects allocated by GetSysObjects.
 {

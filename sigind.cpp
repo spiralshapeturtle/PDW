@@ -91,6 +91,18 @@ BOOL LoadSigInd(HINSTANCE hThisInstance)
 	return(got_sigind);
 }
 
+// FIX [DisplayBitmapReload]: hbm_sigind is a LoadBitmap DDB (device-dependent bitmap). An RDP
+// connect/disconnect swaps the display driver and invalidates the DDB, so from then on the meter
+// face StretchBlt silently draws nothing/garbage - and a window resize does NOT heal it (it just
+// re-blits the dead DDB); only a restart, which reloads the bitmap for the new device, fixed it.
+// Recreate the bitmap for the CURRENT display on WM_DISPLAYCHANGE. Same reason [ToolbarHiResIcons]
+// moved the toolbar buttons off LoadBitmap.
+void ReloadSigInd(HINSTANCE hThisInstance)
+{
+	if (got_sigind || hbm_sigind) { DeleteObject(hbm_sigind); hbm_sigind = NULL; got_sigind = FALSE; }
+	LoadSigInd(hThisInstance);	// reloads + GetObject(bms) + sets got_sigind
+}
+
 // Free bitmap object
 void FreeSigInd(void)
 {

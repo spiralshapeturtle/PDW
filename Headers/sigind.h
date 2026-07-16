@@ -4,6 +4,7 @@
 void DrawSigInd(HWND hwnd);
 void FreeSigInd(void);
 BOOL LoadSigInd(HINSTANCE hThisInstance);
+void ReloadSigInd(HINSTANCE hThisInstance);	// FIX [DisplayBitmapReload]: recreate DDB after a display-driver swap (RDP)
 void InitSigIndPens(void);		// FIX [DpiScale]: maak DPI-geschaalde naaldpennen aan na g_dpi bekend is
 void UpdateSigInd(int direction_flg);
 //void UpdateAudioSigInd(HWND hwnd, int sample_value);

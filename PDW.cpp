@@ -329,6 +329,14 @@
 
 #include "headers\helper_funcs.h"	// Extra functies van Andreas
 
+// FIX [ToolbarResyncProactive]: fallback message ids for older SDK headers.
+#ifndef WM_THEMECHANGED
+#define WM_THEMECHANGED 0x031A
+#endif
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED   0x02E0
+#endif
+
 #define MIN_X_WIN_SIZE		444		// Smallest main win X size can be (was 444)
 #define MIN_Y_WIN_SIZE		261		// Smallest main win Y size can be (was 261)
 
@@ -342,6 +350,8 @@
 #define MINUTE_TIMER		104		// Timer ID
 #define CLICK_TIMER			105		// Timer ID
 #define RXQUAL_TIMER		106		// FIX [RxQualAlert]: 1-minute RX quality check
+#define TBRESYNC_TIMER		107		// FIX [ToolbarResyncProactive]: one-shot heal of RDP/theme/DPI toolbar-height drift
+#define TBRESYNC_DELAY_MS	150		// FIX [ToolbarResyncProactive]: let the toolbar settle to its new themed height first
 
 #define WM_MOUSEWHEEL		0x020A
 
@@ -874,8 +884,65 @@ static void SafeDecodeTick(HWND hWnd)
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
-		OutputDebugStringA("PDW: decode tick raised an exception — frame skipped\n");
+		OutputDebugStringA("PDW: decode tick raised an exception - frame skipped\n");
 	}
+}
+
+// FIX [ToolbarResync]: heal toolbar-height drift. Root cause: an RDP
+// connect/disconnect (JumpDesktop/Retina) fires WM_THEMECHANGED/WM_DISPLAYCHANGE, the
+// comctl32 toolbar silently re-autosizes to a different height, but the cached g_cyToolbar
+// was only ever recomputed on WM_SIZE. Everything in the title band (divider, header boxes,
+// RX-Q box, signal meter) is anchored to g_cyToolbar, so a stale value left an N-pixel black
+// gap between the real toolbar bottom and the divider, plus a broken meter divider - until a
+// manual resize fixed it. This re-measures the live toolbar bottom and, if it no longer
+// matches g_cyToolbar, re-runs the exact WM_SIZE relayout path a manual resize would, then
+// forces a full title-band repaint. Called once/second from SECOND_TIMER (cheap no-op when
+// there is no drift), so any drift self-corrects within ~1s of the RDP/theme event.
+bool PdwResyncToolbarLayout(void)
+{
+	if (!hToolbar || !ghWnd) return false;
+	if (!IsWindowVisible(ghWnd) || IsIconic(ghWnd)) return false;	// skip when trayed/minimized (timer still fires)
+
+	RECT wr; GetWindowRect(hToolbar, &wr);
+	POINT br; br.x = wr.left; br.y = wr.bottom;
+	ScreenToClient(ghWnd, &br);
+
+	if (br.y == g_cyToolbar) return false;	// no drift - nothing to do (the common case)
+
+	RECT cr; GetClientRect(ghWnd, &cr);
+	// WM_SIZE recomputes g_cyToolbar/g_cyTopBand (via PdwUpdateToolbarMetrics) and re-lays-out
+	// both panes - identical to a user resize. SIZENORMAL matches the codebase's existing
+	// self-resize calls.
+	SendMessage(ghWnd, WM_SIZE, SIZENORMAL, (LPARAM)MAKELONG(cr.right, cr.bottom));
+	// Repaint the title-band on the main window (WM_SIZE only repaints the pane children),
+	// so the black gap under the toolbar and the meter divider are redrawn at the corrected anchor.
+	InvalidateRect(ghWnd, NULL, TRUE);
+	// FIX [ToolbarBandRepaint]: the main window's WM_ERASEBKGND fills the WHOLE client (incl. the
+	// toolbar band, rows 0..g_cyToolbar) with the charcoal pane background, and a parent
+	// InvalidateRect does NOT invalidate the toolbar child - so after a theme/RDP resync the band
+	// could stay charcoal (the "black band") even though g_cyToolbar is now correct. Force the
+	// toolbar to repaint its own band so it overwrites the charcoal with its proper background.
+	if (hToolbar) { InvalidateRect(hToolbar, NULL, TRUE); UpdateWindow(hToolbar); }
+	return true;
+}
+
+// FIX [ToolbarResyncProactive]: the RDP/theme/DPI events that silently re-autosize the comctl32
+// toolbar arrive as system messages (WM_THEMECHANGED/WM_DISPLAYCHANGE/WM_DPICHANGED/
+// WM_SETTINGCHANGE/WM_SYSCOLORCHANGE). [ToolbarResync] alone only healed the resulting
+// g_cyToolbar drift on the next SECOND_TIMER tick - up to ~1s later - so the meter box, divider
+// and pane gap stayed visibly wrong for that window. This arms a single short one-shot timer so
+// the heal runs ~150ms after the event, once the toolbar has settled to its new themed height.
+// Debounced WITHOUT restart: an RDP reconnect fires a trailing WM_SETTINGCHANGE storm and
+// restarting the timer on each would keep pushing the heal out, so a pending timer is left
+// alone. The 1s SECOND_TIMER poll stays as the catch-all for anything this misses (e.g. an
+// autosize with no accompanying message).
+static bool s_tbResyncPending = false;
+static void PdwScheduleToolbarResync(HWND hWnd)
+{
+	if (!hWnd) return;
+	if (s_tbResyncPending) return;	// already scheduled - do not restart (debounce without extending)
+	s_tbResyncPending = true;
+	SetTimer(hWnd, TBRESYNC_TIMER, TBRESYNC_DELAY_MS, NULL);
 }
 
 LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -908,6 +975,17 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 	{
 		case WM_TIMER: // Decode POCSAG/FLEX with comport or sound card.
 
+		// FIX [ToolbarResyncProactive]: proactive one-shot heal of RDP/theme/DPI toolbar drift.
+		// Handled before the pause gate and the decode tick - geometry healing is independent of
+		// decode pause state, and this wake carries no decode work.
+		if (wParam == TBRESYNC_TIMER)
+		{
+			KillTimer(hWnd, TBRESYNC_TIMER);
+			s_tbResyncPending = false;
+			if (PdwResyncToolbarLayout()) DrawTitleBarGfx(ghWnd);	// repaint title band at the corrected anchor
+			break;
+		}
+
 		if (!bPauseFlag)
 		{
 			SafeDecodeTick(hWnd);							// FIX [DecodeGuard]: SEH-wrapped decode tick
@@ -915,8 +993,20 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			switch (wParam) 
 			{ 
 				case SECOND_TIMER:
-				
-				DrawPaneLabels(ghWnd, PANERXQUAL);
+
+				// FIX [TitleBarSelfHeal]: redraw the WHOLE title bar once per second, not just the
+				// RX-Q corner. The title-bar band (PANE1/PANE2 headers + divider line) lives on the
+				// main window and is only repainted on WM_PAINT (resize/uncover); nothing refreshed it
+				// during idle. So when that band got erased or occluded - typically around a
+				// signal-loss repaint or the display waking after a night - the header stayed black
+				// (a full-width black band) until a manual resize, while only the RX-Q "100%" corner
+				// kept refreshing here. Redrawing the full bar self-heals it within 1s. This is the
+				// same Draw3D_Box + TextOut primitive the RX-Q box already redrew every second without
+				// flicker, so it does NOT reintroduce the WM_NOTIFY hover-burst flicker of [NotifyRedraw]
+				// (that was many redraws/sec; this is one). Also keeps the divider continuous under the
+				// gauge as a belt-and-suspenders for [SigindDividerClip].
+				PdwResyncToolbarLayout();	// FIX [ToolbarResync]: heal RDP/theme toolbar-height drift before repaint
+				DrawTitleBarGfx(ghWnd);
 
 				lTime = time(NULL);		// Get current systemtime
 				// FIX [F3]: (unsigned long) overloopt na ~49 dagen; gebruik unsigned long long
@@ -2141,6 +2231,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		KillTimer(ghWnd, MINUTE_TIMER);
 		KillTimer(ghWnd, SECOND_TIMER);
 		KillTimer(ghWnd, RXQUAL_TIMER);	// FIX [RxQualAlert]
+		KillTimer(ghWnd, TBRESYNC_TIMER);	// FIX [ToolbarResyncProactive]
 
 		// FIX [LogManager]: pLogFile/pFilterFile hold LM_FILE_OPEN sentinel (0x1) when
 		// LogManager is active — never pass sentinel to fclose; mirror the guard in Misc.cpp.
@@ -2217,7 +2308,49 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			if (MessageBox(ghWnd, "Exit PDW - Sure?", "PDW Exit",
 				           MB_ICONQUESTION | MB_OKCANCEL) == IDCANCEL) break;
 		}
-		// fall through
+		// FIX [WmCloseFallthrough]: used to "fall through" into the case labels below (a plain
+		// C switch falls through case LABELS regardless of which case matched); that was harmless
+		// while the next code was just the default DefWindowProc call, but once WM_THEMECHANGED
+		// etc. gained real bodies below, every ordinary window close silently ran the
+		// WM_THEMECHANGED handler (scheduling a toolbar resync on a window about to be destroyed).
+		// Return the same DefWindowProc call the default case makes, without running that code.
+		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
+
+		// FIX [ToolbarResyncProactive]: WM_THEMECHANGED/WM_DISPLAYCHANGE/WM_DPICHANGED/
+		// WM_SETTINGCHANGE/WM_SYSCOLORCHANGE can each silently re-autosize the comctl32 toolbar
+		// (themed steady-state, DPI change, monitor wake after a night) without recomputing
+		// g_cyToolbar. Arm the debounced one-shot heal so g_cyToolbar is corrected ~150ms after
+		// the event instead of up to ~1s later on the SECOND_TIMER poll (which stays as the
+		// catch-all), then hand off to DefWindowProc unchanged.
+		case WM_THEMECHANGED:
+		PdwScheduleToolbarResync(hWnd);
+		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
+
+		case WM_DISPLAYCHANGE:
+		// FIX [DisplayBitmapReload]: an RDP connect/disconnect swaps the display driver, which
+		// invalidates the device-dependent LoadBitmap DDBs used in the top-right corner (signal
+		// meter + RX-Q warning). From then on the corner renders wrong and NO amount of resizing
+		// heals it (it just re-blits the dead DDB) - only a restart did, because a restart reloads
+		// the bitmaps for the new device. Reload them here for the new display, then repaint the
+		// corner so the fix is visible immediately.
+		ReloadSigInd(ghInstance);
+		ReloadExclamBitmap();
+		DrawSigInd(hWnd);
+		DrawPaneLabels(hWnd, PANERXQUAL);
+		PdwScheduleToolbarResync(hWnd);
+		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
+
+		case WM_DPICHANGED:
+		PdwScheduleToolbarResync(hWnd);
+		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
+
+		case WM_SETTINGCHANGE:
+		PdwScheduleToolbarResync(hWnd);
+		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
+
+		case WM_SYSCOLORCHANGE:
+		PdwScheduleToolbarResync(hWnd);
+		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
 
 		default:
 		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
