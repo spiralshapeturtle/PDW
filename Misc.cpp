@@ -174,6 +174,20 @@ void reverse_msg_words(void)
 
 			if (end_x > start_x)
 			{
+				// FIX [ReverseColorSync]: the per-character colors stayed in original
+				// order while the characters were reversed, so a mid-message color
+				// change highlighted the wrong characters in right-to-left mode.
+				// Reverse the color slice alongside the text.
+				int ca = start_x, cb = end_x;
+				while (ca < cb)
+				{
+					BYTE ct = message_color[ca];
+					message_color[ca] = message_color[cb];
+					message_color[cb] = ct;
+					ca++;
+					cb--;
+				}
+
 				r = 0;
 				while (end_x >= start_x) rev_msg_buffer[r++] = message_buffer[end_x--];
 				rev_msg_buffer[r] = 0;
@@ -239,7 +253,14 @@ void display_show_char(PaneStruct *pane, char cin)
 		{
 			cin = '\xbb';	// PH: Convert 'new line' to '\xbb'
 		}
-		else if (cin > 127)
+		// FIX [HighByteSanitize]: char is signed under MSVC, so "cin > 127" could never
+		// be true and this branch was dead - raw bytes 128-255 (MOBITEX/encrypted
+		// garbage, per the same handling already done downstream in mysql.cpp/
+		// sqlite_feed.cpp) passed straight through unsanitized instead of becoming '?'.
+		// Compare as unsigned. Safe for the '\xbb' linefeed marker: that value is only
+		// ever produced by the '\n' branch above, which is mutually exclusive with this
+		// one (else-if), so a marker this function creates is never re-sanitized here.
+		else if ((unsigned char)cin > 127)
 		{
 			cin = '?';	// PH: Display a questionmark instead of 'unknown' characters
 		}
@@ -298,7 +319,11 @@ void build_show_line(PaneStruct *pane, char cin, int option)
 	// Start new line?
 	if (option != BUILDSHOWLINE_LASTCHAR)
 	{
-		if ((pane->currentPos > NewLinePoint) || (pane->currentPos == LINE_SIZE))
+		// FIX [LastcharWrapEscape]: >= instead of == - a LASTCHAR landing exactly on
+		// the line boundary skips this check entirely and leaves currentPos beyond
+		// LINE_SIZE; with an equality test the wrap then never fired again and
+		// subsequent appends bled into the next line's storage.
+		if ((pane->currentPos > NewLinePoint) || (pane->currentPos >= LINE_SIZE))
 		{
 			display_line(pane); // terminate/display line/start new line.
 
@@ -355,6 +380,12 @@ void display_line(PaneStruct *pane)
 		pchar[xx*(LINE_SIZE+1) + 0]  = 0;
 		pcolor[xx*(LINE_SIZE+1) + 0] = COLOR_UNUSED;
 		pane->iVscrollPos--;
+		// FIX [VscrollClamp]: when the user is scrolled to the very top of a full
+		// buffer, the unconditional decrement above drove iVscrollPos negative with
+		// every new line; CopyToClipboard then cast it to unsigned and read ~4 GB
+		// out of bounds. Clamp at the top of the buffer.
+		if (pane->iVscrollPos < 0)
+			pane->iVscrollPos = 0;
 	}
 	pane->iVscrollMax = max(0,pane->Bottom - pane->cyLines);
 
@@ -1503,7 +1534,12 @@ void ShowMessage()
 						{
 							if (iTextLengths[0] && !Profile.FlexGroupMode)
 							{
-								for (k=0; k<10 && iTextPositions[k]; k++)
+								// FIX [HighlightPosZero]: a text-filter match at position 0 is
+							// legitimate (token matches at the very start of the message),
+							// but position 0 was used as the array terminator - one such
+							// match killed the highlight for the whole message. Terminate
+							// on the length instead (stored entries never have length 0).
+							for (k=0; k<10 && iTextLengths[k]; k++)
 								{
 									if (pos >= iTextPositions[k] && pos < (iTextPositions[k] + iTextLengths[k]))
 									{
@@ -3676,13 +3712,16 @@ int ecd()
 			b2 = bch[synd] >> 5;
 			b2 = b2 & 0x1f;
 
-			if (b2 != 0x1f)
+			// FIX [EccPosGuard]: setupecc only ever stores position fields in {0..20, 31},
+			// so test <= 20 (was != 0x1f). ecs[] has 25 entries; the explicit upper bound
+			// keeps ecs[b] in range even if the syndrome table were ever corrupted.
+			if (b2 <= 20)
 			{
 				ob[b2] = ob[b2] ^ 0x01;
 				ecc = ecc ^ ecs[b2];
 			}
 
-			if (b1 != 0x1f)
+			if (b1 <= 20)
 			{
 				ob[b1] = ob[b1] ^ 0x01;
 				ecc = ecc ^ ecs[b1];

@@ -315,17 +315,27 @@ void FLEX::show_address(long int l, long int l2, bool bLongAddress)
 		if (FLEX_9) FLEX_9--;
 	}
 	else
-	{	
+	{
+		// FIX [FlexLongAddrOverflow]: compute the long-address capcode in 64-bit.
+		// capcode is a 32-bit long; the inverted high word (0..0x1fffff) is NOT
+		// range-limited by the long-address detector, so the "<< 15" below overflowed
+		// 32-bit signed (undefined behavior). A product that wrapped back positive slipped
+		// past the "capcode < 0" guard and displayed a WRONG 9-digit capcode. Long
+		// capcodes are a 9-digit field ("%09li"), so any value above 999999999 was never
+		// representable anyway -> flag it bad so the guard below renders "?????????".
+
 		// to get capcode: take second word, invert it...
-		capcode = (l2 & 0x1fffffl) ^ 0x1fffffl;
+		unsigned long long ullCap = (unsigned long long)((l2 & 0x1fffffl) ^ 0x1fffffl);
 
 		// multiply by 32768
-		capcode = capcode << 15;
+		ullCap <<= 15;
 
 		// add in 2068480 and first word
 		// NOTE : in the patent for FLEX, the number given was 2067456...
 		//			 which is apparently not correct
-		capcode = capcode + 2068480l + (l & 0x1fffffl);
+		ullCap += 2068480ull + (unsigned long long)(l & 0x1fffffl);
+
+		capcode = (ullCap > 999999999ull) ? -1l : (long int)ullCap;
 
 		if (FLEX_9 < 91) FLEX_9 += 10;
 	}
@@ -912,6 +922,11 @@ void FLEX::showframe(int asa, int vsa)
 					cc = frame[vb+1];	// long address - first message word in second vector field
 				}
 
+				// FIX [FlexNumWordClamp]: defensive parity with the ALPHA/BINARY branches.
+				// w2 is bounded to <=135 today by the "& 0x07" mask above; clamp anyway so a
+				// future mask change can't turn frame[k] (k<=w2) into an OOB read of frame[200].
+				if (w2 > 199) w2 = 199;
+
 				// skip over first 10 bits for numbered numeric, otherwise skip first 2
 
 				if (vt == 7) m = 14;
@@ -1136,7 +1151,12 @@ void FLEX::showblock(int blknum)
 		}
 
 		err = ecd();		// do error correction
-		CountBiterrors(err);
+		// FIX [FlexBiterrorDoubleCount]: ecd() already calls CountBiterrors(errors)
+		// internally, so the previous explicit call here counted every FLEX message word
+		// TWICE into dRX_Quality (the on-screen RX-Q pane); POCSAG (process_word) and the
+		// FLEX cycle-info word both count once via ecd()'s internal call. Removed for
+		// parity. The telnet RXQ (Rxq_OnEcd / Rxq_ApplyPenaltyBits below) is a separate
+		// track and was never affected by this.
 
 		// p2kflex-compatible RXQ: mirror updateRxQualityFromEcd + RXQ_ApplyPenaltyBits
 		// pattern from p2kflexDecoder Flex.cpp:861-868. Note the (err*err)*dataBits*10

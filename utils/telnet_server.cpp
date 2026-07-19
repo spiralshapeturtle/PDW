@@ -84,6 +84,7 @@ typedef struct {
     BOOL        reconnectReplay;               /* emit <BUFFER_START> on next tick */
     int         replayCursor;                  /* index in g_tsBacklog when replaying */
     int         replayEndHead;                 /* FIX [TelnetReplayDup]: backlog head snapshot at replay start; replay terminates here, not at the live (moving) head */
+    int         replayRemaining;               /* FIX [TelnetReplayCount]: entries left to replay; authoritative terminator (cursor==endHead is ambiguous when the ring is full) */
     int         replayLineCount;               /* incremented per replayed line, reported in event */
     /* per-client recv buffer for line-based CLIENT:/ROLE: parsing */
     char        rxbuf[256];
@@ -206,32 +207,96 @@ static void TsLogEvent(const char *fmt, ...)
 ** WriteRaw does NOT prepend a timestamp, so we build the full line here:
 **   "YYYY-MM-DD HH:MM:SS  <wire content>\n"
 ** Two spaces after the timestamp (matches the original layout, minus ms).
-** <WD> heartbeat lines are suppressed (not useful in disk logs). */
+** <WD> heartbeat lines are suppressed (not useful in disk logs).
+**
+** FIX [TsWireLogLockFree]: TsWriteWireLog() only FORMATS the line into a per-thread
+** staging buffer - it does not touch LogManager. It always runs with g_tsCs held
+** (called from FanOutLine), and LogManager::WriteRaw() can be a synchronous
+** fopen/fwrite/fclose when write-buffering is off (LogManager's default), which
+** would otherwise stall every other telnet-server operation (accept/send/RS232-
+** AUDIO state) for the duration of that disk write. FlushPendingWireLog() below
+** does the actual LogManager call; every top-level entry point that can reach
+** TsWriteWireLog() calls it right after its own LeaveCriticalSection(&g_tsCs).
+** __declspec(thread) keeps this race-free across the RxThread/decode-thread/
+** worker-thread callers without adding a second lock. */
+// FIX [WireLogMultiLine]: the staging buffer ACCUMULATES multiple lines. A single
+// g_tsCs hold can emit more than one wire-line (a lazy <TX_START> then the message
+// line in TelnetServerNotifyMessage, or <TX_STOP>+<RS232:0>+<AUDIO:0> in one worker
+// tick). The earlier version overwrote the buffer on every call, so only the LAST
+// line of such a batch reached telnet_traffic.log - a fidelity regression vs the pre-
+// [TsWireLogLockFree] direct-write path, which logged every line. Sized for several
+// TS_LINE_MAX lines per lock hold; FlushPendingWireLog writes the whole batch and resets.
+#define TS_WIRE_STAGE_MAX  8192
+static __declspec(thread) char g_tsPendingWireLine[TS_WIRE_STAGE_MAX];
+static __declspec(thread) int  g_tsPendingWireLen = 0;
+
 static void TsWriteWireLog(const char *line, int len)
 {
     if (!Profile.telnetServerWireLog) return;
     if (!line || len <= 0) return;
     if (len >= 4 && memcmp(line, "<WD>", 4) == 0) return; // FIX [WireLogWD]
 
+    // FIX [WireLogMultiLine]: append, don't overwrite. Need room for a timestamp
+    // (~25) + at least one wire char + '\n' + '\0'; if the batch is nearly full,
+    // drop this line rather than corrupt it (we cannot flush here - g_tsCs is held).
+    int base = g_tsPendingWireLen;
+    if (base < 0) base = 0;
+    int avail = TS_WIRE_STAGE_MAX - base;
+    if (avail < 32) return;
+
     SYSTEMTIME st; GetLocalTime(&st);
 
     // Strip trailing CR/LF from wire content.
-    int wlen = (len < 1020) ? len : 1019;
+    int wlen = len;
     while (wlen > 0 && (line[wlen-1] == '\r' || line[wlen-1] == '\n')) wlen--;
 
-    char full[1024];
-    int pos = _snprintf_s(full, sizeof(full), _TRUNCATE,
+    char *full = g_tsPendingWireLine + base;
+    int pos = _snprintf_s(full, avail, _TRUNCATE,
                           "%04d-%02d-%02d %02d:%02d:%02d.%03d  ",
                           st.wYear, st.wMonth, st.wDay,
                           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
     if (pos < 0) pos = 0;
-    int copy = ((pos + wlen) < (int)sizeof(full) - 2) ? wlen : (int)sizeof(full) - pos - 2;
+    // Leave room for the trailing '\n' and '\0'.
+    int room = avail - pos - 2;
+    int copy = (wlen < room) ? wlen : room;
+    if (copy < 0) copy = 0;
     memcpy(full + pos, line, copy);
     pos += copy;
     full[pos++] = '\n';
     full[pos]   = '\0';
 
-    LogManager::Get().WriteRaw(LC_WIRE, full, pos);
+    g_tsPendingWireLen = base + pos;
+}
+
+// FIX [TsEventLogStaged]: same treatment for the LC_TELNET event log as [TsWireLogLockFree]
+// gave the wire log. TsLog() used to call LogManager directly (a synchronous fopen/fwrite/
+// fclose in direct mode) from call sites that hold g_tsCs (SendToClient, accept/recv/GC/
+// replay, the RS232/AUDIO emit helpers), stalling every other telnet operation - and the
+// GUI decode thread blocked on g_tsCs in TelnetServerNotifyMessage - for the duration of a
+// disk write. TsLog() now only stages the line per-thread; FlushPendingWireLog() (called
+// after every g_tsCs release) writes the batch. Lines are staged individually so each keeps
+// its own LogManager timestamp.
+#define TS_EVT_STAGE_LINES 16   /* one GC tick can log several disconnects in one lock hold */
+#define TS_EVT_LINE_MAX    256
+static __declspec(thread) char g_tsPendingEvt[TS_EVT_STAGE_LINES][TS_EVT_LINE_MAX];
+static __declspec(thread) int  g_tsPendingEvtCount = 0;
+
+/* FIX [TsWireLogLockFree]: call once, immediately after LeaveCriticalSection(&g_tsCs),
+** from every top-level function that can reach TsWriteWireLog() above (directly or via
+** EmitMarker/EmitRS232_Locked/EmitAudio_Locked/EmitTxStart_Locked/EmitTxStop_Locked).
+** No-op when nothing was staged during that call. */
+static void FlushPendingWireLog(void)
+{
+    // FIX [TsEventLogStaged]: flush staged event-log lines first (one LogManager call per
+    // line so every line gets its own timestamp), then the wire-log batch.
+    if (g_tsPendingEvtCount > 0) {
+        for (int i = 0; i < g_tsPendingEvtCount; i++)
+            PDW_TSLOG("%s", g_tsPendingEvt[i]);
+        g_tsPendingEvtCount = 0;
+    }
+    if (g_tsPendingWireLen <= 0) return;
+    LogManager::Get().WriteRaw(LC_WIRE, g_tsPendingWireLine, g_tsPendingWireLen);
+    g_tsPendingWireLen = 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -249,7 +314,13 @@ static void TsLog(const char *fmt, ...)
     _vsnprintf_s(msg, sizeof(msg), _TRUNCATE, fmt, ap);
     va_end(ap);
 
-    PDW_TSLOG("%s", msg);
+    // FIX [TsEventLogStaged]: stage only - no LogManager I/O here, callers may hold g_tsCs
+    // (see the block comment at the staging buffers). Dropped when the per-thread batch is
+    // full: 8 lines per lock hold is far above any real burst, and we cannot flush here.
+    if (g_tsPendingEvtCount < TS_EVT_STAGE_LINES) {
+        strncpy_s(g_tsPendingEvt[g_tsPendingEvtCount], TS_EVT_LINE_MAX, msg, _TRUNCATE);
+        g_tsPendingEvtCount++;
+    }
 }
 
 static void PostStatus(int state)
@@ -601,6 +672,7 @@ void TelnetServerRS232Enable(int active)
     }
 
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsWireLogLockFree]
 }
 
 /* FIX [RS232Flap]: refresh the watchdog clock on a successful worker reconnect.
@@ -653,6 +725,7 @@ void TelnetServerRS232BytesReceived(const BYTE *data, int len)
     }
 
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsWireLogLockFree]
 }
 
 /* Called from slicer_read (bOrgcomPortRS232=FALSE) for every batch of decoded
@@ -689,6 +762,7 @@ void TelnetServerSlicerActivity(int nBytes)
         g_tsAudioTransitions  = (uint32_t)TS_AUDIO_SILENCE_THRESHOLD;
 
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsWireLogLockFree]
 }
 
 /* ---------------------------------------------------------------------------
@@ -711,6 +785,7 @@ void TelnetServerNotifyMessage(void)
 
     g_tsLastNotifyTickMs = NowMs();
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsWireLogLockFree]
 }
 
 void TelnetServerNotifyTxStart(void)
@@ -720,6 +795,7 @@ void TelnetServerNotifyTxStart(void)
     g_tsTxStopPending = FALSE;   /* FIX [TelnetServer]: cancel pending debounce — false EOT */
     EmitTxStart_Locked();
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsWireLogLockFree]
 }
 
 void TelnetServerNotifyTxStop(void)
@@ -756,6 +832,7 @@ void TelnetServerNotifyInstr(long subscriberCapcode, int groupCapcode, int assig
 
     g_tsLastNotifyTickMs = NowMs();
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsWireLogLockFree]
 }
 
 void TelnetServerNotifyFrame(const char *body)
@@ -774,6 +851,7 @@ void TelnetServerNotifyFrame(const char *body)
 
     g_tsLastNotifyTickMs = NowMs();
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsWireLogLockFree]
 }
 
 void TelnetServerSetStatusWnd(HWND hWnd)
@@ -925,11 +1003,13 @@ static void SendIacGreeting(int idx)
     g_tsClients[idx].iacSent = TRUE;
 }
 
-/* Called when select() flags the listening socket — accept one client. */
-static void AcceptOneClient(void)
+/* Called when select() flags the listening socket — accept one client.
+** FIX [TelnetListenSockLock]: takes the worker's locked SNAPSHOT of the listen socket
+** instead of re-reading the global, which Shutdown closes/invalidates concurrently. */
+static void AcceptOneClient(SOCKET listenSock)
 {
     SOCKADDR_IN peer; int peerLen = (int)sizeof(peer);
-    SOCKET s = accept(g_tsListenSock, (sockaddr *)&peer, &peerLen);
+    SOCKET s = accept(listenSock, (sockaddr *)&peer, &peerLen);
     if (s == INVALID_SOCKET) return;
 
     /* Make the new socket non-blocking — keeps fan-out send() from stalling. */
@@ -946,7 +1026,7 @@ static void AcceptOneClient(void)
     if (active >= g_tsMaxClients) {
         LeaveCriticalSection(&g_tsCs);
         closesocket(s);
-        TsLog("Reject %s:%d — max clients (%d) reached",
+        TsLog("Reject %s:%d - max clients (%d) reached",	/* FIX [AsciiRuntime]: was em-dash */
               inet_ntoa(peer.sin_addr), ntohs(peer.sin_port), g_tsMaxClients);
         return;
     }
@@ -1134,13 +1214,21 @@ static void FlushReplay(void)
             }
             c->replayCursor    = idx;
 			c->replayEndHead   = g_tsBacklogHead;   /* FIX [TelnetReplayDup]: snapshot the head at replay start */
+            c->replayRemaining = n;                 /* FIX [TelnetReplayCount]: see below */
             c->replayLineCount = 0;
         }
 
         /* Emit up to 16 entries per tick */
         int budget = 16;
         while (budget-- > 0) {
-            if (c->replayCursor == c->replayEndHead) {	/* FIX [TelnetReplayDup]: snapshot, not live head - lines arriving mid-replay go out live via FanOutLine; chasing the moving head re-sent them (dupes) */
+            /* FIX [TelnetReplayCount]: terminate on the REMAINING COUNT, not on
+            ** cursor==replayEndHead. With the ring full (count == TS_BACKLOG_LINES) and no
+            ** ts-skip, the start cursor already EQUALS the snapshot head, so the sentinel
+            ** fired on the very first iteration and the client got an empty
+            ** <BUFFER_START><BUFFER_STOP> instead of the newest full ring - precisely when
+            ** it had missed the most. The count walks exactly the snapshot's n entries and
+            ** still never chases the moving head ([TelnetReplayDup] semantics unchanged). */
+            if (c->replayRemaining <= 0) {
                 /* done */
                 static const char ftr[] = "<BUFFER_STOP>\r";
                 SendToClient(i, ftr, (int)sizeof(ftr) - 1);
@@ -1160,6 +1248,7 @@ static void FlushReplay(void)
                 c->replayLineCount++;
             }
             c->replayCursor = (c->replayCursor + 1) % TS_BACKLOG_LINES;
+            c->replayRemaining--;   /* FIX [TelnetReplayCount] */
         }
     }
 }
@@ -1169,18 +1258,18 @@ static void FlushReplay(void)
 static DWORD WINAPI TelnetWorker(LPVOID /*arg*/)
 {
     TsLogEvent("Worker started, listening on %s:%d", g_tsBind, g_tsPort);
+    FlushPendingWireLog();     // FIX [TsEventLogStaged]: not under g_tsCs here - flush at once
 
     while (g_tsRun) {
         fd_set rd;
         FD_ZERO(&rd);
         int maxfd = 0;
-        SOCKET listenCopy = g_tsListenSock;
-        if (listenCopy != INVALID_SOCKET) {
-            FD_SET(listenCopy, &rd);
-            if ((int)listenCopy > maxfd) maxfd = (int)listenCopy;
-        }
 
         EnterCriticalSection(&g_tsCs);
+        // FIX [TelnetListenSockLock]: snapshot the listen socket under the same lock that
+        // TelnetServerShutdown now uses to detach it, so the worker can never select()/
+        // accept() on a handle value the OS already recycled for another subsystem.
+        SOCKET listenCopy = g_tsListenSock;
         for (int i = 0; i < TS_MAX_CLIENTS; i++) {
             if (g_tsClients[i].used && !g_tsClients[i].disconnected
                 && g_tsClients[i].sock != INVALID_SOCKET) {
@@ -1189,6 +1278,10 @@ static DWORD WINAPI TelnetWorker(LPVOID /*arg*/)
             }
         }
         LeaveCriticalSection(&g_tsCs);
+        if (listenCopy != INVALID_SOCKET) {
+            FD_SET(listenCopy, &rd);
+            if ((int)listenCopy > maxfd) maxfd = (int)listenCopy;
+        }
 
         timeval tv;
         tv.tv_sec  = TS_SELECT_TIMEOUT_SEC;
@@ -1199,7 +1292,7 @@ static DWORD WINAPI TelnetWorker(LPVOID /*arg*/)
 
         if (r > 0) {
             if (listenCopy != INVALID_SOCKET && FD_ISSET(listenCopy, &rd)) {
-                AcceptOneClient();
+                AcceptOneClient(listenCopy);   // FIX [TelnetListenSockLock]
             }
             EnterCriticalSection(&g_tsCs);
             for (int i = 0; i < TS_MAX_CLIENTS; i++) {
@@ -1216,7 +1309,7 @@ static DWORD WINAPI TelnetWorker(LPVOID /*arg*/)
         EnterCriticalSection(&g_tsCs);
         ULONGLONG now = NowMs();
 
-        /* FIX [TelnetServer]: flush debounced TX_STOP after 1500ms window */
+        /* FIX [TelnetServer]: flush debounced TX_STOP after the TS_TXSTOP_DEBOUNCE_MS window */
         if (g_tsTxStopPending && (now - g_tsTxStopRequestMs) >= TS_TXSTOP_DEBOUNCE_MS) {
             EmitTxStop_Locked();
             g_tsTxStopPending = FALSE;
@@ -1242,9 +1335,11 @@ static DWORD WINAPI TelnetWorker(LPVOID /*arg*/)
         CheckAudioWindow_Locked(now);
 
         LeaveCriticalSection(&g_tsCs);
+        FlushPendingWireLog();     // FIX [TsWireLogLockFree]
     }
 
     TsLogEvent("Worker stopping");
+    FlushPendingWireLog();     // FIX [TsEventLogStaged]: thread exits - a staged line would be lost
     return 0;
 }
 
@@ -1346,7 +1441,8 @@ void TelnetServerInit(void)
         g_tsBufferTimeSec = newBufTime;
         g_tsLogToFile     = newLogToFile;
         LeaveCriticalSection(&g_tsCs);
-        TsLogEvent("Config updated (no restart needed — clients kept)");
+        TsLogEvent("Config updated (no restart needed - clients kept)");	/* FIX [AsciiRuntime]: was em-dash */
+        FlushPendingWireLog();     // FIX [TsEventLogStaged]
         return;
     }
 
@@ -1377,8 +1473,10 @@ void TelnetServerInit(void)
 
     if (!OpenListenSocket()) {
         PostStatus(TSS_ERROR);
+        FlushPendingWireLog();     // FIX [TsEventLogStaged]: bind/listen failures stage TsLog lines
         return;
     }
+    FlushPendingWireLog();         // FIX [TsEventLogStaged]: bad-bind fallback stages a TsLog line
 
     g_tsRun    = TRUE;
     g_tsEnabled = TRUE;
@@ -1401,9 +1499,16 @@ void TelnetServerShutdown(void)
     if (g_tsRun) {
         g_tsRun = FALSE;
         /* Closing the listen socket unblocks select(). */
-        if (g_tsListenSock != INVALID_SOCKET) {
-            closesocket(g_tsListenSock);
+        // FIX [TelnetListenSockLock]: detach the handle under g_tsCs BEFORE closesocket, so
+        // the worker's locked snapshot either sees the live socket or INVALID_SOCKET - never
+        // a closed handle value the OS may already have recycled for another subsystem.
+        {
+            SOCKET sListen;
+            EnterCriticalSection(&g_tsCs);
+            sListen = g_tsListenSock;
             g_tsListenSock = INVALID_SOCKET;
+            LeaveCriticalSection(&g_tsCs);
+            if (sListen != INVALID_SOCKET) closesocket(sListen);
         }
         if (g_tsThread) {
             // FIX [TelnetJoin]: join to FULL completion before CloseHandle and (later, in
@@ -1417,8 +1522,14 @@ void TelnetServerShutdown(void)
             g_tsThread = NULL;
         }
     } else if (g_tsListenSock != INVALID_SOCKET) {
-        closesocket(g_tsListenSock);
+        // FIX [TelnetListenSockLock]: same locked detach on the no-worker path (harmless
+        // there, but keeps every writer of g_tsListenSock under the lock).
+        SOCKET sListen;
+        EnterCriticalSection(&g_tsCs);
+        sListen = g_tsListenSock;
         g_tsListenSock = INVALID_SOCKET;
+        LeaveCriticalSection(&g_tsCs);
+        if (sListen != INVALID_SOCKET) closesocket(sListen);
     }
 
     /* Close all client sockets */
@@ -1431,6 +1542,7 @@ void TelnetServerShutdown(void)
     }
     g_tsClientCount = 0;
     LeaveCriticalSection(&g_tsCs);
+    FlushPendingWireLog();     // FIX [TsEventLogStaged]
 
     PostStatus(TSS_DISABLED);
 }

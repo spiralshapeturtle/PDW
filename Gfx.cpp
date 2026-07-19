@@ -619,8 +619,11 @@ bool GetSysObjects(HWND hwnd)
 	if (!(black_brush = (HBRUSH) GetStockObject(BLACK_BRUSH))) return(false);
 	if (!(null_pen = (HPEN) GetStockObject(NULL_PEN))) return(false);
 
+	// FIX [ExclamLoadGuard]: NULL-guard the GetObject like ReloadExclamBitmap() below
+	// already does - a failed LoadBitmap only worked out because bme is a zeroed
+	// global (0x0 StretchBlt draws nothing), which is fragile rather than safe.
 	hbm_exclam = LoadBitmap(ghInstance,MAKEINTRESOURCE((WORD)IDS_EXCLAM));
-	GetObject(hbm_exclam, sizeof(bme), &bme);
+	if (hbm_exclam) GetObject(hbm_exclam, sizeof(bme), &bme);
 
 	return(true);
 }

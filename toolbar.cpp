@@ -180,7 +180,10 @@ HWND ShowMakeToolBar(HWND parent_hwnd,HINSTANCE hThisInstance)
 		if (hToolImageList)
 			SendMessage(tbhwnd, TB_SETIMAGELIST, 0, (LPARAM)hToolImageList);
 		SendMessage(tbhwnd, TB_SETBITMAPSIZE, 0, MAKELPARAM(iconSize, iconSize));
-		SendMessage(tbhwnd, TB_SETBUTTONSIZE, 0, MAKELPARAM(iconSize + Scale(7), iconSize + Scale(7)));
+		// FIX [ToolbarIconGrid]: uniform 8 px grid gutter around every button (4 px each side)
+		// so the spacing between icons is a single fixed unit instead of a per-button margin.
+		SendMessage(tbhwnd, TB_SETPADDING, 0, MAKELPARAM(Scale(8), Scale(8)));
+		SendMessage(tbhwnd, TB_SETBUTTONSIZE, 0, MAKELPARAM(iconSize + Scale(8), iconSize + Scale(8)));
 
 		Add_TB_ButtonsBitmaps(tbhwnd,hThisInstance); // Add rest of buttons.
 

@@ -148,6 +148,9 @@ static CRITICAL_SECTION g_cs;
 static BOOL            g_csInit   = FALSE;
 static HWND            g_hStatusWnd = NULL;   // protected by g_cs
 static unsigned        g_droppedJobs = 0;
+// FIX [TgProfileGuiSync]: set by the worker when ApplyMigration rewrote g_szChatIds; the GUI
+// thread mirrors it into Profile (see TelegramNotify) so Profile is only written on the GUI thread.
+static volatile BOOL   g_bChatIdsDirty = FALSE;
 
 static void PostStatus(int status, LPARAM lp)
 {
@@ -475,15 +478,23 @@ static void ApplyMigration(const char *oldId, LONGLONG newId)
         int head = (int)(pos - g_szChatIds);
         _snprintf(g_szChatIds + head, sizeof(g_szChatIds) - 1 - head, "%s%s", newStr, tail);
         g_szChatIds[sizeof(g_szChatIds) - 1] = '\0';
-        // mirror to Profile so it persists on next WriteSettings()
-        strncpy(Profile.szTelegramChatIds, g_szChatIds, sizeof(Profile.szTelegramChatIds) - 1);
-        Profile.szTelegramChatIds[sizeof(Profile.szTelegramChatIds) - 1] = '\0';
+        // FIX [TgProfileGuiSync]: do NOT write Profile from the worker thread. The GUI thread
+        // reads/writes Profile.szTelegramChatIds with no lock (settings dialog, WriteSettings),
+        // so the old strncpy here could tear the persisted chat list. Flag it instead; the GUI
+        // thread mirrors g_szChatIds -> Profile on the next TelegramNotify. (Worst case the
+        // migration persists one message later; g_szChatIds itself is already updated so all
+        // sends use the new id immediately.)
+        g_bChatIdsDirty = TRUE;
     }
     LeaveCriticalSection(&g_cs);
     WriteLog("MIGRATE chat_id %s -> %lld (updated)", oldId, newId);
 }
 
-static void SendToChat(const char *token, const char *chatId, const char *htmlText, BOOL bJobSilent, int threadId)
+// FIX [FlushBounded]: returns TRUE while the transport is usable (delivered, or a fast
+// definitive HTTP error - server alive), FALSE on a transport-level failure or when a
+// shutdown interrupts the retry/backoff. The exit-flush uses this to stop flushing
+// against a dead endpoint instead of burning the full timeout budget per queued job.
+static BOOL SendToChat(const char *token, const char *chatId, const char *htmlText, BOOL bJobSilent, int threadId)
 {
     static char jsonBody[6 * TG_MSG_LEN + 1024];
     char resp[2048];
@@ -492,7 +503,12 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
     {
         if (attempt > 0)
         {
-            if (!g_bRunning) return;
+            if (!g_bRunning)
+            {
+                // FIX [ShutdownLost]: this message is dropped here - say so in the log.
+                WriteLog("LOST    chat_id=%s shutdown during retry - message dropped", chatId);
+                return FALSE;
+            }
             PostStatus(TGS_RETRY, attempt);
         }
 
@@ -503,7 +519,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
         {
             WriteLog("SENT    chat_id=%s -> %d OK", chatId, status);
             PostStatus(TGS_OK, status);
-            return;
+            return TRUE;
         }
 
         // Rate limited: honour retry_after.
@@ -518,7 +534,12 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
             }
             WriteLog("RATE    chat_id=%s 429 retry_after=%llds", chatId, (LONGLONG)(waitMs / 1000));
             PostStatus(TGS_RETRY, attempt + 1);
-            if (!g_bRunning) return;
+            if (!g_bRunning)
+            {
+                // FIX [ShutdownLost]: this message is dropped here - say so in the log.
+                WriteLog("LOST    chat_id=%s shutdown during rate-limit wait - message dropped", chatId);
+                return FALSE;   // FIX [FlushBounded]: can't honour the backoff during shutdown
+            }
             InterruptibleSleep(waitMs);
             continue;
         }
@@ -529,7 +550,16 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
             WriteLog("PARSE   chat_id=%s HTML rejected, retrying as plain text", chatId);
             BuildJson(jsonBody, sizeof(jsonBody), chatId, htmlText, FALSE, bJobSilent, threadId);
             status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
-            if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return; }
+            if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return TRUE; }
+            // FIX [TgFallback429]: a 429 (or transport error) on the plain-text fallback fell
+            // through to the fatal-4xx branch below and dropped the message even though retry
+            // attempts remained. Route it back into the retry loop instead.
+            if (status == 429 || status == 0)
+            {
+                if (!g_bRunning) return FALSE;
+                InterruptibleSleep(g_retryDelays[attempt]);
+                continue;
+            }
         }
 
         // Supergroup migration -> update stored chat_id and retry against the new id.
@@ -542,7 +572,7 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
                 char newStr[32]; sprintf(newStr, "%lld", newId);
                 BuildJson(jsonBody, sizeof(jsonBody), newStr, htmlText, TRUE, bJobSilent, threadId);
                 status = HttpPost(token, "sendMessage", jsonBody, (int)strlen(jsonBody), resp, sizeof(resp));
-                if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return; }
+                if (status >= 200 && status < 300) { PostStatus(TGS_OK, status); return TRUE; }
             }
         }
 
@@ -551,19 +581,27 @@ static void SendToChat(const char *token, const char *chatId, const char *htmlTe
             // 4xx (bot blocked, kicked from group, bad token) — no point retrying.
             WriteLog("ERROR   chat_id=%s -> HTTP %d", chatId, status);
             PostStatus(TGS_ERROR, status);
-            return;
+            return TRUE;   // FIX [FlushBounded]: endpoint alive (fast definitive answer)
         }
 
         // transport error -> back off and retry
-        if (!g_bRunning) return;
+        if (!g_bRunning)
+        {
+            // FIX [ShutdownLost]: this message is dropped here - say so in the log.
+            WriteLog("LOST    chat_id=%s shutdown during retry - message dropped", chatId);
+            return FALSE;   // FIX [FlushBounded]
+        }
         InterruptibleSleep(g_retryDelays[attempt]);
     }
     WriteLog("ERROR   chat_id=%s all retries failed", chatId);
     PostStatus(TGS_ERROR, 0);
+    return FALSE;   // FIX [FlushBounded]
 }
 
 // Split (or truncate) the HTML text and send each chunk to every configured chat_id.
-static void DoSend(const TelegramJob *job)
+// FIX [FlushBounded]: returns FALSE when a transport-level failure was seen (endpoint
+// unreachable), TRUE otherwise; the exit-flush uses this to stop flushing a dead endpoint.
+static BOOL DoSend(const TelegramJob *job)
 {
     char szToken[80], szChatIds[512];
     EnterCriticalSection(&g_cs);
@@ -588,7 +626,7 @@ static void DoSend(const TelegramJob *job)
     int effThread = (job->threadId > 0) ? job->threadId
                   : (job->chatOverride[0] ? 0 : g_iThreadId);
 
-    if (!szToken[0] || !pChatSource[0]) return;
+    if (!szToken[0] || !pChatSource[0]) return TRUE;   // FIX [FlushBounded]: no-op, not a transport failure
 
     static char szText[TG_LABELLIST_LEN + TG_MSG_LEN + 1024];   // title + full label/message body
     BuildMessageText(szText, sizeof(szText), job);
@@ -598,6 +636,7 @@ static void DoSend(const TelegramJob *job)
     // Build the list of chunks (1 chunk unless >4096 and splitting enabled).
     int total = (int)strlen(szText);
     int chunkStart = 0;
+    BOOL bTransportOk = TRUE;   // FIX [FlushBounded]
     do
     {
         char chunk[TG_MAX_TEXT + 16];
@@ -654,7 +693,14 @@ static void DoSend(const TelegramJob *job)
                 // has topics, so sending message_thread_id to it returns HTTP 400. Gate the thread per
                 // id on the sign so a DM in the chat list never 400s while the group still gets routed.
                 int idThread = (effThread > 0 && tok[0] == '-') ? effThread : 0;
-                SendToChat(szToken, tok, chunk, job->bSilent ? TRUE : FALSE, idThread);  // FIX [TelegramSilent] / FIX [TelegramRouting]
+                // FIX [FlushBounded]: while running, one dead chat never blocks the others
+                // (existing behaviour); during shutdown, stop at the first transport failure
+                // so the exit-flush stays bounded.
+                if (!SendToChat(szToken, tok, chunk, job->bSilent ? TRUE : FALSE, idThread))  // FIX [TelegramSilent] / FIX [TelegramRouting]
+                {
+                    bTransportOk = FALSE;
+                    if (!g_bRunning) break;
+                }
             }
             tok = strtok_s(NULL, ";, ", &ctx);
         }
@@ -662,6 +708,7 @@ static void DoSend(const TelegramJob *job)
         chunkStart += take;
         if (!g_bSplitLong) break;   // truncate mode: only the first chunk
     } while (chunkStart < total && g_bRunning);
+    return bTransportOk;   // FIX [FlushBounded]
 }
 
 // ---------------------------------------------------------------------------
@@ -692,7 +739,18 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
         if (!QueueEmpty()) { job = g_queue[g_qHead]; g_qHead = (g_qHead + 1) % TG_QUEUE_SIZE; have = TRUE; }
         LeaveCriticalSection(&g_cs);
         if (!have) break;
-        DoSend(&job);
+        // FIX [FlushBounded]: bound the exit flush - on the first transport failure, log
+        // what remains as LOST and stop, instead of burning the full timeout budget per
+        // queued job inside TelegramShutdown's INFINITE join on the GUI thread.
+        if (!DoSend(&job))
+        {
+            int nLost;
+            EnterCriticalSection(&g_cs);
+            nLost = (g_qTail - g_qHead + TG_QUEUE_SIZE) % TG_QUEUE_SIZE;
+            LeaveCriticalSection(&g_cs);
+            WriteLog("LOST    shutdown flush aborted - %d message(s) dropped (transport failed)", nLost + 1);
+            break;
+        }
     }
     CloseSession();
     return 0;
@@ -768,11 +826,14 @@ void TelegramDestroy(void)
 // Enqueue a fully built job (caller holds nothing; takes g_cs internally).
 static void EnqueueJob(const TelegramJob *job)
 {
+    BOOL     bDropped = FALSE;
+    unsigned nDropped = 0;
     EnterCriticalSection(&g_cs);
     if (QueueFull())
     {
         g_droppedJobs++;
-        WriteLog("DROP queue full - message discarded (total dropped=%u)", g_droppedJobs);
+        bDropped = TRUE;
+        nDropped = g_droppedJobs;
     }
     else
     {
@@ -785,6 +846,14 @@ static void EnqueueJob(const TelegramJob *job)
     // handle. Shutdown now also clears the handle under g_cs, closing the window completely.
     if (g_hEvent) SetEvent(g_hEvent);
     LeaveCriticalSection(&g_cs);
+    if (bDropped)
+    {
+        // FIX [QueueDropVisible]: log OUTSIDE g_cs (LogManager direct mode does synchronous
+        // disk I/O and this runs on the GUI thread) and ALWAYS post the error status - with
+        // LogToFile off the drop was previously completely invisible to the operator.
+        WriteLog("DROP queue full - message discarded (total dropped=%u)", nDropped);
+        PostStatus(TGS_ERROR, 0);
+    }
 }
 
 void TelegramNotify(const char *capcode, const char *message, const char *label,
@@ -795,6 +864,19 @@ void TelegramNotify(const char *capcode, const char *message, const char *label,
                     int threadId, const char *chatOverride)  // FIX [TelegramRouting]: per-filter topic + chat override
 {
     if (!g_bRunning) return;
+
+    // FIX [TgProfileGuiSync]: mirror a worker-side chat-id migration ([TgMigrateToken]) into
+    // Profile HERE, on the GUI thread. Profile.szTelegramChatIds is read/written lock-free by
+    // the settings dialog and WriteSettings() (both GUI thread), so only the GUI thread may
+    // write it.
+    if (g_bChatIdsDirty)
+    {
+        EnterCriticalSection(&g_cs);
+        strncpy(Profile.szTelegramChatIds, g_szChatIds, sizeof(Profile.szTelegramChatIds) - 1);
+        Profile.szTelegramChatIds[sizeof(Profile.szTelegramChatIds) - 1] = '\0';
+        g_bChatIdsDirty = FALSE;
+        LeaveCriticalSection(&g_cs);
+    }
 
     // FIX [TgGroupBatch]: a FLEX group call calls TelegramNotify once per subscriber capcode.
     // Accumulate them per groupbit and emit a single message from TelegramFlushGroup(), so the

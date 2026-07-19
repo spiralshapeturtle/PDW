@@ -223,13 +223,16 @@ void POCSAG::process_word(int fn2)
 				{
 					du = (sr >> 3) & 0x0f;
 
+					// FIX [PocsagNumBound]: num[] holds only 40 entries; today the wordc<7
+					// gate caps nnum at ~35, but guard explicitly (mirrors [PocsagAlpBound])
+					// so widening that gate can never overrun num[]/message_color_num[].
 					if (errl > 2)
 					{
-						message_color_num[nnum]=COLOR_BITERRORS;
+						if (nnum < 40) message_color_num[nnum]=COLOR_BITERRORS;
 					}
-					else message_color_num[nnum]=COLOR_NUMERIC;
+					else if (nnum < 40) message_color_num[nnum]=COLOR_NUMERIC;
 
-					num[nnum++] = aNumeric[du];
+					if (nnum < 40) num[nnum++] = aNumeric[du];
 
 					srcn = 0;
 				}

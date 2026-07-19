@@ -120,6 +120,7 @@ void set_menu_items(void)
 	}
 
 	check_menu_item(3, IDM_DEBUGLOG, Profile.bDebugLog);  // Options menu: Live Debug Log
+	check_menu_item(5, IDM_SHOWMENUBAR, Profile.ShowMenuBar);  // FIX [MenuBarToggle]: Display menu
 }
 
 // Add required language menu items.

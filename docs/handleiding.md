@@ -1,6 +1,6 @@
 # PDW Gebruikershandleiding
 
-**Versie 4.0.3** | Windows 7-11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Windows 7-11** | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -63,7 +63,7 @@
 
 PDW is een software pagingdecoder die een geluidskaart of seriele poort omzet in een volwaardige FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES-ontvanger. Het decodeert, filtert en distribueert pagingberichten naar een breed scala aan uitvoerkanalen - van eenvoudige weergave op het scherm en e-mailmeldingen tot MQTT-brokers, webhooks, Telnet-clients, MySQL-databases en lokale SQLite-bestanden.
 
-Deze versie (4.0.3) bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
+Deze fork bouwt voort op de klassieke PDW 3.2-codebase en voegt vijf jaar productiegeharde verbeteringen toe. Een volledige versiegeschiedenis is beschikbaar in `RELEASE_NOTES.md`.
 
 ---
 
@@ -759,6 +759,16 @@ Aanbevolen voor drukke POCSAG/FLEX-netwerken waar veel berichten per seconde hog
 | Kolommen | Toon of verberg afzonderlijke kolommen |
 | Kleuren | Bewerk het kleurenschema. De "Default" filterlabelkleur is een goed leesbaar azuurblauw; met "Better contrast" aan zijn alle 17 labelkleuren onderling verschillend |
 | Woordafbreking | Laat lange berichten doorlopen in de berichtkolom |
+| Menubalk tonen | Verberg of toon de menubalk (de werkbalk blijft in beide gevallen zichtbaar); sneltoets **Ctrl+Shift+M** |
+
+### Menubalk verbergen
+
+**Weergave > Menubalk tonen** schakelt de hele menubalk (Bestand, Bewerken, Interface, ...) aan of
+uit; de werkbalk en de berichtvensters blijven ongewijzigd en vullen de vrijgekomen ruimte op. Zodra
+de menubalk verborgen is, kan er niet meer op geklikt worden, dus biedt PDW twee manieren om hem
+terug te krijgen: de sneltoets **Ctrl+Shift+M** (werkt zowel met zichtbare als verborgen menubalk),
+of rechtsklikken ergens in het hoofdvenster (ook op de werkbalk) en **Show Menu Bar** kiezen in het
+contextmenu. De instelling wordt onthouden in `pdw.ini` en bij de volgende start hersteld.
 
 #### 11.1 Eigen filterlabelkleuren (pdw.ini)
 

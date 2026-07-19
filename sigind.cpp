@@ -25,17 +25,37 @@
 #include "headers\initapp.h"
 #include "headers\sigind.h"
 
-#define MAX_SI_POS        20	// 0-12. Max positions available to signal indicator.
+#define MAX_SI_POS        20	// 0-20. Max positions available to signal indicator.
 #define AUDIO_POINT_VALUE 2	// Used for working out samples per signal
 										// position.e.g. sample=20/10, position=2.
 
+// FIX [SigindFlatGauge]: logical (96 dpi) footprint of the meter on the toolbar. The face
+// bitmap (GFX\sigind.bmp) is rendered at 4x (128x96) and HALFTONE-downscaled into this box,
+// so the toolbar layout is unchanged while the gauge stays crisp at any DPI. The needle
+// coordinate table (sip[]) below is expressed in this same 32x24 logical space.
+#define SIGIND_LOGW 32
+#define SIGIND_LOGH 24
+
 BOOL old_rect_flg=FALSE;
 BOOL got_sigind=FALSE;
-HDC hdcMemory=NULL;
 
-// FIX [DpiScale]: DPI-geschaalde naaldpennen — aangemaakt in InitSigIndPens() na g_dpi bekend is.
-HPEN hPenNeedleRed   = NULL;
-HPEN hPenNeedleWhite = NULL;
+// FIX [DpiScale]/[SigindFlatGauge]: DPI-scaled needle objects - created in InitSigIndPens()
+// once g_dpi is known.
+HPEN   hPenNeedleRed   = NULL;	// red needle
+HBRUSH hbrNeedleHub    = NULL;	// red pivot hub
+
+// FIX [SigindFlatGauge]: cached off-screen back-buffer. The needle is redrawn MANY times a
+// second from the decode/audio path, and it overlaps the arc. Overpainting the old needle
+// (the previous approach) nibbled the arc thinner/grainier on every sweep. Instead we keep a
+// clean pre-scaled copy of the face (hdcGaugeFace) and, per update, blit it into a compositing
+// buffer (hdcGaugeBB), draw the needle on top, and present the buffer in one BitBlt. The arc
+// is copied fresh every frame, so it stays crisp forever and there is no flicker. Buffers are
+// (re)built lazily when the DPI-scaled size changes and torn down on DPI/display change.
+HDC     hdcGaugeFace = NULL;	// holds the clean, pre-scaled meter face
+HDC     hdcGaugeBB   = NULL;	// compositing back-buffer (face + needle)
+HBITMAP hbmGaugeFace = NULL, hbmGaugeFaceOld = NULL;
+HBITMAP hbmGaugeBB   = NULL, hbmGaugeBBOld   = NULL;
+int     gaugeBBW = 0, gaugeBBH = 0;	// size the buffers were built for
 
 HBITMAP hbm_sigind=NULL;
 BITMAP bms;
@@ -51,30 +71,132 @@ int si_hi_hover=0;
 
 // Points used for drawing signal indicator.
 
+// FIX [SigindFlatGauge]: needle endpoints on a TRUE circular arc (pivot 16,18, swept
+// 153deg->27deg over the top) so the sweep matches the arc face. Index 0 = resting (up-left,
+// as shown on the toolbar), index 20 = full (up-right). Coordinates are in the 32x24 logical
+// space (SIGIND_LOGW x SIGIND_LOGH); show_sigind() applies Scale() + the meter offset.
+// FIX [SigindWiggleVisibility]: testers reported the at-rest jitter (noise detected, no message
+// - UpdateSigInd bouncing the needle around the low indices) was harder to see than on the
+// classic meter. Two regressions caused that: (1) the redesigned needle got shorter (tip radius
+// ~9) and (2) its low-index steps were evenly compressed, so index 0->1 moved only ~1px. Restore
+// the classic character by porting the original hand-tuned angles (bf7cc64) onto the new pivot at
+// radius 10 (fills the enlarged arc): a deliberate wider gap between rest(0) and 1 makes the
+// needle visibly SNAP out of rest (0->1 is now ~2.2px, was ~1px), matching the old feel. The arc
+// face and UpdateSigInd dynamics are unchanged; this is geometry only.
 int sip[21][4] =	{//from: x,  y, To: x,  y
-							{18, 20,  6, 14},
-//							{18, 20,  7, 13},
-							{18, 20,  8, 12},
-							{18, 20,  9, 11},
-							{18, 20, 10, 10},
-							{18, 20, 11,  9},
-							{18, 20, 12,  9},
-							{18, 20, 13,  8},
-							{18, 20, 15,  8},
-							{18, 20, 16,  7},
-							{18, 20, 17,  7},
-							{18, 20, 19,  7},
-							{18, 20, 20,  7},
-							{18, 20, 22,  8},
-							{18, 20, 23,  8},
-							{18, 20, 24,  9},
-							{18, 20, 25,  9},
-							{18, 20, 26, 10},
-							{18, 20, 27, 11},
-							{18, 20, 28, 12},
-							{18, 20, 29, 13},
-							{18, 20, 30, 14},
+							{16, 18,  7, 14},
+							{16, 18,  8, 12},
+							{16, 18,  9, 11},
+							{16, 18, 10, 10},
+							{16, 18, 11, 10},
+							{16, 18, 11,  9},
+							{16, 18, 12,  9},
+							{16, 18, 13,  8},
+							{16, 18, 14,  8},
+							{16, 18, 15,  8},
+							{16, 18, 17,  8},
+							{16, 18, 18,  8},
+							{16, 18, 19,  9},
+							{16, 18, 20,  9},
+							{16, 18, 21,  9},
+							{16, 18, 21, 10},
+							{16, 18, 22, 10},
+							{16, 18, 23, 11},
+							{16, 18, 24, 12},
+							{16, 18, 24, 13},
+							{16, 18, 25, 14},
 					};
+
+// FIX [SigindFlatGauge]: tear down the cached back-buffer (on DPI/display change or shutdown).
+void FreeGaugeBuffers(void)
+{
+	if (hdcGaugeFace) { if (hbmGaugeFaceOld) SelectObject(hdcGaugeFace, hbmGaugeFaceOld); DeleteDC(hdcGaugeFace); hdcGaugeFace = NULL; }
+	if (hdcGaugeBB)   { if (hbmGaugeBBOld)   SelectObject(hdcGaugeBB,   hbmGaugeBBOld);   DeleteDC(hdcGaugeBB);   hdcGaugeBB   = NULL; }
+	if (hbmGaugeFace) { DeleteObject(hbmGaugeFace); hbmGaugeFace = NULL; }
+	if (hbmGaugeBB)   { DeleteObject(hbmGaugeBB);   hbmGaugeBB   = NULL; }
+	hbmGaugeFaceOld = hbmGaugeBBOld = NULL;
+	gaugeBBW = gaugeBBH = 0;
+}
+
+// FIX [SigindFlatGauge]: (re)build the back-buffer at bw x bh and render the clean, HALFTONE-
+// downscaled meter face into hdcGaugeFace ONCE. Returns FALSE on any GDI failure.
+static BOOL BuildGaugeBuffers(HDC hdcRef, int bw, int bh)
+{
+	HDC srcdc;
+
+	FreeGaugeBuffers();
+	if (bw < 1 || bh < 1 || !got_sigind) return FALSE;
+
+	hdcGaugeFace = CreateCompatibleDC(hdcRef);
+	hdcGaugeBB   = CreateCompatibleDC(hdcRef);
+	hbmGaugeFace = CreateCompatibleBitmap(hdcRef, bw, bh);
+	hbmGaugeBB   = CreateCompatibleBitmap(hdcRef, bw, bh);
+	if (!hdcGaugeFace || !hdcGaugeBB || !hbmGaugeFace || !hbmGaugeBB) { FreeGaugeBuffers(); return FALSE; }
+
+	hbmGaugeFaceOld = (HBITMAP)SelectObject(hdcGaugeFace, hbmGaugeFace);
+	hbmGaugeBBOld   = (HBITMAP)SelectObject(hdcGaugeBB,   hbmGaugeBB);
+
+	// downscale the hi-res face into the clean-face buffer (once, HALFTONE = high quality)
+	if (srcdc = CreateCompatibleDC(hdcRef))
+	{
+		HBITMAP oldsrc = (HBITMAP)SelectObject(srcdc, hbm_sigind);
+		SetStretchBltMode(hdcGaugeFace, HALFTONE);
+		SetBrushOrgEx(hdcGaugeFace, 0, 0, NULL);
+		StretchBlt(hdcGaugeFace, 0, 0, bw, bh, srcdc, 0, 0, bms.bmWidth, bms.bmHeight, SRCCOPY);
+		SelectObject(srcdc, oldsrc);
+		DeleteDC(srcdc);
+	}
+	else
+	{
+		// FIX [GaugeSrcdcFail]: without this, a failed CreateCompatibleDC skipped the
+		// face StretchBlt but the size was still cached and TRUE returned - PaintGauge
+		// then presented (and kept presenting) an uninitialized bitmap as the meter
+		// face. Tear down and report failure so the next paint retries the build.
+		FreeGaugeBuffers();
+		return FALSE;
+	}
+	gaugeBBW = bw; gaugeBBH = bh;
+	return TRUE;
+}
+
+// FIX [SigindFlatGauge]: paint the complete gauge (clean face + needle at pos + hub) via the
+// back-buffer in a single BitBlt. The arc is copied fresh from hdcGaugeFace every call, so the
+// moving needle can never damage it, and the single present is flicker-free.
+void PaintGauge(int pos)
+{
+	int bw = Scale(SIGIND_LOGW), bh = Scale(SIGIND_LOGH);
+	int fx, fy, tx, ty, hr;
+	HDC hdc;
+
+	if (!got_sigind) return;
+	if (pos < 0) pos = 0; else if (pos > MAX_SI_POS) pos = MAX_SI_POS;
+	if (!(hdc = GetDC(ghWnd))) return;
+
+	if (!hdcGaugeBB || gaugeBBW != bw || gaugeBBH != bh)
+	{
+		if (!BuildGaugeBuffers(hdc, bw, bh)) { ReleaseDC(ghWnd, hdc); return; }
+	}
+
+	// clean face -> compositing buffer
+	BitBlt(hdcGaugeBB, 0, 0, bw, bh, hdcGaugeFace, 0, 0, SRCCOPY);
+
+	// red needle on top
+	SelectObject(hdcGaugeBB, hPenNeedleRed ? hPenNeedleRed : SysPEN[RED]);
+	fx = Scale(sip[pos][0]); fy = Scale(sip[pos][1]);
+	tx = Scale(sip[pos][2]); ty = Scale(sip[pos][3]);
+	MoveToEx(hdcGaugeBB, fx, fy, NULL);
+	LineTo(hdcGaugeBB, tx, ty);
+
+	// red pivot hub
+	hr = Scale(2); if (hr < 1) hr = 1;
+	SelectObject(hdcGaugeBB, null_pen);
+	if (hbrNeedleHub) SelectObject(hdcGaugeBB, hbrNeedleHub);
+	Ellipse(hdcGaugeBB, fx - hr, fy - hr, fx + hr + 1, fy + hr + 1);
+
+	// present in one blit
+	BitBlt(hdc, sig_rect.left, sig_rect.top, bw, bh, hdcGaugeBB, 0, 0, SRCCOPY);
+	ReleaseDC(ghWnd, hdc);
+}
 
 
 // Get signal indicator bitmap resource
@@ -100,6 +222,7 @@ BOOL LoadSigInd(HINSTANCE hThisInstance)
 void ReloadSigInd(HINSTANCE hThisInstance)
 {
 	if (got_sigind || hbm_sigind) { DeleteObject(hbm_sigind); hbm_sigind = NULL; got_sigind = FALSE; }
+	FreeGaugeBuffers();	// FIX [SigindFlatGauge]: drop the cached face (built from the old DDB); rebuilt on next paint
 	LoadSigInd(hThisInstance);	// reloads + GetObject(bms) + sets got_sigind
 }
 
@@ -107,19 +230,27 @@ void ReloadSigInd(HINSTANCE hThisInstance)
 void FreeSigInd(void)
 {
 	if (got_sigind) DeleteObject(hbm_sigind);
-	if (hPenNeedleWhite) { DeleteObject(hPenNeedleWhite); hPenNeedleWhite = NULL; }	// FIX [DpiScale]
+	FreeGaugeBuffers();	// FIX [SigindFlatGauge]
 	if (hPenNeedleRed)   { DeleteObject(hPenNeedleRed);   hPenNeedleRed   = NULL; }	// FIX [DpiScale]
+	if (hbrNeedleHub)    { DeleteObject(hbrNeedleHub);    hbrNeedleHub    = NULL; }	// FIX [SigindFlatGauge]
 }
 
 // FIX [DpiScale]: maak pennen aan met DPI-proportionele dikte (1px op 96dpi, 2px op 150%+).
 // Aanroepen na g_dpi bekend is (WM_CREATE), niet in LoadSigInd (die loopt vóór WM_CREATE).
 void InitSigIndPens(void)
 {
-	int pw = Scale(1);
-	if (hPenNeedleWhite) { DeleteObject(hPenNeedleWhite); hPenNeedleWhite = NULL; }
-	if (hPenNeedleRed)   { DeleteObject(hPenNeedleRed);   hPenNeedleRed   = NULL; }
-	hPenNeedleWhite = CreatePen(PS_SOLID, pw, RGB(255, 255, 255));
-	hPenNeedleRed   = CreatePen(PS_SOLID, pw, RGB(255,   0,   0));
+	int pw = Scale(2);	// FIX [SigindFlatGauge]: slightly bolder needle (was Scale(1)) to match the new face
+	if (pw < 1) pw = 1;
+	// FIX [SigindPenFreeOrder]: tear down the back-buffer FIRST, then delete the pen/hub. PaintGauge
+	// leaves hPenNeedleRed and hbrNeedleHub selected in hdcGaugeBB; DeleteObject on a still-selected
+	// object fails and leaks. FreeGaugeBuffers() deletes hdcGaugeBB (deselecting them) so the deletes
+	// below succeed. Mirrors FreeSigInd's order. Also forces a rebuild at the new size on next paint.
+	FreeGaugeBuffers();
+	if (hPenNeedleRed) { DeleteObject(hPenNeedleRed); hPenNeedleRed = NULL; }
+	if (hbrNeedleHub)  { DeleteObject(hbrNeedleHub);  hbrNeedleHub  = NULL; }
+	// FIX [SigindFlatGauge]: red needle (224,0,0) matching the redesigned icon accent.
+	hPenNeedleRed = CreatePen(PS_SOLID, pw, RGB(224, 0, 0));
+	hbrNeedleHub  = CreateSolidBrush(RGB(224, 0, 0));
 }
 
 // Draw signal indicator on toolbar
@@ -127,7 +258,10 @@ void DrawSigInd(HWND hwnd)
 {
 	HDC hdc;
 	RECT r;
-	int x=Scale(5),bw=Scale(bms.bmWidth),bh=Scale(bms.bmHeight);	// FIX [DpiScale]: geschaalde sigind
+	// FIX [SigindFlatGauge]: the drawn footprint is the FIXED logical size (SIGIND_LOGW x
+	// SIGIND_LOGH), not the face bitmap's pixel size - the bitmap is now a 4x hi-res source
+	// that gets downscaled into this box, so the toolbar layout stays exactly as before.
+	int x=Scale(5),bw=Scale(SIGIND_LOGW),bh=Scale(SIGIND_LOGH);	// FIX [DpiScale]: geschaalde sigind
 	// FIX [SigindBandAlign]: center the meter vertically in the ACTUAL toolbar band
 	// (g_cyToolbar) instead of a fixed top offset. y = Scale(4) was tuned for the toolbar
 	// height at startup; when the toolbar re-autosizes shorter to its themed steady-state
@@ -149,6 +283,12 @@ void DrawSigInd(HWND hwnd)
 	si_index=0;  // this is used by UpdateSigInd().
 	extern double dRX_Quality;
 
+	// FIX [SigindReloadRetry]: if the reload after a display change failed (LoadBitmap
+	// during display-driver churn / GDI pressure), got_sigind stayed FALSE and the
+	// meter vanished until the next WM_DISPLAYCHANGE or a restart. Cheap self-heal:
+	// retry the load on the next repaint.
+	if (!got_sigind) LoadSigInd(ghInstance);
+
 	if (got_sigind)
 	{
 		hdc = GetDC(hwnd);
@@ -164,37 +304,27 @@ void DrawSigInd(HWND hwnd)
 		GetClientRect(hwnd, &old_rect);
 		old_rect_flg=TRUE;
 
-		// need black background for bitmap
-		SelectObject(hdc,black_brush);
-		Rectangle(hdc,r.right-(bw+x),y,r.right-(x-1),bh+y+1);	// FIX [DpiScale]
-
-		// Keep record of bitmaps current location
+		// Keep record of bitmap's current location
 		sig_rect.left	= r.right-(bw+x);	// FIX [DpiScale]
 		sig_rect.top	= y;
 		sig_rect.bottom	= bh + y;	// FIX [DpiScale]
 		sig_rect.right	= r.right-(x-1);
 
-		// draw bitmap
-		if (hdcMemory = CreateCompatibleDC(hdc))
-		{
-			SelectObject(hdcMemory, hbm_sigind);
-			SetStretchBltMode(hdc, COLORONCOLOR);	// FIX [DpiScale]
-			StretchBlt(hdc,sig_rect.left,sig_rect.top, bw, bh, hdcMemory, 0, 0, bms.bmWidth, bms.bmHeight, SRCPAINT);
-			DeleteDC(hdcMemory);
-		}
-
-		// FIX [SigindDividerClip]: proactively restore the toolbar/title-bar divider segment
+		// FIX [SigindFlatGauge]: proactively restore the toolbar/title-bar divider segment
 		// under the gauge. Only the PANE1 path draws this dark-gray line (at g_cyToolbar,
 		// full width); the hover (WM_NOTIFY) and per-second (PANERXQUAL) repaints never do.
 		// Redrawing it here lets an already-broken line self-heal on the next meter repaint
-		// instead of waiting for a full WM_PAINT. The box now stays above g_cyToolbar (see
+		// instead of waiting for a full WM_PAINT. The gauge box stays above g_cyToolbar (see
 		// the y clamp above), so this line sits cleanly just below the gauge, matching PANE1.
 		SelectObject(hdc, SysPEN[DARKGRAY]);
 		MoveToEx(hdc, sig_rect.left, g_cyToolbar, NULL);
 		LineTo(hdc, r.right, g_cyToolbar);
 
 		ReleaseDC(hwnd,hdc);
-		show_sigind(0, 0);	// show sigind needle
+		// FIX [SigindFlatGauge]: the face + needle are now painted together via the cached
+		// back-buffer (PaintGauge), so the arc is redrawn fresh every frame and the moving
+		// needle can never nibble it. sig_rect (set above) tells PaintGauge where to blit.
+		PaintGauge(si_index);
 	}
 }
 
@@ -248,36 +378,14 @@ void UpdateSigInd(int direction_flg)
 }
 
 
-// Draw signal indicator needle.
-// Draw needle at new_pos.
-// old_pos is used to erase previous line.
+// Draw signal indicator needle at new_pos.
+// FIX [SigindFlatGauge]: the whole gauge (clean face + needle + hub) is now composited in the
+// back-buffer and presented in one blit, so the arc stays crisp and there is no flicker. The
+// old_pos parameter is no longer needed (nothing is erased by overpainting) but is kept so the
+// existing call sites in UpdateSigInd() stay unchanged.
 void show_sigind(int new_pos,int old_pos)
 {
-	HDC hdc;
-	int x,y;
-
-	hdc = GetDC(ghWnd);
-
-	// erase old line.
-	SelectObject(hdc, hPenNeedleWhite ? hPenNeedleWhite : SysPEN[WHITE]);	// FIX [DpiScale]: geschaalde pen
-	x = sig_rect.left+Scale(sip[old_pos][0]);	// FIX [DpiScale]
-	y = sig_rect.top+Scale(sip[old_pos][1]);
-	MoveToEx(hdc,x,y,NULL);
-
-	x = sig_rect.left+Scale(sip[old_pos][2]);
-	y = sig_rect.top+Scale(sip[old_pos][3]);
-	LineTo(hdc,x,y);
-
-	// Draw new line.
-	SelectObject(hdc, hPenNeedleRed ? hPenNeedleRed : SysPEN[RED]);		// FIX [DpiScale]: geschaalde pen
-	x = sig_rect.left+Scale(sip[new_pos][0]);	// FIX [DpiScale]
-	y = sig_rect.top+Scale(sip[new_pos][1]);
-	MoveToEx(hdc,x,y,NULL);
-
-	x = sig_rect.left+Scale(sip[new_pos][2]);
-	y = sig_rect.top+Scale(sip[new_pos][3]);
-	LineTo(hdc,x,y);
-
-	ReleaseDC(ghWnd,hdc);
+	(void)old_pos;
+	PaintGauge(new_pos);
 }
 

@@ -111,8 +111,40 @@ void LogManager::Reconfigure(const char* path, uint32_t enableMask, int monthNum
         // hardening as the mqtt/webhook/telnet workers).
         WaitForSingleObject(m_hThread, INFINITE);
         CloseHandle(m_hThread); m_hThread = nullptr;
-        if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }
+        // FIX [LogEventRace]: detach m_hEvent under m_cs before closing it. Emit() now
+        // reads/signals m_hEvent while holding m_cs (see below), so a concurrent feed
+        // thread must never observe a half-closed handle. Locking here cannot deadlock:
+        // the drain worker is already joined above and touches no locks of its own.
+        HANDLE hOldEvent;
+        EnterCriticalSection(&m_cs);
+        hOldEvent = m_hEvent;
+        m_hEvent  = nullptr;
+        LeaveCriticalSection(&m_cs);
+        if (hOldEvent) CloseHandle(hOldEvent);
     }
+
+    // FIX [LogReconfigureFlush]: mirror Shutdown's residual flush - reconfigure
+    // previously destroyed any lines still sitting in the ring after the worker's
+    // final drain (the worker can exit mid-cycle with entries pushed just before
+    // WaitForSingleObject above returned), silently dropping the tail of buffered
+    // log lines on every settings change. Snapshot under lock, write outside it.
+    {
+        Entry* flushDrain = nullptr;
+        int    flushCount = 0;
+        EnterCriticalSection(&m_cs);
+        if (m_drain && m_buf && m_count > 0) {
+            flushCount = m_count;
+            int head = m_head;
+            for (int i = 0; i < flushCount; i++)
+                m_drain[i] = m_buf[(head + i) % m_slots];
+            flushDrain = m_drain;
+            m_head = m_tail = m_count = 0;
+        }
+        LeaveCriticalSection(&m_cs);
+        if (flushDrain && flushCount > 0)
+            WriteEntries(flushDrain, flushCount);
+    }
+
     // Null m_buf under m_cs BEFORE deleting so concurrent Emit() calls see nullptr
     // under the lock and fall back to direct-write rather than accessing freed memory.
     Entry* oldBuf   = nullptr;
@@ -142,25 +174,38 @@ void LogManager::Reconfigure(const char* path, uint32_t enableMask, int monthNum
     LeaveCriticalSection(&m_cs);
 
     if (bufEnabled && bufSlots > 0) {
-        m_slots  = bufSlots;
-        m_buf    = new Entry[m_slots];
-        m_drain  = new Entry[m_slots];
-        m_head   = m_tail = m_count = 0;
+        // FIX [LogEventRace]: build the new ring and event as locals first, then publish
+        // every field (m_slots/m_buf/m_drain/m_head/m_tail/m_count/m_hEvent) under one
+        // m_cs hold. Previously these were written one field at a time with no lock at
+        // all, while Emit() reads them under m_cs - the mirror image of the teardown
+        // above (which IS locked). The worker thread is started only after publish, so
+        // it always sees a fully-formed m_buf/m_hEvent from the moment it can run.
+        Entry* newBuf   = new Entry[bufSlots];
+        Entry* newDrain = new Entry[bufSlots];
+        HANDLE newEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-        m_hEvent  = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        m_hThread = (m_hEvent != nullptr)
+        EnterCriticalSection(&m_cs);
+        m_slots  = bufSlots;
+        m_buf    = newBuf;
+        m_drain  = newDrain;
+        m_head   = m_tail = m_count = 0;
+        m_hEvent = newEvent;
+        LeaveCriticalSection(&m_cs);
+
+        m_hThread = (newEvent != nullptr)
                   ? CreateThread(nullptr, 0, WorkerProc, this, 0, nullptr)
                   : nullptr;
         // FIX [LogWorkerStart]: same fallback as Init() — no worker means no drain, so revert
         // to direct writes rather than buffering into a ring that never empties.
         if (m_hThread == nullptr) {
-            if (m_hEvent) { CloseHandle(m_hEvent); m_hEvent = nullptr; }
             EnterCriticalSection(&m_cs);
-            Entry* b = m_buf;   m_buf   = nullptr;
-            Entry* d = m_drain; m_drain = nullptr;
+            HANDLE e = m_hEvent; m_hEvent = nullptr;
+            Entry* b = m_buf;    m_buf    = nullptr;
+            Entry* d = m_drain;  m_drain  = nullptr;
             m_slots = m_head = m_tail = m_count = 0;
             m_bufEnabled = false;
             LeaveCriticalSection(&m_cs);
+            if (e) CloseHandle(e);
             delete[] b;
             delete[] d;
         }
@@ -302,9 +347,15 @@ bool LogManager::IsEnabled(LogCat cat) const
 
 void LogManager::Flush()
 {
-    if (!m_bufEnabled || !m_buf) return;
-    // Signal the worker, then wait briefly for it to drain.
-    if (m_hEvent) SetEvent(m_hEvent);
+    // FIX [LogEventRace]: read m_bufEnabled/m_buf/m_hEvent and signal under m_cs, same
+    // hazard class as Emit's post-unlock SetEvent. Today Flush only runs on the GUI thread
+    // (the same thread that reconfigures), so this is cheap future-proofing, not a live race.
+    bool doWait = false;
+    EnterCriticalSection(&m_cs);
+    if (m_bufEnabled && m_buf && m_hEvent) { SetEvent(m_hEvent); doWait = true; }
+    LeaveCriticalSection(&m_cs);
+    if (!doWait) return;
+    // Wait briefly for the worker to drain.
     Sleep(50);
 }
 
@@ -414,10 +465,14 @@ void LogManager::Emit(const char* path, const char* line, int len)
 
     bool halfFull = (m_count >= m_slots / 2);
 
-    LeaveCriticalSection(&m_cs);
-
-    // Wake worker immediately when buffer is getting full.
+    // FIX [LogEventRace]: SetEvent moved inside the m_cs hold, mirroring the
+    // [TgEventRace]/[MqttEventRace] pattern already used by the feed workers.
+    // It previously ran after LeaveCriticalSection; Reconfigure() detaches and
+    // closes m_hEvent under m_cs, so a thread preempted between its own Leave
+    // and this SetEvent could signal an already-closed or recycled handle.
     if (halfFull && m_hEvent) SetEvent(m_hEvent);
+
+    LeaveCriticalSection(&m_cs);
 }
 
 // Drain all buffered entries.  Called only from the worker thread.

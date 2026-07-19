@@ -147,6 +147,7 @@ typedef struct
 	int  BlockDuplicate;			// Flag for blocking duplicate messages
 	int  FilterWindowColors;		// Flag for showing label colors in filterwindow
 	int  FilterWindowExtra;			// Flag for showing CMD/DESC/SEP/etc in filterwindow
+	int  ShowMenuBar;				// FIX [MenuBarToggle]: 1=menu bar visible (default), 0=hidden via Display > Show Menu Bar
 
 	int  SystemTray;				// Flag for enabeling the system tray
 	int  SystemTrayRestore;			// Flag for enabeling auto restore from tray

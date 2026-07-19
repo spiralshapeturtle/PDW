@@ -40,6 +40,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <atomic>      // FIX [MqttAtomicRun]: std::atomic<bool> for the cross-thread run flag
 
 #include "..\headers\pdw.h"
 #include "..\headers\initapp.h"
@@ -145,9 +146,11 @@ static MqttGroupAcc g_groupAcc[MAX_GROUPBITS];
 
 static HANDLE          g_hThread  = NULL;
 static HANDLE          g_hEvent   = NULL;   // auto-reset, wakes worker
-// FIX [MqttVolatile]: volatile so the compiler cannot hoist the read out of the worker
-// loop body — main thread writes FALSE on shutdown, worker must see it promptly.
-static volatile BOOL   g_bRunning = FALSE;
+// FIX [MqttAtomicRun]: was `volatile BOOL` ([MqttVolatile]). volatile blocks hoisting but
+// gives no defined cross-thread ordering; std::atomic<bool> makes the worker's g_bRunning
+// reads and the main thread's shutdown write well-defined. Assignment from BOOL TRUE/FALSE
+// and the boolean tests convert cleanly. Standardizes on the webhook [AtomicRunning] pattern.
+static std::atomic<bool> g_bRunning(false);
 
 static CRITICAL_SECTION g_cs;
 
@@ -480,7 +483,11 @@ static const char *MqttRcText(int rc)
 // Send one job  (2 attempts: try → reconnect → retry)
 // ---------------------------------------------------------------------------
 
-static void DoSend(const MqttJob *job)
+// FIX [FlushBounded]: returns TRUE when the message was delivered, FALSE when all
+// attempts failed (broker unreachable / delivery unconfirmed). The main loop ignores
+// the result (per-job retries already handled it); the exit-flush uses it to stop
+// flushing against a dead broker instead of burning ~10-17 s per queued job.
+static BOOL DoSend(const MqttJob *job)
 {
     // Apply capcode padding
     char szAddress[MQTT_ADDR_LEN];
@@ -547,7 +554,13 @@ static void DoSend(const MqttJob *job)
             // FIX [MqttReconnHarden]: don't burn the retry back-off sleeps once a
             // shutdown/reconfigure is in progress (mirrors webhook.cpp). The first attempt
             // (attempt 0) still runs during the exit-flush so queued messages get one send try.
-            if (!g_bRunning) break;
+            if (!g_bRunning)
+            {
+                // FIX [ShutdownLost]: the log used to end on "...retrying" for a message
+                // that was in fact dropped right here.
+                WriteLog("LOST      shutdown during retry - giving up on this message");
+                break;
+            }
             PostStatus(MHS_RETRY, attempt);
             ClientDestroy();
             Sleep(s_retryDelays[attempt - 1]);
@@ -594,7 +607,7 @@ static void DoSend(const MqttJob *job)
             }
             WriteLog("SENT      %s (%d bytes)", szTopic, bodyLen);
             PostStatus(MHS_OK, 0);
-            return;
+            return TRUE;
         }
 
         if (bLast) WriteLog("ERROR     publish failed rc=%d (%s) topic=%s (after reconnect)", rc, MqttRcText(rc), szTopic);
@@ -602,6 +615,7 @@ static void DoSend(const MqttJob *job)
     }
 
     PostStatus(MHS_ERROR, 0);
+    return FALSE;   // FIX [FlushBounded]
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +738,19 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
         }
         LeaveCriticalSection(&g_cs);
         if (!bHaveJob) break;
-        DoSend(&job);
+        // FIX [FlushBounded]: bound the exit flush. With a dead broker each queued job
+        // burns its full attempt-0 timeout (~10-17 s) inside MqttShutdown's INFINITE
+        // join on the GUI thread - a full 63-slot ring froze the UI for 10+ minutes.
+        // On the first job that fails outright, log what remains as LOST and stop.
+        if (!DoSend(&job))
+        {
+            int nLost;
+            EnterCriticalSection(&g_cs);
+            nLost = (g_qTail - g_qHead + MQTT_QUEUE_SIZE) % MQTT_QUEUE_SIZE;
+            LeaveCriticalSection(&g_cs);
+            WriteLog("LOST      shutdown flush aborted - %d message(s) dropped (transport failed)", nLost + 1);
+            break;
+        }
     }
 
     ClientDestroy();
@@ -738,18 +764,22 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
 // FIX [QueueDrop]: tel weggegooide jobs bij volle queue.
 static unsigned g_droppedJobs = 0;
 
-static void EnqueueLocked(const MqttJob *job)
+// FIX [QueueDropVisible]: returns TRUE when the job was dropped (queue full) so the caller
+// can log + post status AFTER releasing g_cs. The old in-here WriteLog ran under the feed
+// lock on the GUI thread (synchronous disk I/O in LogManager direct mode), and with
+// LogToFile off the drop was completely invisible (no PostStatus either).
+static BOOL EnqueueLocked(const MqttJob *job)
 {
     if (QueueFull())
     {
-        // FIX [QueueDrop]: bij burst > MQTT_QUEUE_SIZE werd de job voorheen stil
-        // verworpen, zonder log of teller — dataverlies bleef onzichtbaar.
+        // FIX [QueueDrop]: on a burst > MQTT_QUEUE_SIZE the job used to be silently
+        // discarded - no log, no counter; the data loss stayed invisible.
         g_droppedJobs++;
-        WriteLog("DROP queue full — message discarded (total dropped=%u)", g_droppedJobs);
-        return;
+        return TRUE;
     }
     g_queue[g_qTail] = *job;
     g_qTail = (g_qTail + 1) % MQTT_QUEUE_SIZE;
+    return FALSE;
 }
 
 // ---------------------------------------------------------------------------
@@ -832,10 +862,18 @@ void MqttShutdown(void)
         g_hThread = NULL;
     }
 
-    if (g_hEvent) { CloseHandle(g_hEvent); g_hEvent = NULL; }
-
+    // FIX [MqttEventRace]: clear the event handle and reset the ring/accumulator UNDER g_cs,
+    // mirroring telegram [TgEventRace] / pushover [PoEventRace]. The worker is already joined,
+    // and the only producer (MqttNotify) runs on the same GUI thread as this call, so today
+    // this is defensive; it keeps every access to these g_cs-protected fields serialized and
+    // stops SetEvent (below in MqttNotify) from ever seeing a handle closed mid-gap.
+    HANDLE hEv = NULL;
+    if (s_mqttCsInit) EnterCriticalSection(&g_cs);
+    hEv = g_hEvent; g_hEvent = NULL;
     ZeroMemory(g_groupAcc, sizeof(g_groupAcc));
     g_qHead = g_qTail = 0;
+    if (s_mqttCsInit) LeaveCriticalSection(&g_cs);
+    if (hEv) CloseHandle(hEv);
 }
 
 // FIX [L4]: final teardown — stops thread and releases the CRITICAL_SECTIONs.
@@ -927,9 +965,17 @@ void MqttNotify(const char *capcode, const char *message, const char *label,
                                   capcode, label ? label : "", TRUE);
             if (sPos < MQTT_SUBSCRIBERS_LEN - 1) { job.szSubscribers[sPos++] = ']'; job.szSubscribers[sPos] = '\0'; }
         }
-        EnqueueLocked(&job);
+        BOOL bDropped = EnqueueLocked(&job);
+        // FIX [MqttEventRace]: signal under the lock with a null-guard (like telegram/pushover),
+        // so a concurrent teardown cannot CloseHandle g_hEvent in the gap after the unlock.
+        if (g_hEvent) SetEvent(g_hEvent);
         LeaveCriticalSection(&g_cs);
-        SetEvent(g_hEvent);
+        if (bDropped)
+        {
+            // FIX [QueueDropVisible]: log outside g_cs, always post the error status.
+            WriteLog("DROP      queue full - message discarded (total dropped=%u)", g_droppedJobs);
+            PostStatus(MHS_ERROR, 0);
+        }
     }
 }
 
@@ -939,6 +985,7 @@ void MqttFlushGroup(int groupbit)
     if (groupbit < 0 || groupbit >= MAX_GROUPBITS) return;
     if (g_iMqttFields & MHF_LABEL_PERCAP) return;
 
+    BOOL bDropped = FALSE;   // FIX [QueueDropVisible]
     EnterCriticalSection(&g_cs);
     MqttGroupAcc *ga = &g_groupAcc[groupbit];
     if (ga->active)
@@ -963,10 +1010,17 @@ void MqttFlushGroup(int groupbit)
             if (sLen > 0) { job.szSubscribers[sLen++] = ']'; job.szSubscribers[sLen] = '\0'; }
         }
         ZeroMemory(ga, sizeof(*ga));
-        EnqueueLocked(&job);
+        bDropped = EnqueueLocked(&job);
     }
+    // FIX [MqttEventRace]: signal under the lock with a null-guard (see MqttNotify).
+    if (g_hEvent) SetEvent(g_hEvent);
     LeaveCriticalSection(&g_cs);
-    SetEvent(g_hEvent);
+    if (bDropped)
+    {
+        // FIX [QueueDropVisible]: log outside g_cs, always post the error status.
+        WriteLog("DROP      queue full - message discarded (total dropped=%u)", g_droppedJobs);
+        PostStatus(MHS_ERROR, 0);
+    }
 }
 
 void MqttSetStatusWnd(HWND hWnd)

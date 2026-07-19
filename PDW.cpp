@@ -440,6 +440,8 @@ COLORREF tmp_modetypebit;
 COLORREF tmp_numeric;
 COLORREF tmp_message;
 COLORREF tmp_misc;
+COLORREF tmp_ac_dbi;	// FIX [AcarsColorsInit]: ACARS DBI had no own slot and aliased tmp_misc
+COLORREF tmp_mb_sender;	// FIX [MobitexSenderColor]: MOBITEX Sender had no own slot and aliased tmp_misc
 COLORREF tmp_filterlabel;
 COLORREF tmp_filtermatch;
 COLORREF tmp_biterrors;
@@ -539,6 +541,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.BlockDuplicate		= 0;	// Flag for blocking duplicate messages
 	Profile.FilterWindowColors	= 1;	// Flag for showing label colors in filterwindow
 	Profile.FilterWindowExtra	= 1;	// Flag for showing CMD/DESC/SEP/etc in filterwindow
+	Profile.ShowMenuBar		= 1;	// FIX [MenuBarToggle]: menu bar visible by default
 
 	Profile.SystemTray	        = 0;	// Flag for enabeling the system tray
 	Profile.SystemTrayRestore	= 0;	// Flag for enabeling auto restore from tray
@@ -1508,7 +1511,10 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				{
 					if (GetEditSaveName(hWnd))
 					{
-						if (Need_Ext(Profile.edit_save_file))
+						// FIX [EditFileExtBound]: only append when ".txt" still fits - a
+					// hand-edited max-length EditFile= in pdw.ini overflowed the buffer.
+					if (Need_Ext(Profile.edit_save_file) &&
+					    strlen(Profile.edit_save_file) + 4 < sizeof(Profile.edit_save_file))
 						strcat(Profile.edit_save_file,".txt");
 						SaveClipToDisk(Profile.edit_save_file);
 					}
@@ -1553,7 +1559,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 				case IDT_TOOLBAR_BTN1:
 				case IDM_COPY_SELECTION:
-				if (select_on)
+				// FIX [CopySelNoDrag]: require an actual selection - after a plain
+				// click (select_on set, nothing dragged) this called InvertSelection()
+				// unpaired, leaving an inverted cell on screen until the next repaint,
+				// and copied a stale one-cell rect.
+				if (select_on && selected)
 				{
 					select_on = 0;
 					selected  = 0;
@@ -1719,6 +1729,19 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 					GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(SYSTEMTRAYDLGBOX),
 										  hWnd, (DLGPROC) SystemTrayDlgProc, 0L);
 				}
+				break;
+
+				case IDM_SHOWMENUBAR:	// FIX [MenuBarToggle]
+
+				Profile.ShowMenuBar = !Profile.ShowMenuBar;
+				CheckMenuItem(ghMenu, IDM_SHOWMENUBAR,
+					MF_BYCOMMAND | (Profile.ShowMenuBar ? MF_CHECKED : MF_UNCHECKED));
+				SetMenu(hWnd, Profile.ShowMenuBar ? ghMenu : NULL);
+				// SWP_FRAMECHANGED forces Windows to recompute the non-client area (menu
+				// bar height) so the client rect - and with it the WM_SIZE-driven pane/
+				// toolbar layout - reflows immediately, without moving/resizing the window.
+				SetWindowPos(hWnd, NULL, 0, 0, 0, 0,
+					SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 				break;
 
 				case IDT_TOOLBAR_BTN7:
@@ -1968,7 +1991,10 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		if (hCurrentHWND != ghWnd) // Don't scroll if not inside Pane1/Pane2
 		{
-			OnMouseWheel(wParam, LOWORD(lParam), HIWORD(lParam), g_rect);
+			// FIX [WheelCoordSign]: WM_MOUSEWHEEL carries SIGNED screen coordinates;
+			// LOWORD/HIWORD read a monitor left of/above the primary as ~65000,
+			// so the inside-window test always failed and the wheel went dead there.
+			OnMouseWheel(wParam, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam), g_rect);
 		}
 		break;
 
@@ -2622,13 +2648,19 @@ LRESULT FAR PASCAL Pane1WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 		if (select_on && selecting)
 		{
-			if ((iSelectionEndCol != (LOWORD(lParam) / cxChar)) ||
-				(iSelectionEndRow != (HIWORD(lParam) / cyChar)))
+			// FIX [PaneSelCoordSign]: during mouse capture the client coordinates go
+			// negative when dragging above/left of the pane; LOWORD/HIWORD read those
+			// as huge unsigned values that fed the (unsigned) selection globals.
+			// Extract signed and clamp at 0.
+			int selX = (int)(short)LOWORD(lParam); if (selX < 0) selX = 0;
+			int selY = (int)(short)HIWORD(lParam); if (selY < 0) selY = 0;
+			if ((iSelectionEndCol != (UINT)(selX / cxChar)) ||
+				(iSelectionEndRow != (UINT)(selY / cyChar)))
 			{
 				if (selected) InvertSelection();
 
-				iSelectionEndCol = LOWORD(lParam) / cxChar;
-				iSelectionEndRow = HIWORD(lParam) / cyChar;
+				iSelectionEndCol = selX / cxChar;
+				iSelectionEndRow = selY / cyChar;
 
 				InvertSelection();
 				selected = 1;
@@ -2789,13 +2821,19 @@ LRESULT FAR PASCAL Pane2WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 		if (select_on && selecting)
 		{
-			if ((iSelectionEndCol != (LOWORD(lParam) / cxChar)) ||
-				(iSelectionEndRow != (HIWORD(lParam) / cyChar)))
+			// FIX [PaneSelCoordSign]: during mouse capture the client coordinates go
+			// negative when dragging above/left of the pane; LOWORD/HIWORD read those
+			// as huge unsigned values that fed the (unsigned) selection globals.
+			// Extract signed and clamp at 0.
+			int selX = (int)(short)LOWORD(lParam); if (selX < 0) selX = 0;
+			int selY = (int)(short)HIWORD(lParam); if (selY < 0) selY = 0;
+			if ((iSelectionEndCol != (UINT)(selX / cxChar)) ||
+				(iSelectionEndRow != (UINT)(selY / cyChar)))
 			{
 				if (selected) InvertSelection();
 
-				iSelectionEndCol = LOWORD(lParam) / cxChar;
-				iSelectionEndRow = HIWORD(lParam) / cyChar;
+				iSelectionEndCol = selX / cxChar;
+				iSelectionEndRow = selY / cyChar;
 
 				InvertSelection();
 				selected = 1;
@@ -2915,8 +2953,8 @@ void SaveClipToDisk(char *fname)
 
 	if (!(lpClipBuffer = (LPTSTR) GlobalLock(hClipBuffer)))
 	{
-		GlobalFree(hClipBuffer);
-
+		// FIX [ClipOwnedFree]: never GlobalFree a handle returned by GetClipboardData -
+		// the clipboard owns that memory; freeing it risks a later use-after-free.
 		MessageBox(ghWnd,"Could not lock Clipboard Memory!", "PDW Clipboard",MB_ICONWARNING);
 		CloseClipboard();
 		return;
@@ -2962,8 +3000,8 @@ void PrintClip(void)
 
 	if (!(lpClipBuffer = (LPTSTR) GlobalLock(hClipBuffer)))
 	{
-		GlobalFree(hClipBuffer);
-
+		// FIX [ClipOwnedFree]: same as SaveClipToDisk - clipboard-owned handle,
+		// never free it here.
 		MessageBox(ghWnd,"Could not lock Clipboard Memory!", "PDW Clipboard",MB_ICONWARNING);
 		CloseClipboard();
 		return;
@@ -3003,8 +3041,12 @@ void CopyToClipboard(PaneStruct *pane, UINT min_col, UINT max_col, UINT min_row,
 	// or a resize-underflow of the selection cannot read past pane->buff_char either.
 	if (max_col > (UINT)LINE_SIZE) max_col = (UINT)LINE_SIZE;
 	if (min_col > max_col) min_col = max_col;
+	// FIX [VscrollClamp]: defensive companion to the display_line() clamp - a negative
+	// scroll position must never wrap to a huge unsigned row offset in the copy loop.
+	int iRowBase = pane->iVscrollPos;
+	if (iRowBase < 0) iRowBase = 0;
 	{
-		UINT rowsAvail = (pane->buff_lines > (UINT)pane->iVscrollPos) ? (pane->buff_lines - (UINT)pane->iVscrollPos) : 0;
+		UINT rowsAvail = (pane->buff_lines > (UINT)iRowBase) ? (pane->buff_lines - (UINT)iRowBase) : 0;
 		if (rowsAvail > 0) rowsAvail--;			// last valid index
 		if (max_row > rowsAvail) max_row = rowsAvail;
 	}
@@ -3033,7 +3075,7 @@ void CopyToClipboard(PaneStruct *pane, UINT min_col, UINT max_col, UINT min_row,
 
 	for (index = min_row; index <= max_row; index++)
 	{
-		line_no = pane->iVscrollPos + index;
+		line_no = iRowBase + index;	// FIX [VscrollClamp]
 		offset  = line_no * (LINE_SIZE+1);
 
 		for (xx = min_col; xx <= max_col; xx++)
@@ -3360,7 +3402,18 @@ void PaneVScroll(PaneStruct *pane, WPARAM wParam, LPARAM lParam)
 		break;
 
 		case SB_THUMBTRACK :
-			iVscrollInc = HIWORD(wParam) - pane->iVscrollPos;
+		{
+			// FIX [ThumbTrack32]: HIWORD(wParam) is only 16-bit - with a scrollback
+			// larger than 65535 lines the thumb position wrapped and dragging jumped
+			// to the wrong line. Read the full 32-bit track position instead.
+			SCROLLINFO siTrack;
+			siTrack.cbSize = sizeof(siTrack);
+			siTrack.fMask  = SIF_TRACKPOS;
+			if (GetScrollInfo(pane->hWnd, SB_VERT, &siTrack))
+				iVscrollInc = siTrack.nTrackPos - pane->iVscrollPos;
+			else
+				iVscrollInc = HIWORD(wParam) - pane->iVscrollPos;
+		}
 		break;
 
 		default :
@@ -3761,7 +3814,11 @@ BOOL FAR PASCAL LogFileDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 			EnableWindow(GetDlgItem(hDlg, IDC_LOG_ISO_DATETIME), enabled);
 		}
 
-		SetDlgItemText(hDlg, IDC_LOGFILE, date ? szFilenameDate : "");
+		// FIX [LogDlgNameWipe]: this unconditional SetDlgItemText overwrote what the
+		// if(date)/else block above just set - with a fixed (non-date) logfile the
+		// field was always blanked on open, and toggling ANY checkbox that resends
+		// WM_WININICHANGE erased a filename the user had just typed (OK then failed
+		// with "You haven't entered a file name!"). The block above is sufficient.
 
 		break;
 
@@ -4535,8 +4592,11 @@ BOOL NEAR SelectFont(HWND hDlg)
 		// Font size must be limited to keep text within correct label fields.
 		hDC = GetDC(hDlg);
 		tmp_hfont = CreateFontIndirect(&tmp_logfont);
-		SelectObject(hDC, tmp_hfont);
+		// FIX [FontDlgLeak]: DeleteObject on a font still selected in the DC fails,
+		// so one HFONT leaked per ChooseFont OK. Restore the previous font first.
+		HFONT hPrevFont = (HFONT)SelectObject(hDC, tmp_hfont);
 		GetTextMetrics(hDC, &tm);
+		SelectObject(hDC, hPrevFont);
 		DeleteObject(tmp_hfont);
 
 		Profile.fontInfo.lfHeight			= MulDiv(tmp_logfont.lfHeight, 96, (int)g_dpi);	// FIX [DpiScale]: bewaar als 96-DPI baseline
@@ -4997,9 +5057,17 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 		if (!CenterWindow(hDlg)) return (FALSE);
 
 		tmp_address		= Profile.color_ac_message_nr;
-		tmp_misc		= Profile.color_ac_dbi;
+		// FIX [AcarsColorsInit]: DBI aliased tmp_misc (the assignment two lines
+		// below overwrote it), and tmp_timestamp/tmp_message/tmp_biterrors were
+		// never seeded here - opening ACARS Colors as the first color dialog
+		// since startup and clicking OK silently saved those main-screen colors
+		// as black. Give DBI its own slot and seed every value IDOK writes.
+		tmp_ac_dbi		= Profile.color_ac_dbi;
 		tmp_modetypebit	= Profile.color_modetypebit;
 		tmp_misc		= Profile.color_misc;
+		tmp_timestamp	= Profile.color_timestamp;
+		tmp_message		= Profile.color_message;
+		tmp_biterrors	= Profile.color_biterrors;
 		tmp_background	= Profile.color_background;
 		tmp_filtermatch	= Profile.color_filtermatch;
 		tmp_filterlabel	= Profile.color_filterlabel[0];
@@ -5078,12 +5146,12 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 			case IDC_AC_COLORDBI:
 			lstrcpy(szCenterOpenDlgMsg, TEXT("ACARS DBI"));
-			cc.rgbResult = tmp_misc;
+			cc.rgbResult = tmp_ac_dbi;	// FIX [AcarsColorsInit]
 
 			if(ChooseColor(&cc))
 			{
 				hDC = GetDC(hDlg);
-				tmp_misc = GetNearestColor(hDC, cc.rgbResult);
+				tmp_ac_dbi = GetNearestColor(hDC, cc.rgbResult);	// FIX [AcarsColorsInit]
 				ReleaseDC(hDlg, hDC);
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
@@ -5190,7 +5258,7 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 				tmp_timestamp	= RGB(rgbColor[LTBLUE][0],
 										rgbColor[LTBLUE][1],
 										rgbColor[LTBLUE][2]);
-				tmp_misc		= RGB(rgbColor[RED][0], 
+				tmp_ac_dbi		= RGB(rgbColor[RED][0],		// FIX [AcarsColorsInit]
 										rgbColor[RED][1],
 										rgbColor[RED][2]);
 				tmp_modetypebit	= RGB(rgbColor[RED][0],
@@ -5223,7 +5291,7 @@ BOOL FAR PASCAL ACARSColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 			Profile.color_ac_message_nr	= tmp_address;
 			Profile.color_timestamp		= tmp_timestamp;
-			Profile.color_ac_dbi		= tmp_misc;
+			Profile.color_ac_dbi		= tmp_ac_dbi;	// FIX [AcarsColorsInit]
 			Profile.color_modetypebit	= tmp_modetypebit;
 			Profile.color_misc			= tmp_misc;
 			Profile.color_message		= tmp_message;
@@ -5295,7 +5363,7 @@ LRESULT FAR PASCAL ACARSColorWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
 		TextOut(hDC, 0, 0, "   MO5A", 7);
 		SetTextColor(hDC, tmp_timestamp);
 		TextOut(hDC, 0, 0, "  18:37:34 06/04/01", 19);
-		SetTextColor(hDC, tmp_misc);
+		SetTextColor(hDC, tmp_ac_dbi);	// FIX [AcarsColorsInit]: DBI sample uses its own color
 		TextOut(hDC, 0, 0, "  2", 3);
 		SetTextColor(hDC, tmp_modetypebit);
 		TextOut(hDC, 0, 0, "  R", 3);
@@ -5396,9 +5464,13 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 		tmp_address		= Profile.color_address;
 		tmp_timestamp	= Profile.color_timestamp;
 		tmp_misc		= Profile.color_misc;
+		// FIX [MobitexSenderColor]: Sender now has its own slot (Profile.color_mb_sender
+		// already existed and was persisted to pdw.ini, but this dialog never read/wrote
+		// it - Sender aliased tmp_misc instead, so editing either one silently changed
+		// both, and the saved Sender color was never actually applied).
+		tmp_mb_sender	= Profile.color_mb_sender;
 		tmp_modetypebit	= Profile.color_modetypebit;
 		tmp_message		= Profile.color_message;
-		tmp_misc		= Profile.color_misc;
 		tmp_biterrors	= Profile.color_biterrors;
 		tmp_filtermatch	= Profile.color_filtermatch;
 		tmp_filterlabel	= Profile.color_filterlabel[0];
@@ -5493,12 +5565,12 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
 			case IDC_MB_COLORSENDER :
 			lstrcpy(szCenterOpenDlgMsg, TEXT("Mobitex Sender"));
-			cc.rgbResult = tmp_misc;
+			cc.rgbResult = tmp_mb_sender;	// FIX [MobitexSenderColor]
 
 			if(ChooseColor(&cc))
 			{
 				hDC = GetDC(hDlg);
-				tmp_misc = GetNearestColor(hDC, cc.rgbResult);
+				tmp_mb_sender = GetNearestColor(hDC, cc.rgbResult);	// FIX [MobitexSenderColor]
 				ReleaseDC(hDlg, hDC);
 				InvalidateRect(hColorWnd, NULL, TRUE);
 			}
@@ -5595,15 +5667,15 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 				tmp_misc		= RGB(rgbColor[RED][0],
 										rgbColor[RED][1],
 										rgbColor[RED][2]);
-				tmp_modetypebit	= RGB(rgbColor[WHITE][0], 
+				tmp_mb_sender	= RGB(rgbColor[RED][0],	// FIX [MobitexSenderColor]
+										rgbColor[RED][1],
+										rgbColor[RED][2]);
+				tmp_modetypebit	= RGB(rgbColor[WHITE][0],
 										rgbColor[WHITE][1],
 										rgbColor[WHITE][2]);
 				tmp_message		= RGB(rgbColor[LTCYAN][0],
 										rgbColor[LTCYAN][1],
 										rgbColor[LTCYAN][2]);
-				tmp_misc		= RGB(rgbColor[RED][0], 
-										rgbColor[RED][1],
-										rgbColor[RED][2]);
 				tmp_biterrors	= RGB(rgbColor[LTGRAY][0],
 										rgbColor[LTGRAY][1],
 										rgbColor[LTGRAY][2]);
@@ -5630,9 +5702,9 @@ BOOL FAR PASCAL MOBITEXColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 			Profile.color_address		= tmp_address;
 			Profile.color_timestamp		= tmp_timestamp;
 			Profile.color_misc			= tmp_misc;
+			Profile.color_mb_sender		= tmp_mb_sender;	// FIX [MobitexSenderColor]
 			Profile.color_modetypebit	= tmp_modetypebit;
 			Profile.color_message		= tmp_message;
-			Profile.color_misc			= tmp_misc;
 			Profile.color_biterrors		= tmp_biterrors;
 			Profile.color_filtermatch	= tmp_filtermatch;
 			Profile.color_filterlabel[0]= tmp_filterlabel;
@@ -5701,7 +5773,7 @@ LRESULT FAR PASCAL MOBITEXColorWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		TextOut(hDC, 0, 0, "  <ALL> ", 8);
 		SetTextColor(hDC, tmp_timestamp);
 		TextOut(hDC, 0, 0, " 13:06:46 12-04-08", 18);
-		SetTextColor(hDC, tmp_misc);
+		SetTextColor(hDC, tmp_mb_sender);	// FIX [MobitexSenderColor]
 		TextOut(hDC, 0, 0, " NETWORK", 8);
 		SetTextColor(hDC, tmp_modetypebit);
 		TextOut(hDC, 0, 0, "  MPAK  8000", 12);
@@ -5714,7 +5786,7 @@ LRESULT FAR PASCAL MOBITEXColorWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		TextOut(hDC, 0, 0, " 4361264", 8);
 		SetTextColor(hDC, tmp_timestamp);
 		TextOut(hDC, 0, 0, " 13:06:45 12-04-08", 18);
-		SetTextColor(hDC, tmp_misc);
+		SetTextColor(hDC, tmp_mb_sender);	// FIX [MobitexSenderColor]
 		TextOut(hDC, 0, 0, " NETWORK", 8);
 		SetTextColor(hDC, tmp_modetypebit);
 		TextOut(hDC, 0, 0, "  MPAK  8000", 12);
@@ -5727,7 +5799,7 @@ LRESULT FAR PASCAL MOBITEXColorWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		TextOut(hDC, 0, 0, " 4360490", 8);
 		SetTextColor(hDC, tmp_timestamp);
 		TextOut(hDC, 0, 0, " 13:06:47 12-04-08", 18);
-		SetTextColor(hDC, tmp_misc);
+		SetTextColor(hDC, tmp_mb_sender);	// FIX [MobitexSenderColor]
 		TextOut(hDC, 0, 0, " 4300073", 8);
 		SetTextColor(hDC, tmp_modetypebit);
 		TextOut(hDC, 0, 0, " HPDATA 8000", 12);
@@ -5744,7 +5816,7 @@ LRESULT FAR PASCAL MOBITEXColorWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		TextOut(hDC, 0, 0, " 4361264", 8);
 		SetTextColor(hDC, tmp_timestamp);
 		TextOut(hDC, 0, 0, " 13:06:48 12-04-08", 18);
-		SetTextColor(hDC, tmp_misc);
+		SetTextColor(hDC, tmp_mb_sender);	// FIX [MobitexSenderColor]
 		TextOut(hDC, 0, 0, " 4300073", 8);
 		SetTextColor(hDC, tmp_modetypebit);
 		TextOut(hDC, 0, 0, "  TEXT  8000", 12);
@@ -5761,7 +5833,7 @@ LRESULT FAR PASCAL MOBITEXColorWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		TextOut(hDC, 0, 0, " 4360507", 8);
 		SetTextColor(hDC, tmp_timestamp);
 		TextOut(hDC, 0, 0, " 13:06:49 12-04-08", 18);
-		SetTextColor(hDC, tmp_misc);
+		SetTextColor(hDC, tmp_mb_sender);	// FIX [MobitexSenderColor]
 		TextOut(hDC, 0, 0, " 4300073", 8);
 		SetTextColor(hDC, tmp_modetypebit);
 		TextOut(hDC, 0, 0, "  DATA  8000", 12);
@@ -6843,7 +6915,15 @@ BOOL FAR PASCAL ScreenOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 			}
 			for (i=1; i<=7; i++)	// i = column
 			{
-				Profile.ScreenColumns[i-1] = SendDlgItemMessage(hDlg, IDC_SCREEN_COLUMN+i, CB_GETCURSEL, 0, 0L);
+				// FIX [ScreenColClamp]: CB_GETCURSEL returns CB_ERR (-1) when the combo has no
+				// selection (which happens after CB_SETCURSEL was fed an out-of-range stored
+				// value); storing that verbatim laundered a bad INI value into a negative
+				// array index. Treat as "unused".
+				{
+					int iSel = (int)SendDlgItemMessage(hDlg, IDC_SCREEN_COLUMN+i, CB_GETCURSEL, 0, 0L);
+					if (iSel < 0 || iSel > 7) iSel = 0;
+					Profile.ScreenColumns[i-1] = iSel;
+				}
 			}
 			SetMessageItemPositionsWidth();
 			DrawTitleBarGfx(ghWnd);		// Draw pane1/pane2 title bars
@@ -7006,30 +7086,40 @@ BOOL FAR PASCAL ScrollDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			if (value != pane1_size)  // did it change?
 			{
-				if (Pane1.buff_char != NULL)	free(Pane1.buff_char);
-				if (Pane1.buff_color != NULL)	free(Pane1.buff_color);
+				// FIX [ScrollDlgOomSafe]: allocate the NEW buffers before freeing the
+				// old ones. The old code freed first; when the reallocation then
+				// failed it fell back to UNCHECKED mallocs (NULL write under full
+				// OOM) and showed a MessageBox that pumped messages while the pane
+				// still had its old buff_lines/Bottom against a smaller,
+				// uninitialized buffer (a paint/decode tick during the box then
+				// read/wrote out of bounds). A failed allocation now simply keeps
+				// the old buffer and size.
+				char *pNewChar;
+				BYTE *pNewColor;
 
 				mem_size = (value+1) * (LINE_SIZE+1);
-				Pane1.buff_char = (char *) malloc(mem_size);
-				Pane1.buff_color = (BYTE *)malloc(mem_size);
+				pNewChar  = (char *) malloc(mem_size);
+				pNewColor = (BYTE *) malloc(mem_size);
 
-				if ((Pane1.buff_char == NULL) || (Pane1.buff_color == NULL))
+				if ((pNewChar == NULL) || (pNewColor == NULL))
+				{
+					if (pNewChar  != NULL) free(pNewChar);
+					if (pNewColor != NULL) free(pNewColor);
+					MessageBox(hDlg,"Error Allocating Memory! Keeping current scrollback size.","PDW Scrollback",MB_ICONWARNING);
+				}
+				else
 				{
 					if (Pane1.buff_char != NULL)	free(Pane1.buff_char);
 					if (Pane1.buff_color != NULL)	free(Pane1.buff_color);
+					Pane1.buff_char  = pNewChar;
+					Pane1.buff_color = pNewColor;
 
-					value = PANE1_SIZE;
-					mem_size = (value+1) * (LINE_SIZE+1);
-					Pane1.buff_char = (char *) malloc(mem_size);
-					Pane1.buff_color = (BYTE *)malloc(mem_size);
+					Profile.pane1_size = value;
+					Pane1.buff_lines = Profile.pane1_size;
 
-					MessageBox(hDlg,"Error Allocating Memory!","PDW Scrollback",MB_ICONWARNING);
+					InitializePane(&Pane1);
+					InvalidateRect(Pane1.hWnd, NULL, TRUE);
 				}
-				Profile.pane1_size = value;
-				Pane1.buff_lines = Profile.pane1_size;
-
-				InitializePane(&Pane1);
-				InvalidateRect(Pane1.hWnd, NULL, TRUE);
 			}
 			value = GetDlgItemInt(hDlg, IDC_SCROLLPANE2, &errTrans, FALSE);
 
@@ -7044,30 +7134,33 @@ BOOL FAR PASCAL ScrollDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			if (value != pane2_size)  // did it change?
 			{
-				if (Pane2.buff_char != NULL)	free(Pane2.buff_char);
-				if (Pane2.buff_color != NULL)	free(Pane2.buff_color);
+				// FIX [ScrollDlgOomSafe]: same new-buffers-first strategy as Pane1 above.
+				char *pNewChar;
+				BYTE *pNewColor;
 
 				mem_size = (value+1) * (LINE_SIZE+1);
-				Pane2.buff_char = (char *)malloc(mem_size);
-				Pane2.buff_color = (BYTE *)malloc(mem_size);
+				pNewChar  = (char *) malloc(mem_size);
+				pNewColor = (BYTE *) malloc(mem_size);
 
-				if ((Pane2.buff_char == NULL) || (Pane2.buff_color == NULL))
+				if ((pNewChar == NULL) || (pNewColor == NULL))
+				{
+					if (pNewChar  != NULL) free(pNewChar);
+					if (pNewColor != NULL) free(pNewColor);
+					MessageBox(hDlg,"Error Allocating Memory! Keeping current scrollback size.","PDW Scrollback",MB_ICONWARNING);
+				}
+				else
 				{
 					if (Pane2.buff_char != NULL)	free(Pane2.buff_char);
 					if (Pane2.buff_color != NULL)	free(Pane2.buff_color);
+					Pane2.buff_char  = pNewChar;
+					Pane2.buff_color = pNewColor;
 
-					value = PANE2_SIZE;
-					mem_size = (value+1) * (LINE_SIZE+1);
-					Pane2.buff_char = (char *)malloc(mem_size);
-					Pane2.buff_color = (BYTE *)malloc(mem_size);
+					Profile.pane2_size = value;
+					Pane2.buff_lines = Profile.pane2_size;
 
-					MessageBox(hDlg,"Error Allocating Memory!","PDW Scrollback",MB_ICONWARNING);
+					InitializePane(&Pane2);
+					InvalidateRect(Pane2.hWnd, NULL, TRUE);
 				}
-				Profile.pane2_size = value;
-				Pane2.buff_lines = Profile.pane2_size;
-
-				InitializePane(&Pane2);
-				InvalidateRect(Pane2.hWnd, NULL, TRUE);
 			}
 			value = GetDlgItemInt(hDlg, IDC_PERCENTPANE1, NULL, FALSE);
 			
@@ -7359,6 +7452,12 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		case WM_INITDIALOG:
 
 		if (!CenterWindow(hDlg)) return (FALSE);
+
+		// FIX [FilterColorsStale]: the static below captured Profile.FilterWindowColors
+		// only on the first-ever open; toggling the colors via the main window's Filter
+		// Options (dialog closed) left it stale, so the change-detect in
+		// IDC_FILTEROPTIONS skipped the list restyle. Resync on every open.
+		iFiltersColors = Profile.FilterWindowColors;
 
 		sprintf(szTEMP, "PDW Filters (%u)", (unsigned int)Profile.filters.size());
 		SetWindowText(hDlg, (LPSTR) szTEMP);
@@ -7693,11 +7792,9 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			break;
 
-			case IDM_FILTEROPTIONS:
-
-			GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(FILTEROPTIONSDLGBOX),
-								  hDlg, (DLGPROC) FilterOptionsDlgProc, 0L);
-			break;
+			// FIX [FilterColorsStale]: route the menu variant through the same handler
+			// as the Options button - this standalone case opened the dialog but
+			// skipped the list-restyle logic entirely.
 
 			case IDC_FILTERADD:
 
@@ -7744,7 +7841,13 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			case IDC_FILTERDEL:
 
-			more = ListView_GetSelectedCount(hListView) > 1 ; 
+			// FIX [FilterDelReentry]: the delete loop below pumps messages, and
+			// LVN_KEYDOWN posts another IDC_FILTERDEL on VK_DELETE/F8. A second
+			// keypress mid-delete re-entered this handler, leaving the outer loop
+			// with a stale index -> erase() past end() -> vector/heap corruption.
+			if (bDeletingFilters) break;
+
+			more = ListView_GetSelectedCount(hListView) > 1 ;
 
 			bDeletingFilters = true;
 
@@ -7792,6 +7895,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 			break;
 
+			case IDM_FILTEROPTIONS:	// FIX [FilterColorsStale]: same handling as the button
 			case IDC_FILTEROPTIONS:
 
 			GoModalDialogBoxParam(ghInstance, MAKEINTRESOURCE(FILTEROPTIONSDLGBOX),
@@ -7824,7 +7928,7 @@ BOOL FAR PASCAL FilterDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 				}
 				FilterAutoSizeColumn();	// FIX [FilterHScroll]: enable H-scroll for long filter rows
 				ListView_SetItemState(hListView, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-				iFiltersColors ^= 0x01;
+				iFiltersColors = Profile.FilterWindowColors;	// FIX [FilterColorsStale]: sync directly instead of XOR-toggling
 			}
 
 			break;
@@ -8223,7 +8327,13 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 			Profile.LabelLog = IsDlgButtonChecked(hDlg, IDC_LABELLOG);
 
 			Profile.LabelNewline = IsDlgButtonChecked(hDlg, IDC_LABELNEWLINE);
-			Profile.filter_default_type = SendDlgItemMessage(hDlg, IDC_FILTERDEFTYPE, CB_GETCURSEL, 0, 0L);
+			// FIX [FilterTypeClamp]: CB_GETCURSEL returns CB_ERR (-1) with no
+			// selection - never store that as the default filter type.
+			{
+				int iDefType = (int)SendDlgItemMessage(hDlg, IDC_FILTERDEFTYPE, CB_GETCURSEL, 0, 0L);
+				if (iDefType < 0 || iDefType > 5) iDefType = 0;
+				Profile.filter_default_type = iDefType;
+			}
 
 			WriteSettings();
 
@@ -8593,6 +8703,13 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
 		case WM_INITDIALOG:
 
+		// FIX [FilterEditInitGuard]: the static is set to 0 at the end of init and was
+		// never set back, so from the second open onward the WM_WININICHANGE echoes
+		// fired by SetDlgItemText/CheckDlgButton during init ran against a
+		// half-initialized dialog (e.g. the sep-file compaction could move/clear a
+		// multi-edit "Don't change" sentinel). Re-arm the guard on every init pass.
+		initializing = 1;
+
 		if (!bFilterJump)
 		{
 			if (!CenterWindow(hDlg)) return (FALSE);
@@ -8869,6 +8986,11 @@ BOOL FAR PASCAL FilterEditDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		}
 		else if (filter.type == POCSAG_FILTER)
 		{
+			// FIX [FnuComboReset]: Next/Previous re-sends WM_INITDIALOG, and without
+			// a reset every jump onto a POCSAG filter appended another "All,1,2,3,4"
+			// set; picking a duplicated entry then saved an invalid function number
+			// (cursel 5..9) into the capcode.
+			SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_RESETCONTENT, 0, 0);
 			SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "All");
 			SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "1");
 			SendDlgItemMessage(hDlg, IDC_FILTERFNU, CB_ADDSTRING, 0, (LPARAM)(LPCTSTR) "2");
@@ -10422,6 +10544,7 @@ BOOL FAR PASCAL MailDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				return (TRUE);
 
 			case IDCANCEL:
+				MailClearResponseWnd() ;	// FIX [SmtpRespWnd]: stop the worker targeting this dialog's listbox after it closes
 				EndDialog(hDlg, TRUE);
 				return (TRUE);
 
@@ -11788,6 +11911,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->showmisc			= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("ShowBinary"), Profile.showmisc, lpszIniPathName);
 	pProfile->FilterWindowColors= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("FilterWindowColors"), Profile.FilterWindowColors, lpszIniPathName);
 	pProfile->FilterWindowExtra	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("FilterWindowExtra"), Profile.FilterWindowExtra, lpszIniPathName);
+	pProfile->ShowMenuBar		= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("ShowMenuBar"), Profile.ShowMenuBar, lpszIniPathName);
 	pProfile->fourlevel			= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("4LevelInterface"), Profile.fourlevel, lpszIniPathName);
 	pProfile->invert			= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("InvertData"), Profile.invert, lpszIniPathName);
 	pProfile->percent			= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("Percent"), Profile.percent, lpszIniPathName);
@@ -11917,6 +12041,17 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->ScreenColumns[4]	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("ScreenCol5"), 5, lpszIniPathName);
 	pProfile->ScreenColumns[5]	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("ScreenCol6"), 6, lpszIniPathName);
 	pProfile->ScreenColumns[6]	= (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("ScreenCol7"), 7, lpszIniPathName);
+
+	// FIX [ScreenColClamp]: valid column selectors are 0..7 (0 = unused, 1..7 index
+	// into iItemPositions/iItemWidths[8]). A hand-edited INI value outside that
+	// range went straight through SetMessageItemPositionsWidth() and ShowMessage()
+	// as an out-of-bounds array index (incl. an OOB write past iItemPositions).
+	// Clamp once at the ingestion point.
+	for (int iSC = 0; iSC < 7; iSC++)
+	{
+		if (pProfile->ScreenColumns[iSC] < 0 || pProfile->ScreenColumns[iSC] > 7)
+			pProfile->ScreenColumns[iSC] = 0;
+	}
 
 	pProfile->stat_file_enabled = (INT) GetPrivateProfileInt(lpszAppTitle, TEXT("StatFileEnabled"), pProfile->stat_file_enabled, lpszIniPathName);
 
@@ -12088,6 +12223,11 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	GetPrivateProfileString("Filter", TEXT("FilterCmdFile"), "", pProfile->filter_cmd, MAX_FILE_LEN, lpszIniPathName);
 	GetPrivateProfileString("Filter", TEXT("FilterCmdArgs"), "", pProfile->filter_cmd_args, MAX_FILE_LEN, lpszIniPathName);
 	pProfile->filter_default_type = (INT) GetPrivateProfileInt("Filter", TEXT("FilterDefaultType"), pProfile->filter_default_type, lpszIniPathName);
+	// FIX [FilterTypeClamp]: filter.type = default+1 indexes capcode_len[7], so the
+	// stored default must stay 0..5; a hand-edited/corrupt INI value drove an
+	// out-of-bounds array index (and a garbage loop bound) in FilterEditDlgProc.
+	if (pProfile->filter_default_type < 0 || pProfile->filter_default_type > 5)
+		pProfile->filter_default_type = 0;
 
 	if (ReadFilters(szFilterPathName, &Profile, false) == false)
 	{
@@ -12268,7 +12408,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 							case FILTER_WAVE:		// Get wave_number
 
-							while (szLine[pos] != ',') szTEMP[i++] = szLine[pos++];
+							// FIX [ReadFiltersBounds]: stop at end-of-string too - a truncated
+						// filters.ini line without the expected ',' walked past the buffer.
+						while (szLine[pos] && szLine[pos] != ',') szTEMP[i++] = szLine[pos++];
 
 							szTEMP[i] = 0;
 							filter.wave_number = atoi(szTEMP);
@@ -12283,7 +12425,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 							case FILTER_LABEL_COLOR:	// Get label_enabled / color
 
-							while (szLine[pos] != ',') szTEMP[i++] = szLine[pos++];
+							// FIX [ReadFiltersBounds]: stop at end-of-string too - a truncated
+						// filters.ini line without the expected ',' walked past the buffer.
+						while (szLine[pos] && szLine[pos] != ',') szTEMP[i++] = szLine[pos++];
 
 							szTEMP[i] = 0;
 							iTEMP = atoi(szTEMP);
@@ -12295,7 +12439,9 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 
 							case FILTER_SEP:		// Get sep_filterfile_en / smtp / match_exact_msg
 
-							while (szLine[pos] != ',') szTEMP[i++] = szLine[pos++];
+							// FIX [ReadFiltersBounds]: stop at end-of-string too - a truncated
+						// filters.ini line without the expected ',' walked past the buffer.
+						while (szLine[pos] && szLine[pos] != ',') szTEMP[i++] = szLine[pos++];
 
 							szTEMP[i] = 0;
 							iTEMP = atoi(szTEMP);
@@ -12337,8 +12483,18 @@ bool ReadFilters(char *szFilters, PPROFILE pProfile, bool bNew)
 							case FILTER_HITCOUNTER:	// Get hitcounter
 
 							if (token = strtok_s(&szLine[pos], ",", &strtokCtx)) filter.hitcounter = atoi(token);
-							if (token = strtok_s(NULL, ",", &strtokCtx)) strcpy(filter.lasthit_date, token);
-							if (token = strtok_s(NULL, ",", &strtokCtx)) strcpy(filter.lasthit_time, token);
+							// FIX [ReadFiltersBounds]: lasthit fields are 10 bytes; a hand-edited longer
+							// token overflowed into the adjacent FILTER members. Copy bounded.
+							if (token = strtok_s(NULL, ",", &strtokCtx))
+							{
+								strncpy(filter.lasthit_date, token, sizeof(filter.lasthit_date)-1);
+								filter.lasthit_date[sizeof(filter.lasthit_date)-1] = '\0';
+							}
+							if (token = strtok_s(NULL, ",", &strtokCtx))
+							{
+								strncpy(filter.lasthit_time, token, sizeof(filter.lasthit_time)-1);	// FIX [ReadFiltersBounds]
+								filter.lasthit_time[sizeof(filter.lasthit_time)-1] = '\0';
+							}
 							// FIX [PushoverPerFilter]: field 12 - per-filter Pushover priority override
 							if (token = strtok_s(NULL, ",", &strtokCtx))
 							{
@@ -12470,6 +12626,7 @@ void WriteSettings()
 		fprintf(pFile, "ShowBinary=%i\n",				Profile.showmisc);
 		fprintf(pFile, "FilterWindowColors=%i\n",		Profile.FilterWindowColors);
 		fprintf(pFile, "FilterWindowExtra=%i\n",		Profile.FilterWindowExtra);
+		fprintf(pFile, "ShowMenuBar=%i\n",				Profile.ShowMenuBar);
 		fprintf(pFile, "4LevelInterface=%i\n",			Profile.fourlevel);
 		fprintf(pFile, "InvertData=%i\n",				Profile.invert);
 		fprintf(pFile, "Percent=%i\n",					Profile.percent);
@@ -13278,7 +13435,10 @@ void OnMouseWheel(WPARAM wParam, int x, int y, RECT g_rect)
 		p.y = y;
 
 		hScrollWND   = WindowFromPoint(p);
-		bScrollingUp = (HIWORD(wParam) == 120);
+		// FIX [WheelDelta]: only delta == +120 counted as "up", so precision
+		// touchpads (sub-120 deltas) and coalesced fast scrolls (+/-240, +/-360)
+		// always scrolled DOWN, even on upward movement. Test the sign instead.
+		bScrollingUp = ((short)HIWORD(wParam) > 0);
 
 		if (Profile.ScrollSpeed)
 		{
@@ -13495,7 +13655,11 @@ void SortFilter(HWND hDlg, bool bAddress)
 	if ((index = ListView_GetNextItem(hListView, -1, LVNI_SELECTED)) != CB_ERR)
 	{
 		min = index ;
-		
+		// FIX [SortFilterFocusInit]: with exactly one selected row the while loop
+		// below never runs and i stayed uninitialized at the SetItemState focus
+		// call. Default the focus target to the (first) selected row.
+		i = min ;
+
 		SetWindowText(hDlg, (LPSTR) "PDW Filters - Please wait while sorting filters...");
 
 		while ((index = ListView_GetNextItem(hListView, index, LVNI_SELECTED)) != CB_ERR)
@@ -13602,7 +13766,9 @@ void ResetHitcounters(bool bAll)
 	int index=-1, i=0;
 
 	char filename[MAX_PATH];
-	char ext[10];
+	// FIX [ResetHitExtInit]: when filters.ini does not exist the backup loop below
+	// never runs and ext stayed uninitialized in the info MessageBox text.
+	char ext[10] = "";
 				
 	if (MessageBox(ghWnd, "Are you sure?", "Reset Hitcounters", MB_ICONQUESTION | MB_OKCANCEL) == IDCANCEL) return;
 
@@ -13637,10 +13803,48 @@ void ResetHitcounters(bool bAll)
 	}
 }
 
+// FIX [WrapWidthDisconnect]: report whether THIS session is currently RDP-disconnected.
+// Lazy-bound so there is no wtsapi32 link/import dependency (mirrors the GetDpiForWindow
+// lazy-bind in Initapp.cpp). Returns false when the state can't be determined, so the
+// behaviour safely degrades to "assume connected" = the pre-fix path. Constants are inlined
+// (stable since Win2000) to stay header-free, matching the WM_DPICHANGED-style fallbacks
+// elsewhere in this file: WTS_CURRENT_SERVER_HANDLE = NULL, WTS_CURRENT_SESSION = (DWORD)-1,
+// WTS_INFO_CLASS WTSConnectState = 8, WTS_CONNECTSTATE_CLASS WTSDisconnected = 4.
+static bool PdwSessionDisconnected(void)
+{
+	typedef BOOL (WINAPI *PFN_WTSQ)(HANDLE, DWORD, int, LPSTR*, DWORD*);
+	typedef void (WINAPI *PFN_WTSF)(PVOID);
+	static PFN_WTSQ pQuery = NULL;
+	static PFN_WTSF pFree  = NULL;
+	static bool     bInit  = false;
+
+	if (!bInit)
+	{
+		HMODULE h = LoadLibraryA("wtsapi32.dll");
+		if (h)
+		{
+			pQuery = (PFN_WTSQ)(void*)GetProcAddress(h, "WTSQuerySessionInformationA");
+			pFree  = (PFN_WTSF)(void*)GetProcAddress(h, "WTSFreeMemory");
+		}
+		bInit = true;
+	}
+	if (!pQuery || !pFree) return false;	// can't tell -> treat as connected (old behaviour)
+
+	LPSTR pBuf  = NULL;
+	DWORD nLen  = 0;
+	bool  bDisc = false;
+	if (pQuery(NULL, (DWORD)-1, 8 /*WTSConnectState*/, &pBuf, &nLen) && pBuf)
+	{
+		if (nLen >= sizeof(int)) bDisc = (*(int*)pBuf == 4);	// WTSDisconnected
+		pFree(pBuf);
+	}
+	return bDisc;
+}
+
 void SetWindowPaneSize(int param)
 {
 	int maximize_state;
-	
+
 	RECT rect;
 
 	GetClientRect(ghWnd, &rect);
@@ -13660,10 +13864,26 @@ void SetWindowPaneSize(int param)
 	else
 	{
 		Max_X_Client = GetSystemMetrics(SM_CXFULLSCREEN);	// Get max X client size
+		// FIX [WrapWidthDisconnect]: freeze the message wrap width while the RDP session is
+		// disconnected. 4.0.6's proactive toolbar resync ([ToolbarResync]/[ToolbarResyncProactive])
+		// synthesizes a WM_SIZE on the WM_DISPLAYCHANGE/WM_SETTINGCHANGE storm an RDP disconnect
+		// fires; the disconnected session runs on a narrow phantom display, so recomputing
+		// NewLinePoint here baked every message decoded during the disconnect into a narrow,
+		// portrait-like column that a reconnect never healed (the wrap is stored per-character in
+		// the scrollback and never re-flowed). Keeping the last connected width means those
+		// messages bake at the correct full width; the first real WM_SIZE after reconnect
+		// recomputes it. Guard on NewLinePoint>0 so the very first computation always runs (a
+		// start-in-disconnected session must never be left with a wrap width of 0, which would
+		// break every line to a single character).
+		if (NewLinePoint > 0 && PdwSessionDisconnected()) return;
 		iMaxWidth = rect.right;								// PH: Set to window-width
-		iMaxWidth-= GetSystemMetrics(SM_CXVSCROLL);			// PH: Subtract scrollbar width	
+		iMaxWidth-= GetSystemMetrics(SM_CXVSCROLL);			// PH: Subtract scrollbar width
 		iMaxWidth-= (cxChar*2);								// PH: Subtract 1 character+1px
 		NewLinePoint = (iMaxWidth/cxChar);					// PH: We have the max. chars
+		// FIX [LastcharWrapEscape]: the pane line buffers are LINE_SIZE chars; on a
+		// window wider than that the soft wrap never fired and only the hard
+		// LINE_SIZE check protected the buffer. Keep the wrap point inside the line.
+		if (NewLinePoint > LINE_SIZE-1) NewLinePoint = LINE_SIZE-1;
 	}
 }
 
@@ -13800,18 +14020,24 @@ void SetNewWindowText(char *text)
 {
 //	extern bool bMode_IDLE;			// Set if no signal
 
-	strcpy(szTEMP, szWindowText[0]);
-	strcat(szTEMP, g_szModeLabel);
+	// FIX [WindowTextBound]: assemble with remaining-space accounting - nothing
+	// enforced that the szWindowText parts (written by the decoders) plus
+	// separators fit szTEMP, so a set of maximum-length entries overflowed it.
+	size_t remain = sizeof(szTEMP) - 1;
 
-	if (text[0]) strcat(szTEMP, text);
+	szTEMP[0] = '\0';
+	strncat(szTEMP, szWindowText[0], remain); remain = sizeof(szTEMP) - 1 - strlen(szTEMP);
+	strncat(szTEMP, g_szModeLabel, remain);   remain = sizeof(szTEMP) - 1 - strlen(szTEMP);
+
+	if (text[0]) strncat(szTEMP, text, remain);
 	else
 	{
 		for (int i=1; i<6; i++)
 		{
 			if (szWindowText[i][0])
 			{
-				strcat(szTEMP, " - ");
-				strcat(szTEMP, szWindowText[i]);
+				strncat(szTEMP, " - ", remain);           remain = sizeof(szTEMP) - 1 - strlen(szTEMP);
+				strncat(szTEMP, szWindowText[i], remain); remain = sizeof(szTEMP) - 1 - strlen(szTEMP);
 			}
 		}
 		strcpy(szWindowText[5], "");
@@ -13907,6 +14133,10 @@ void ShowContextMenu(int menu, HWND hWindow)
 
 		AppendMenu(hMenu, MF_STRING  | selected ? 0 : MF_GRAYED, IDM_COPY_SELECTION, "Copy Selection");
 		AppendMenu(hMenu, MF_SEPARATOR, NULL, NULL);
+		// FIX [MenuBarToggle]: lets the user get the menu bar back after hiding it (also
+		// reachable via Ctrl+Shift+M) - this context menu itself works with the menu bar hidden.
+		AppendMenu(hMenu, MF_STRING | (Profile.ShowMenuBar ? MF_CHECKED : MF_UNCHECKED), IDM_SHOWMENUBAR, "Show Menu Bar");
+		AppendMenu(hMenu, MF_SEPARATOR, NULL, NULL);
 		AppendMenu(hMenu, MF_STRING,    IDM_OPTIONS,      "Options...") ;
 		AppendMenu(hMenu, MF_STRING,    IDM_FILTERS,      "Filter List...") ;
 		AppendMenu(hMenu, MF_STRING,	IDM_FILTEROPTIONS,"Filter Options...") ;
@@ -13942,6 +14172,14 @@ void SelectByDoubleClick(HWND hWnd, PaneStruct *pane, int iPosition, int StartRo
 	
 	pchar = pane->buff_char;
 
+	// FIX [DblClickBounds]: nothing on this path was clamped - a double-click on a
+	// window wider than LINE_SIZE chars, in the padding band below the text
+	// (line_no beyond the last buffer line) or with a stale/negative scroll pos
+	// indexed outside the pane buffer; the word scans below could also walk to
+	// pchar[-1] when the word started at column 0 of buffer line 0.
+	if (iPosition < 0 || iPosition > LINE_SIZE-1) return;
+	if (line_no < 0 || line_no >= (int)pane->buff_lines) return;
+
 	if (pchar[offset + iPosition] > 32)	// If user clicked on a character bigger than ASCII(32)
 	{
 		if ((GetKeyState(VK_SHIFT) & 0x80) && (StartRow == iLastRow))
@@ -13955,8 +14193,9 @@ void SelectByDoubleClick(HWND hWnd, PaneStruct *pane, int iPosition, int StartRo
 			iSelectionEndCol   = iPosition;
 		}
 
-		while (pchar[offset + iSelectionStartCol-1] > 32) iSelectionStartCol--;
-		while (pchar[offset + iSelectionEndCol+1] > 32)   iSelectionEndCol++;
+		// FIX [DblClickBounds]: bound the word-boundary walks at the line edges
+		while (iSelectionStartCol > 0 && pchar[offset + iSelectionStartCol-1] > 32) iSelectionStartCol--;
+		while (iSelectionEndCol < LINE_SIZE-1 && pchar[offset + iSelectionEndCol+1] > 32) iSelectionEndCol++;
 
 		LastSelection=MAKELONG(iSelectionStartCol, iSelectionEndCol);
 
@@ -13984,9 +14223,15 @@ void GoogleMaps(int iPosition)
 	int offset  = line_no * (LINE_SIZE+1);
 	pchar = Pane1.buff_char;
 
+	// FIX [DblClickBounds]: same exposure as SelectByDoubleClick - the selection
+	// globals can be stale/unclamped when this is reached, so validate before
+	// indexing the pane buffer.
+	if (line_no < 0 || line_no >= (int)Pane1.buff_lines) return;
+	if (iSelectionStartCol < 0 || iSelectionStartCol > LINE_SIZE-1) return;
+
 	if (Profile.monitor_mobitex && iPosition == iItemPositions[MSG_MESSAGE])
 	{
-		for (i=0, xx = iSelectionStartCol; xx <= (iSelectionStartCol+18); i++, xx++)
+		for (i=0, xx = iSelectionStartCol; xx <= (iSelectionStartCol+18) && xx <= LINE_SIZE-1; i++, xx++)
 		{
 			if (pchar[offset + xx]) szTMP[i] = pchar[offset + xx];
 			else break;

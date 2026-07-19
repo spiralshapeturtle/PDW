@@ -327,7 +327,11 @@ static void InterruptibleSleep(DWORD ms)
     }
 }
 
-static void DoSend(const PushoverJob *job)
+// FIX [FlushBounded]: returns TRUE while the transport is usable (delivered, or a fast
+// definitive HTTP error - server alive), FALSE on a transport-level failure or when a
+// shutdown interrupts the retry/backoff. The exit-flush uses this to stop flushing
+// against a dead endpoint instead of burning the full timeout budget per queued job.
+static BOOL DoSend(const PushoverJob *job)
 {
     char appTok[64], userKey[64], sound[32], device[64];
     EnterCriticalSection(&g_cs);
@@ -342,7 +346,7 @@ static void DoSend(const PushoverJob *job)
     if (job->jobPriority >= -2 && job->jobPriority <= 1) prio = job->jobPriority;
     if (job->jobSound[0]) { strncpy(sound, job->jobSound, sizeof(sound) - 1); sound[sizeof(sound) - 1] = '\0'; }
 
-    if (!appTok[0] || !userKey[0]) return;
+    if (!appTok[0] || !userKey[0]) return TRUE;   // FIX [FlushBounded]: no-op, not a transport failure
 
     char title[512];
     title[0] = '\0';
@@ -381,7 +385,12 @@ static void DoSend(const PushoverJob *job)
     {
         if (attempt > 0)
         {
-            if (!g_bRunning) return;
+            if (!g_bRunning)
+            {
+                // FIX [ShutdownLost]: this message is dropped here - say so in the log.
+                WriteLog("LOST    capcode=%s shutdown during retry - message dropped", job->szCapcode);
+                return FALSE;   // FIX [FlushBounded]: transport failed + shutdown in progress
+            }
             PostStatus(PUS_RETRY, attempt);
             InterruptibleSleep(g_retryDelays[attempt - 1]);
         }
@@ -398,7 +407,7 @@ static void DoSend(const PushoverJob *job)
         {
             WriteLog("SENT    capcode=%s -> %d OK", job->szCapcode, status);
             PostStatus(PUS_OK, status);
-            return;
+            return TRUE;
         }
         if (status == 429)
         {
@@ -411,13 +420,14 @@ static void DoSend(const PushoverJob *job)
             // 4xx (bad token/user/message) — server reachable but rejected; do not retry.
             WriteLog("ERROR   capcode=%s -> HTTP %d", job->szCapcode, status);
             PostStatus(PUS_ERROR, status);
-            return;
+            return TRUE;   // FIX [FlushBounded]: endpoint alive (fast definitive answer)
         }
         // transport error -> retry
         CloseConnection();
     }
     WriteLog("ERROR   capcode=%s all retries failed", job->szCapcode);
     PostStatus(PUS_ERROR, 0);
+    return FALSE;   // FIX [FlushBounded]
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +457,18 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
         if (!QueueEmpty()) { job = g_queue[g_qHead]; g_qHead = (g_qHead + 1) % PO_QUEUE_SIZE; have = TRUE; }
         LeaveCriticalSection(&g_cs);
         if (!have) break;
-        DoSend(&job);
+        // FIX [FlushBounded]: bound the exit flush - on the first transport failure, log
+        // what remains as LOST and stop, instead of burning the full timeout budget per
+        // queued job inside PushoverShutdown's INFINITE join on the GUI thread.
+        if (!DoSend(&job))
+        {
+            int nLost;
+            EnterCriticalSection(&g_cs);
+            nLost = (g_qTail - g_qHead + PO_QUEUE_SIZE) % PO_QUEUE_SIZE;
+            LeaveCriticalSection(&g_cs);
+            WriteLog("LOST    shutdown flush aborted - %d message(s) dropped (transport failed)", nLost + 1);
+            break;
+        }
     }
     CloseSession();
     return 0;
@@ -524,11 +545,14 @@ void PushoverDestroy(void)
 
 static void EnqueueJob(const PushoverJob *job)
 {
+    BOOL     bDropped = FALSE;
+    unsigned nDropped = 0;
     EnterCriticalSection(&g_cs);
     if (QueueFull())
     {
         g_droppedJobs++;
-        WriteLog("DROP queue full - message discarded (total dropped=%u)", g_droppedJobs);
+        bDropped = TRUE;
+        nDropped = g_droppedJobs;
     }
     else
     {
@@ -540,6 +564,14 @@ static void EnqueueJob(const PushoverJob *job)
     // also clears the handle under g_cs.
     if (g_hEvent) SetEvent(g_hEvent);
     LeaveCriticalSection(&g_cs);
+    if (bDropped)
+    {
+        // FIX [QueueDropVisible]: log OUTSIDE g_cs (LogManager direct mode does synchronous
+        // disk I/O and this runs on the GUI thread) and ALWAYS post the error status - with
+        // LogToFile off the drop was previously completely invisible to the operator.
+        WriteLog("DROP queue full - message discarded (total dropped=%u)", nDropped);
+        PostStatus(PUS_ERROR, 0);
+    }
 }
 
 void PushoverNotify(const char *capcode, const char *message, const char *label,

@@ -107,7 +107,9 @@ UINT GetPathFromFullPathName(LPCTSTR lpFullPathName, LPTSTR lpPathBuffer,
    UINT nLength;
    int i;
 
-   if ((nLength = (UINT) lstrlen(lpFullPathName)) > nPathBufferLength) return(nLength);
+   // FIX [PathBufferOffByOne]: >= instead of > - an exactly-buffer-length path passed
+   // the old check and lstrcpy wrote length+1 bytes (terminator past the buffer).
+   if ((nLength = (UINT) lstrlen(lpFullPathName)) >= nPathBufferLength) return(nLength);
 
    lstrcpy(lpPathBuffer, lpFullPathName);
 
@@ -298,6 +300,11 @@ HWND NEAR InitInstance(HINSTANCE hInstance, int nCmdShow)
 						 NULL, NULL, hInstance, NULL);
 
 	if (NULL == ghWnd) return (NULL);
+
+	// FIX [MenuBarToggle]: keep a handle to the loaded menu so it can be re-attached
+	// after SetMenu(ghWnd, NULL); then apply the persisted show/hide state before paint.
+	ghMenu = GetMenu(ghWnd);
+	if (!Profile.ShowMenuBar) SetMenu(ghWnd, NULL);
 
 	ShowWindow(ghWnd, nCmdShow);
 

@@ -1,28 +1,169 @@
-# PDW 4.0.6 - Release Notes
+# PDW 4.0.4 - Release Notes
 
-PDW 4.0.6 finishes the top-right corner display glitch first addressed in 4.0.5 (signal-meter
-alignment and the divider line under the meter). No decoder output or configuration format changes;
-existing `pdw.ini` and `filters.ini` files work unchanged.
+PDW 4.0.4 is a combined stability and hardening release: a full source-code audit (memory safety,
+buffer handling, and rare corner-case defects across the decoders, the output feeds, the input
+paths, and the screen/GUI code), the new high-resolution toolbar, a title-bar/corner display-glitch
+fix, a window-position safety fix, and one small new option (a menu-bar toggle). Most fixes target
+unusual conditions - corrupt or truncated over-the-air frames, feeds under stress, reconnect timing,
+and misconfigured or corrupt `pdw.ini` / `filters.ini` files - so day-to-day behaviour is unchanged.
+No decoder output or configuration format changes; existing `pdw.ini` and `filters.ini` files work
+unchanged.
 
-## Divider line stays continuous left of the signal meter (FIX [RxqSquareBandClamp], [RxqSquareDividerClip])
-Companion fix to 4.0.5's [SigindDividerClip], for a similar break just LEFT of the signal meter. The
-small RX-quality indicator square (light gray when reception is good, a warning icon when poor) sits
-at a fixed vertical offset tuned for the taller toolbar band. Once the toolbar settled to its shorter
-themed steady-state (e.g. after a Remote Desktop disconnect at high DPI), the square's bottom reached
-a few pixels below the divider and painted over both the divider row and the top edge of the header
-box underneath - a short gap in the line just left of the meter that every once-per-second repaint
-re-created, so neither a resize nor the re-sync fixes below could heal it. The square (and the warning
-icon) is now clamped to stay strictly above the divider, and the divider segment under its span is
-re-asserted on every repaint. At the taller startup height the rendering is unchanged.
+## Output-feed & logging robustness audit
+A focused concurrency/lifetime scrub of the multi-threaded output-feed and logging machinery
+(producer/consumer ring buffers, worker-thread lifecycles, shutdown/reconfigure paths). Findings and
+fixes:
+- **Telnet wire-log no longer drops lines (FIX [WireLogMultiLine]).** When a single locked telnet
+  operation emitted more than one wire-line (e.g. a `<TX_START>` immediately followed by the message
+  line, or `<TX_STOP>`/`<RS232>`/`<AUDIO>` markers together in one watchdog tick), only the last line
+  reached `telnet_traffic.log`. The per-thread staging buffer now accumulates the whole batch and
+  flushes it intact. The live telnet stream to clients was never affected - this was disk-log fidelity
+  only.
+- **Webhook URL is no longer written to the log (FIX [WebhookUrlSecret]).** Webhook URLs commonly embed
+  an auth token in the path/query; the log now records only the outcome (`SENT`/`ERROR` + HTTP status),
+  never the URL.
+- **Webhook group JSON stays valid on very large group calls (FIX [WebhookSubRollback]).** A group with
+  enough subscribers to exceed the subscriber-list buffer could POST truncated (invalid) JSON. Each
+  subscriber entry is now written all-or-nothing, so the array always closes cleanly.
+- **Mail worker start is failure-safe (FIX [SmtpThreadStart]).** If the mail worker thread or its event
+  could not be created, the feed now reverts to a clean stopped state instead of leaking the event and
+  queuing mail to a worker that never runs.
+- **SMTP test-dialog response handle cleared on close (FIX [SmtpRespWnd]).** Cancelling the SMTP setup
+  dialog while a test mail was still sending could leave the worker writing to the closed dialog's list
+  box; the handle is now cleared on close.
+- **Additional hardening:** sqlite maintenance now aborts promptly on shutdown so exit/reconfigure
+  can't stall (FIX [SqliteMaintCancel]); mqtt/webhook event-handle teardown and signalling are fully
+  serialized under the feed lock (FIX [MqttEventRace]/[WebhookEventRace]); mysql/smtp snapshot the
+  socket before `shutdown()` to avoid a descriptor-reuse race (FIX [MysqlShutdownFd]/[SmtpShutdownFd]);
+  the mqtt/smtp run-flags use `std::atomic` like the other feeds (FIX [MqttAtomicRun]/[SmtpAtomicRun]);
+  and a debug-only credential trace was removed from the base64 encoder (FIX [SmtpCredTrace]).
+
+### Pre-release scrub (second pass)
+A second adversarial pass over the same feed/logging layer, with every finding verified against the
+code before fixing. None of these change day-to-day behaviour; they matter when an endpoint is down,
+a queue is full, or PDW is closing.
+- **SMTP: no more crash on exit while a mail was in flight (FIX [SmtpShutdownNullCfg]).** Closing PDW
+  cleared the SMTP configuration pointers before the mail worker had stopped; a worker mid-send could
+  then read a NULL server/username/password and crash during shutdown. The worker is now stopped and
+  joined first, with defensive NULL guards as backup.
+- **Exit/reconfigure no longer freezes on a dead endpoint (FIX [FlushBounded]).** The MQTT, webhook,
+  Telegram and Pushover workers flush their remaining queue on shutdown, and each queued message got
+  a full network attempt (10-20 s of timeouts) even when the endpoint was unreachable - a full queue
+  could freeze the GUI for 10+ minutes on exit or a settings change. The flush now stops at the first
+  transport failure and logs how many messages were dropped (`LOST`).
+- **SQLite: database maintenance can no longer stall exit for minutes (FIX [SqliteMaintInterrupt]).**
+  The hourly age purge ran as one unbounded DELETE (minutes on a multi-GB backlog) with no cancel
+  point, and vacuum walked the whole freelist in one call. Maintenance is now batched and
+  interruptible; a stop/reconfigure aborts it almost immediately, with the database left consistent.
+- **SQLite: a failed COMMIT can no longer silently wedge the feed (FIX [SqliteCommitCheck]).** If a
+  COMMIT failed with the transaction still open (e.g. a concurrent reader holding the database busy),
+  the feed kept "inserting" into an orphan transaction that was rolled back at close - total silent
+  data loss while reporting OK. The result is now checked, rolled back on failure, and the
+  transaction state is resynced from the engine.
+- **MySQL: the shutdown flush now actually delivers (FIX [MysqlStopDrain]).** Stop/reconfigure shut
+  the socket down before the worker's final flush ran, so up to 63 queued rows were discarded
+  unlogged on every stop. The worker now gets a 3 s grace window to flush over the live connection;
+  anything still lost is logged.
+- **MySQL: stop no longer waits out a connect in progress (FIX [MysqlConnAbort]).** A stop landing
+  while the worker was mid-connect against a slow or dead server waited for the full
+  DNS/connect/handshake timeouts (15-65 s of frozen GUI). The in-progress connect is now interrupted
+  immediately, and the connect sequence checks the stop flag between phases.
+- **SMTP: full-queue corner could corrupt the send queue (FIX [SmtpRingPublish]).** The lock-free
+  mail queue published its indices in two steps; with the ring nearly full (hung mail server), a
+  thread switch between the two steps could make the whole backlog unsendable or resend stale slots.
+  Indices are now computed locally and published in a single store.
+- **SMTP: recipient captured per queued mail (FIX [SmtpToSnapshot]).** The worker read the To-address
+  from the live settings at send time; changing it in the settings dialog while a mail was in flight
+  could tear the recipient string. The recipient is now captured when the mail is queued.
+- **Telnet: reconnect replay of a completely full backlog delivered zero lines (FIX
+  [TelnetReplayCount]).** A client reconnecting after missing more than a full backlog window got an
+  empty `<BUFFER_START><BUFFER_STOP>` instead of the newest lines - exactly when it had missed the
+  most. The replay now counts entries instead of comparing ring positions.
+- **Telnet: event-log disk writes moved off the server lock (FIX [TsEventLogStaged]).** The same
+  treatment the wire-log got earlier ([TsWireLogLockFree]): connect/disconnect/state event lines were
+  still written to disk while the telnet lock was held, briefly stalling the decoder on a slow disk.
+  They are now staged per-thread and written right after the lock is released.
+- **Telnet: listen-socket close race closed (FIX [TelnetListenSockLock]).** Disable/shutdown closed
+  the listening socket while the worker could still pick up the (recyclable) handle value; the handle
+  is now detached under the server lock on both sides.
+- **Telegram: supergroup migration no longer rewrites settings from the worker thread (FIX
+  [TgProfileGuiSync]).** A group upgrading to a supergroup made the worker rewrite the stored chat-id
+  list concurrently with the GUI - a torn chat list could be saved to `pdw.ini`. The update is now
+  applied on the GUI thread.
+- **Telegram: a rate limit on the plain-text fallback is retried (FIX [TgFallback429]).** A message
+  whose HTML was rejected and whose plain-text resend hit HTTP 429 was dropped even though retry
+  attempts remained; it now re-enters the retry loop.
+- **Log settings: applying them no longer discards buffered log lines (FIX [LogReconfigureFlush]).**
+  With write-buffering enabled, pressing OK in the log settings threw away any lines still in the
+  buffer; they are now flushed to disk first. Event signalling and buffer publication in the log
+  manager are also fully serialized (FIX [LogEventRace]).
+- **Dropped messages are now always visible (FIX [QueueDropVisible], [ShutdownLost], [MysqlDropLog],
+  [SqliteDrainLog]).** A queue-full drop now always turns the feed status red (previously invisible
+  with per-feed logging off) and its log line is written outside the feed lock; every shutdown-time
+  drop path - all feeds, including SMTP's new "N queued messages unsent at shutdown" line - now
+  leaves a `LOST`/`DROP` log line.
+- Small polish: the SMTP monitor-window handle is read once per response line (FIX
+  [SmtpRespSnapshot]) and a few remaining em-dashes in runtime strings were replaced with plain ASCII
+  (FIX [AsciiRuntime]).
+
+## FLEX/POCSAG decode-path audit
+A full adversarial pass over the primary decode path (FLEX and POCSAG vector/address parsing, BCH
+error correction, and the shared display buffers) against corrupt/truncated over-the-air frames. The
+path was already memory-safe; the fixes below correct one display defect and harden three
+never-yet-triggered corner cases.
+- **FLEX long-address capcode no longer wraps (FIX [FlexLongAddrOverflow]).** With **FLEX Group Mode
+  turned off**, a long-address FLEX message whose capcode fell outside the 9-digit range could
+  overflow a 32-bit intermediate and display a wrong (but plausible) capcode. The value is now
+  computed in 64-bit and any capcode outside the valid 9-digit range is shown as `?????????` instead
+  of a wrong number. (With Group Mode on - the default - long addresses are skipped, so this path was
+  never reached in a default configuration.)
+- **FLEX RX-quality reading corrected (FIX [FlexBiterrorDoubleCount]).** Each FLEX message word fed
+  its bit-error count into the on-screen RX-Quality meter twice, making the FLEX reading slightly more
+  pessimistic than POCSAG. Now counted once, matching POCSAG. The telnet RX-quality feed is a separate
+  path and was never affected.
+- **Defensive decoder bounds (FIX [PocsagNumBound], [FlexNumWordClamp], [EccPosGuard]).** Three array
+  writes/reads that were safe only by an implicit invariant now carry an explicit bound (POCSAG numeric
+  buffer, FLEX numeric word span, BCH error-position table index), so a future change to the
+  surrounding logic cannot silently turn them into an out-of-bounds access.
+
+## Show/hide the menu bar (FIX [MenuBarToggle])
+New **Display > Show Menu Bar** checkbox hides the whole menu bar (File, Edit, Interface, ...) while
+keeping the toolbar visible; the message panes reflow to use the freed space immediately, with no
+leftover gap. Shortcut **Ctrl+Shift+M** toggles it either way (it keeps working even while the menu
+bar itself is hidden, so it always gets you back). With the menu bar hidden, right-clicking anywhere
+in the main window (including the toolbar) also offers a **Show Menu Bar** entry in the context
+menu. The state is saved to `pdw.ini` as `ShowMenuBar` (default `1`, i.e. visible) and restored on
+the next start.
+
+## New high-resolution toolbar + themed dialogs (FIX [ToolbarHiResIcons])
+The toolbar now uses 72x72 32-bit icons with a real alpha channel, box-filtered down to the current
+DPI, and the application manifest opts in to Common Controls v6 - so every dialog also gets the modern
+themed look instead of the classic Windows 2000 style.
+
+## Toolbar icons squared up to one grid (FIX [ToolbarIconGrid])
+Follow-up polish on the icon set so every button carries the same optical weight. All 13 glyphs are
+now drawn to a single 54 px content box centred on the canvas: the folder and the two copy-pane
+icons were enlarged to fill their box, the statistics bars were widened and raised to sit on-centre,
+the pause bars were thickened so the two-bar shape no longer looks smaller than its neighbours, and
+the help "?" was given a slightly larger ring with clear whitespace around the glyph (the round shape
+gets a 1 px optical bump so it does not read small next to the square icons). Corner radii were
+unified. The spacing between buttons is a single fixed 8 px grid gutter instead of a per-button
+margin. Purely cosmetic - no button, tooltip or behaviour changed.
+
+## Window never opens off-screen (FIX [WindowPosMinimized])
+If PDW was closed while minimized, an older build could save an off-screen window position
+(-32000,-32000) and start up invisible (only the tray icon reachable). The saved position is now
+sanity-checked against the connected monitors, and a corrupt or zero window size falls back to the
+default. PDW always opens on a visible part of the desktop.
 
 ## Title bar re-syncs after a Remote Desktop / theme change (FIX [ToolbarResync])
-The main fix for the long-standing display glitch: a full-width black band under the toolbar plus a
-broken divider line by the signal meter, appearing after the machine had been left running - often
-seen over a Remote Desktop session (e.g. a Retina client). Root cause: when Windows changes the theme
-or display mode (which a Remote Desktop connect/disconnect does), the toolbar quietly resizes to a
-different height, but PDW only recomputed its toolbar height on a window resize. The header, divider,
-RX-quality box and signal meter are all positioned from that height, so they ended up several pixels
-below where the toolbar now ended - a black gap that only a manual resize cleared. PDW now detects the
+Long-standing display glitch: a full-width black band under the toolbar plus a broken divider line
+by the signal meter, appearing after the machine had been left running - often seen over a Remote
+Desktop session (e.g. a Retina client). Root cause: when Windows changes the theme or display mode
+(which a Remote Desktop connect/disconnect does), the toolbar quietly resizes to a different height,
+but PDW only recomputed its toolbar height on a window resize. The header, divider, RX-quality box
+and signal meter are all positioned from that height, so they ended up several pixels below where
+the toolbar now ended - a black gap that only a manual resize cleared. PDW now detects the
 toolbar-height change on its own and re-aligns the whole layout automatically within about a second,
 so the glitch corrects itself without any manual resize.
 
@@ -40,41 +181,6 @@ As an extra safety net, the whole header row under the toolbar (Time / Date / Ad
 Messages and the divider line) is now refreshed once per second instead of only its RX-quality corner,
 so a momentarily blanked header repairs itself within a second.
 
-## Signal-meter/RX-Q bitmaps reload after a display change (FIX [DisplayBitmapReload])
-Hygiene fix found while diagnosing the above: the signal-meter and RX-quality warning-icon bitmaps are
-now recreated for the new display whenever Windows reports a display-driver change (e.g. an RDP
-connect/disconnect), instead of only at startup.
-
-## Window close no longer runs unrelated re-sync code (FIX [WmCloseFallthrough])
-Internal correctness fix, no user-visible behaviour change: closing the main window shared a code path
-with the new toolbar re-sync handlers above (a C `switch` falls through case labels regardless of which
-one matched), so every ordinary close briefly ran that handler's code before exiting. Harmless in
-practice (its one-shot timer was already cancelled on window teardown) but fragile, so window close now
-returns directly instead of falling through.
-
----
-
-# PDW 4.0.5 - Release Notes
-
-PDW 4.0.5 is a stability and hardening release. It bundles the new high-resolution toolbar and a
-window-position safety fix with the results of a full source-code audit: a broad sweep for memory
-safety, buffer handling, and rare corner-case defects across the decoders, the output feeds, and the
-input paths. Most fixes target unusual conditions - corrupt or truncated over-the-air frames, feeds
-under stress, reconnect timing, and misconfigured or corrupt `pdw.ini` / `filters.ini` files - so the
-day-to-day behaviour is unchanged. No decoder output or configuration format changes; existing
-`pdw.ini` and `filters.ini` files work unchanged.
-
-## New high-resolution toolbar + themed dialogs (FIX [ToolbarHiResIcons])
-The toolbar now uses 72x72 32-bit icons with a real alpha channel, box-filtered down to the current
-DPI, and the application manifest opts in to Common Controls v6 - so every dialog also gets the modern
-themed look instead of the classic Windows 2000 style.
-
-## Window never opens off-screen (FIX [WindowPosMinimized])
-If PDW was closed while minimized, an older build could save an off-screen window position
-(-32000,-32000) and start up invisible (only the tray icon reachable). The saved position is now
-sanity-checked against the connected monitors, and a corrupt or zero window size falls back to the
-default. PDW always opens on a visible part of the desktop.
-
 ## Signal-meter stays aligned in the toolbar (FIX [SigindBandAlign])
 The small signal-strength meter in the top-right corner is now vertically centered in the actual
 toolbar band instead of being pinned to a fixed offset. Previously, once the toolbar settled to its
@@ -89,6 +195,98 @@ background box reached down onto the divider row and painted over that segment; 
 repainted on toolbar hover without redrawing the divider, the gap stuck until the next full repaint.
 The meter box is now kept strictly above the divider row, and the meter repaint also restores the
 divider segment beneath it, so the line stays unbroken. Correct at startup as before.
+
+## Divider line stays continuous left of the signal meter (FIX [RxqSquareBandClamp], [RxqSquareDividerClip])
+Companion fix to [SigindDividerClip] above, for a similar break just LEFT of the signal meter. The
+small RX-quality indicator square (light gray when reception is good, a warning icon when poor) sits
+at a fixed vertical offset tuned for the taller toolbar band. Once the toolbar settled to its shorter
+themed steady-state (e.g. after a Remote Desktop disconnect at high DPI), the square's bottom reached
+a few pixels below the divider and painted over both the divider row and the top edge of the header
+box underneath - a short gap in the line just left of the meter that every once-per-second repaint
+re-created, so neither a resize nor the re-sync fixes above could heal it. The square (and the warning
+icon) is now clamped to stay strictly above the divider, and the divider segment under its span is
+re-asserted on every repaint. At the taller startup height the rendering is unchanged.
+
+## Redesigned signal meter (FIX [SigindFlatGauge], [SigindGaugeGray], [SigindGaugeBigger], [SigindWiggleVisibility])
+The signal meter is now a clean flat gauge - a rounded frame with a half-circle scale and a red needle
+- drawn from a high-resolution source and scaled crisply to any DPI, in the same slate-gray tone and
+stroke weight as the redesigned toolbar icons. The gauge fills more of its box so it reads better next
+to the zoom text. The needle itself is drawn live over a cached back-buffer, so the scale can never be
+nibbled by the moving needle and there is no flicker. The at-rest needle jitter - the small wiggle you
+see when noise is present but no message is decoding - was made as visible as on the classic meter: the
+needle was lengthened to fill the enlarged scale and its low end restored to the original hand-tuned
+spacing, so it visibly snaps out of rest again. Signal-strength behaviour is unchanged; this is a visual
+refresh only.
+
+## Signal-meter/RX-Q bitmaps reload after a display change (FIX [DisplayBitmapReload])
+Hygiene fix found while diagnosing the above: the signal-meter and RX-quality warning-icon bitmaps are
+now recreated for the new display whenever Windows reports a display-driver change (e.g. an RDP
+connect/disconnect), instead of only at startup.
+
+## Window close no longer runs unrelated re-sync code (FIX [WmCloseFallthrough])
+Internal correctness fix, no user-visible behaviour change: closing the main window shared a code path
+with the toolbar re-sync handlers above (a C `switch` falls through case labels regardless of which
+one matched), so every ordinary close briefly ran that handler's code before exiting. Harmless in
+practice (its one-shot timer was already cancelled on window teardown) but fragile, so window close now
+returns directly instead of falling through.
+
+## Copy with a full scrollback could crash (FIX [VscrollClamp])
+Completes [ClipboardBounds] below. With a full message buffer (normal after some uptime) and the
+view scrolled up (e.g. Home key), every newly arriving line pushed the pane's scroll position one
+step below zero. Using Copy Upper/Lower/Selection afterwards converted that negative position to a
+huge unsigned offset and read far outside the message buffer - on the x64 build a likely crash.
+The scroll position is now clamped where the buffer wraps, and the copy loop clamps defensively.
+
+## Double-click word selection read outside the buffer (FIX [DblClickBounds])
+Double-clicking a word had no bounds anywhere on the path: a window wider than the internal
+180-character line, a click in the empty band below the last text line, or a word starting at
+column 0 of the very first buffer line made the word-boundary scans walk outside the pane buffer
+(garbage selection at best, crash at worst). Click coordinates, the target line and both scan
+directions are now bounded; the Google Maps position lookup gets the same guards.
+
+## Filter delete could corrupt the filter list (FIX [FilterDelReentry])
+The filter-window delete loop processes pending window messages while it works. Pressing Delete/F8
+again while a large multi-delete was still running re-entered the delete handler; when the nested
+pass returned, the outer loop continued with a stale index and could erase past the end of the
+filter list (memory corruption / crash). A delete request is now ignored while one is in progress.
+
+## Mouse wheel direction and multi-monitor fixes (FIX [WheelDelta], [WheelCoordSign])
+Only a wheel delta of exactly +120 counted as "scroll up", so precision touchpads (small deltas)
+and fast wheel movements (coalesced +/-240, +/-360) always scrolled DOWN regardless of direction;
+the sign of the delta is now used. Additionally, wheel coordinates were read as unsigned, so on a
+monitor positioned left of or above the primary the inside-window test always failed and the wheel
+did nothing; coordinates are now read signed.
+
+## ACARS Colors dialog corrupted main screen colors (FIX [AcarsColorsInit])
+Opening the ACARS Colors dialog as the FIRST color dialog since startup and clicking OK silently
+saved the main Time/Date, Message and Bit-errors colors as black (the dialog wrote values it had
+never initialized). The DBI and Labels fields also shared a single color slot, so editing either
+overwrote the other on every OK. All values the dialog saves are now seeded when it opens, and DBI
+has its own color slot (including in the preview and the Default reset).
+
+## Logfile dialog no longer wipes the filename (FIX [LogDlgNameWipe])
+With a fixed (non-date) logfile name configured, the filename field was always empty when the
+dialog opened, and toggling ANY checkbox in the dialog (enable, date, ISO, log-rejected, buffer)
+erased a filename the user had just typed - OK then failed with "You haven't entered a file
+name!". A leftover unconditional field update overwrote the correct value; removed.
+
+## POCSAG function-number list duplicated (FIX [FnuComboReset])
+Browsing filters with Next/Previous re-initializes the filter-edit dialog, and every jump onto a
+POCSAG filter appended another "All, 1, 2, 3, 4" set to the function-number dropdown. Picking a
+duplicated entry then saved an invalid function number (e.g. `-8`) into the capcode, a filter that
+never matched again. The list is now reset before it is filled.
+
+## Config-file validation (FIX [ScreenColClamp], [FilterTypeClamp], [ReadFiltersBounds])
+Hardening against hand-edited or corrupt configuration files:
+- `ScreenColN` (column order) values outside 0..7 were written straight through the column-layout
+  code as an out-of-bounds array WRITE at startup; the Columns dialog could also launder a bad
+  value into -1 via an empty dropdown selection. Clamped at load and at save.
+- `FilterDefaultType` outside 0..5 (or an empty dropdown selection in Filter Options) drove an
+  out-of-bounds index into the capcode-length table when adding a new filter. Clamped at load and
+  at save.
+- A truncated `filters.ini` line made three field scanners walk past the end of the line buffer,
+  and overlong last-hit date/time tokens overflowed their 10-byte fields into adjacent filter
+  data. Scans now stop at end-of-string and the copies are bounded.
 
 ## Filtered-pane scrollbar accuracy (FIX [PaneFilterScrollbarSync])
 The vertical scrollbar of the Filtered pane is now refreshed on every appended line, so it always
@@ -132,6 +330,11 @@ affected.
 - **Telnet server (FIX [TelnetPartialSend], [TelnetReplayDup])** - a slow client can no longer receive
   a torn, half-sent line, and backlog replay after a reconnect no longer duplicates the lines that
   arrive during the replay.
+- **Telnet server wire-log latency (FIX [TsWireLogLockFree])** - the optional wire-log disk write ran
+  while the telnet server's internal state lock was held (a synchronous file write by default, since
+  write-buffering is off unless enabled in the Logfile dialog), briefly stalling every other telnet
+  operation - client accept/send, RS232/AUDIO state updates - for the duration of that write. The line
+  is now only formatted under the lock; the actual disk write happens right after the lock is released.
 - **MQTT (FIX [MqttSubRollback])** - an oversized group-subscriber list degrades to a dropped entry
   instead of malformed JSON.
 - **Telegram (FIX [TgMigrateToken])** - a chat migration now matches the exact chat id rather than any
@@ -146,6 +349,42 @@ affected.
 - **Sound card (FIX [WaveInErrReset], [StopCapBufferLeak], [BuffersReadyReset])** - audio buffers are
   correctly reset/released on device errors and restarts, preventing a rare buffer-tracking overrun and
   stale-audio processing after a stop/start cycle.
+
+## Low-severity hardening sweep (second fix round)
+The remaining (low-severity) findings from the display-layer audit, all fixed:
+
+- **Resource leaks** - the font dialog leaked one font handle per "OK" (FIX [FontDlgLeak]); every
+  print job leaked the printer-settings handles, a failed StartDoc still "printed", and Cancel
+  kept printing into the dead job without ever aborting it (FIX [PrinterJobGuards]); two clipboard
+  paths freed memory owned by the clipboard, risking a later use-after-free (FIX [ClipOwnedFree]).
+- **Selection & scrolling edge cases** - dragging a selection above/left of a pane fed negative
+  coordinates into the selection as huge values (FIX [PaneSelCoordSign]); dragging the scrollbar
+  thumb in a scrollback larger than 65535 lines jumped to the wrong line (FIX [ThumbTrack32]);
+  Copy Selection after a click without drag left an inverted cell on screen and copied a stale
+  one-cell rect (FIX [CopySelNoDrag]).
+- **Scrollback resize is OOM-safe** - changing the scrollback size now allocates the new buffers
+  BEFORE freeing the old ones; a failed allocation keeps the current buffer and size instead of
+  falling back to unchecked mallocs while a message box pumped paints against inconsistent pane
+  state (FIX [ScrollDlgOomSafe]).
+- **Stale dialog state** - the filter window now restyles its list correctly when the color option
+  was changed from the main window, and the menu variant of Filter Options goes through the same
+  path as the button (FIX [FilterColorsStale]); the filter-edit dialog re-arms its init guard on
+  every open, so init-time control echoes can no longer corrupt multi-edit sep-file fields
+  (FIX [FilterEditInitGuard]); two uninitialized locals fixed (sort focus with a single selected
+  row, backup-extension text when no filters.ini exists - FIX [SortFilterFocusInit],
+  [ResetHitExtInit]).
+- **Wide-window and highlight corner cases** - on a window wider than the internal 180-character
+  line the final character of a message could escape the line-wrap bound; the wrap point is now
+  clamped and the hard bound is a >= test (FIX [LastcharWrapEscape]); a text-filter match at the
+  very first character of a message no longer disables the highlight for the whole message
+  (FIX [HighlightPosZero]); right-to-left (Hebrew) mode now reverses the per-character colors
+  together with the text (FIX [ReverseColorSync]).
+- **Signal meter self-heal** - a failed bitmap/DC (re)load during display changes no longer leaves
+  the meter blank until restart or presents an uninitialized meter face; the next repaint retries
+  (FIX [GaugeSrcdcFail], [SigindReloadRetry], [ExclamLoadGuard]).
+- **Bounded string assembly** - the title-bar text, the ".txt" append for the clipboard-save
+  filename, and a path-helper length check are now bounded (FIX [WindowTextBound],
+  [EditFileExtBound], [PathBufferOffByOne]).
 
 ## Miscellaneous safety fixes
 - Bounds and termination hardening across clipboard copy, several dialogs (logfile, filter, scrollback

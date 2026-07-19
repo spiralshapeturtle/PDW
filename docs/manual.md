@@ -1,6 +1,6 @@
 # PDW User Manual
 
-**Version 4.0.6** | Windows 7–11 | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
+**Windows 7–11** | FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES decoder
 
 ---
 
@@ -62,7 +62,7 @@
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX / ReFLEX / POCSAG / ACARS / MOBITEX / ERMES receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, MySQL databases, and local SQLite files.
 
-This version (4.0.0) builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
+This fork builds on the classic PDW 3.2 codebase and adds five years of production-hardened improvements. A full version history is available in `RELEASE_NOTES.md`.
 
 ---
 
@@ -872,6 +872,16 @@ Recommended for busy POCSAG/FLEX networks where many messages per second can cau
 | Columns | Show or hide individual columns |
 | Colours | Edit the colour scheme. The "Default" filter label colour is a readable azure; with "Better contrast" on, all 17 label colours are distinct |
 | Word wrap | Wrap long messages inside the message column |
+| Show Menu Bar | Hide or show the menu bar (the toolbar stays visible either way); shortcut **Ctrl+Shift+M** |
+
+### Hiding the menu bar
+
+**Display > Show Menu Bar** toggles the whole menu bar (File, Edit, Interface, ...) on or off; the
+toolbar and message panes are unaffected and reflow to fill the freed space. Once the menu bar is
+hidden it can no longer be clicked, so PDW offers two ways back: the **Ctrl+Shift+M** shortcut (works
+whether the menu bar is shown or hidden), or right-click anywhere in the main window (including the
+toolbar) and pick **Show Menu Bar** from the context menu. The setting is remembered in `pdw.ini` and
+restored the next time PDW starts.
 
 ### Custom filter label colours (pdw.ini)
 
@@ -1064,7 +1074,7 @@ The system tray icon provides:
 
 PDW declares `System DPI Aware` in its application manifest. Fonts, toolbar, and layout are recalculated from the actual display DPI at startup. PDW displays correctly on 125 %, 150 %, and 200 % scaled (4K / HiDPI) monitors without blurring or clipping.
 
-The toolbar buttons use a high-resolution icon set: each icon is stored as a 72x72, 32-bit image with an alpha channel and is smoothly downscaled to the exact button size for your display scaling, so the icons stay sharp and anti-aliased at every scale factor. PDW also uses the modern themed Windows look (Common Controls v6) for its dialogs.
+The toolbar buttons use a high-resolution icon set: each icon is stored as a 72x72, 32-bit image with an alpha channel and is smoothly downscaled to the exact button size for your display scaling, so the icons stay sharp and anti-aliased at every scale factor. The icons are all drawn to a single grid so they share the same visual size and weight, and are spaced on a fixed grid gutter. PDW also uses the modern themed Windows look (Common Controls v6) for its dialogs.
 
 ---
 

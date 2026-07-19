@@ -49,7 +49,16 @@ void PrintBuffer(LPSTR lpBuffer)
 	docinfo.lpszDatatype = NULL;
 	docinfo.fwType = 0;
 
-	StartDoc(printdlg.hDC, &docinfo);
+	// FIX [PrinterJobGuards]: StartDoc was unchecked - on failure the code still
+	// "printed" into a dead job. Bail out and release the DC and the PrintDlg-
+	// allocated hDevMode/hDevNames (which used to leak on every print job).
+	if (StartDoc(printdlg.hDC, &docinfo) <= 0)
+	{
+		DeleteDC(printdlg.hDC);
+		if (printdlg.hDevMode)  { GlobalFree(printdlg.hDevMode);  printdlg.hDevMode  = NULL; }
+		if (printdlg.hDevNames) { GlobalFree(printdlg.hDevNames); printdlg.hDevNames = NULL; }
+		return;
+	}
 
 	/* get text metrics for printer */
 	GetTextMetrics(printdlg.hDC, &tm);
@@ -57,7 +66,9 @@ void PrintBuffer(LPSTR lpBuffer)
 	SetAbortProc(printdlg.hDC, (ABORTPROC) AbortFunc);
 	PrtCancel_hDlg = CreateDialog(ghInstance, "PrCancel", ghWnd, (DLGPROC) KillPrint);
 
-	for (copies=0; copies<printdlg.nCopies; copies++)
+	// FIX [PrinterJobGuards]: stop looping once the user cancelled - the old loops
+	// kept TextOut-ing up to 15000 chars x remaining copies into an aborted job.
+	for (copies=0; copies<printdlg.nCopies && printOK; copies++)
 	{
 		StartPage(printdlg.hDC);
 		prtX = 0;
@@ -65,7 +76,7 @@ void PrintBuffer(LPSTR lpBuffer)
 		i=0;
 		s = lpBuffer;
 
-		while (((*s) && (i < 15000)))
+		while ((*s) && (i < 15000) && printOK)	// FIX [PrinterJobGuards]
 		{
 			if (*s == '\n')
 			{
@@ -95,15 +106,17 @@ void PrintBuffer(LPSTR lpBuffer)
 			s++;
 			i++;
 		}
-		EndPage(printdlg.hDC);
+		if (printOK) EndPage(printdlg.hDC);
 	}
 
-   if (printOK)
-	{
-		if (PrtCancel_hDlg) DestroyWindow(PrtCancel_hDlg);
-		EndDoc(printdlg.hDC);
-	}
+	if (PrtCancel_hDlg) { DestroyWindow(PrtCancel_hDlg); PrtCancel_hDlg = NULL; }
+	// FIX [PrinterJobGuards]: a cancelled job never called EndDoc or AbortDoc, and
+	// the PrintDlg-allocated hDevMode/hDevNames handles leaked on every print job.
+	if (printOK) EndDoc(printdlg.hDC);
+	else         AbortDoc(printdlg.hDC);
 	DeleteDC(printdlg.hDC);
+	if (printdlg.hDevMode)  { GlobalFree(printdlg.hDevMode);  printdlg.hDevMode  = NULL; }
+	if (printdlg.hDevNames) { GlobalFree(printdlg.hDevNames); printdlg.hDevNames = NULL; }
 }
 
 

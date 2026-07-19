@@ -225,9 +225,19 @@ static void AppendJSONRaw(char *dst, int *pos, int maxLen, const char *key, cons
 
 // Append one {"address":"...","label":"..."} entry into a subscribers array buffer.
 // isFirst=TRUE omits the leading comma.  Applies capcode padding when g_bPadCapcodes.
-static void AppendSubscriberEntry(char *dst, int *pos, int maxLen,
+// FIX [WebhookSubRollback]: atomic append - writes the WHOLE {"address":...,"label":...}
+// object or nothing. The guarded loops below stop early once *pos reaches maxLen-2, which
+// previously left a PARTIAL object in the buffer (e.g. ...,{"address":"123","lab); the
+// caller then appended ']' and POSTed invalid JSON when a group exceeded the subscribers
+// budget (~170 long-label capcodes). Now: snapshot *pos, write, and if any part got
+// capped (detected by *pos hitting maxLen-2) restore *pos so the array closes cleanly
+// after the last complete entry. Mirrors the sPosBack rollback in the mqtt/mysql/sqlite
+// feeds. Returns TRUE if the entry was written in full.
+static BOOL AppendSubscriberEntry(char *dst, int *pos, int maxLen,
                                    const char *capcode, const char *label, BOOL isFirst)
 {
+    int posBack = *pos;
+
     if (!isFirst && *pos < maxLen-2) dst[(*pos)++] = ',';
 
     const char *open = "{\"address\":\"";
@@ -247,6 +257,13 @@ static void AppendSubscriberEntry(char *dst, int *pos, int maxLen,
 
     const char *close = "\"}";
     for (int i = 0; close[i] && *pos < maxLen-2; i++) dst[(*pos)++] = close[i];
+
+    // The guards only stop early when *pos reaches maxLen-2; if we finished strictly
+    // below that, every part was written and the entry is complete. Otherwise it may be
+    // partial - roll back to before this entry (conservatively also drops an entry that
+    // happened to fit exactly, which is harmless: one fewer subscriber, still valid JSON).
+    if (*pos >= maxLen-2) { *pos = posBack; return FALSE; }
+    return TRUE;
 }
 
 // PDW-native format: {"payload":"MSG","data":{"new_state":{"state":"MSG","attributes":{...}}}}
@@ -545,7 +562,11 @@ static int TrySend(const ParsedURL *pu, const char *body, int bodyLen)
 
 static const DWORD g_retryDelays[MAX_RETRIES] = { 1000, 2000, 4000 };
 
-static void DoSend(const WebhookJob *job)
+// FIX [FlushBounded]: returns TRUE when the endpoint handled the request (2xx, or a
+// definitive HTTP error - server alive, response was fast), FALSE on a transport-level
+// failure (unreachable/timeout) or unusable URL. The main loop ignores the result; the
+// exit-flush uses it to stop flushing against a dead endpoint (~10-20 s per job).
+static BOOL DoSend(const WebhookJob *job)
 {
     // Apply optional capcode padding
     char szAddress[WEBHOOK_ADDR_LEN];
@@ -581,9 +602,12 @@ static void DoSend(const WebhookJob *job)
     ParsedURL pu;
     if (!ParseURL(szURL, &pu))
     {
-        WriteLog("ERROR   URL parse failed: %s", szURL);
+        // FIX [WebhookUrlSecret]: never log the URL - webhook URLs embed the auth
+        // token in the path/query (Discord/Slack/Home-Assistant), so writing it to
+        // _webhook.log would persist a replayable credential (CLAUDE.md: no secrets).
+        WriteLog("ERROR   URL parse failed");
         PostStatus(WHS_ERROR, 0);
-        return;
+        return FALSE;   // FIX [FlushBounded]: unusable URL - nothing in the queue can be delivered
     }
 
     PostStatus(WHS_SENDING, 0);
@@ -597,7 +621,12 @@ static void DoSend(const WebhookJob *job)
             // is requested, so the worker exits promptly and the INFINITE join returns quickly. The
             // first attempt (attempt 0) still runs even with g_bRunning==FALSE, so the exit-flush of
             // queued jobs in WorkerThreadProc still delivers each remaining message once.
-            if (!g_bRunning) return;
+            if (!g_bRunning)
+            {
+                // FIX [ShutdownLost]: this message is dropped here - say so in the log.
+                WriteLog("LOST    shutdown during retry - message dropped");
+                return FALSE;   // FIX [FlushBounded]: transport failed + shutdown in progress
+            }
             PostStatus(WHS_RETRY, attempt);
             WriteLog("RETRY   %d/%d", attempt, MAX_RETRIES);
             Sleep(g_retryDelays[attempt - 1]);
@@ -607,27 +636,26 @@ static void DoSend(const WebhookJob *job)
 
         if (httpStatus >= 200 && httpStatus < 300)
         {
-            char szURLshort[80];
-            strncpy(szURLshort, szURL, 79); szURLshort[79] = '\0';
-            WriteLog("SENT    POST %s -> %d OK", szURLshort, httpStatus);
+            // FIX [WebhookUrlSecret]: log outcome only, never the URL (embeds token).
+            WriteLog("SENT    POST -> %d OK", httpStatus);
             PostStatus(WHS_OK, httpStatus);
-            return;
+            return TRUE;
         }
 
         if (httpStatus != 0)
         {
-            // HTTP error (e.g. 4xx/5xx) — server reachable but rejected; no point retrying
-            char szURLshort[80];
-            strncpy(szURLshort, szURL, 79); szURLshort[79] = '\0';
-            WriteLog("ERROR   POST %s -> HTTP %d", szURLshort, httpStatus);
+            // HTTP error (e.g. 4xx/5xx) - server reachable but rejected; no point retrying.
+            // FIX [WebhookUrlSecret]: log outcome only, never the URL (embeds token).
+            WriteLog("ERROR   POST -> HTTP %d", httpStatus);
             PostStatus(WHS_ERROR, httpStatus);
-            return;
+            return TRUE;   // FIX [FlushBounded]: endpoint alive (fast definitive answer) - keep flushing
         }
         // httpStatus == 0: transport error, retry
     }
 
     WriteLog("ERROR   all retries failed (transport error)");
     PostStatus(WHS_ERROR, 0);
+    return FALSE;   // FIX [FlushBounded]
 }
 
 // ---------------------------------------------------------------------------
@@ -681,7 +709,19 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
         }
         LeaveCriticalSection(&g_cs);
         if (!bHaveJob) break;
-        DoSend(&job);
+        // FIX [FlushBounded]: bound the exit flush. With a dead endpoint each queued job
+        // burns up to ~20 s (resolve+connect timeouts) inside WebhookShutdown's INFINITE
+        // join on the GUI thread - a full ring froze the UI for 10+ minutes. On the first
+        // transport failure, log what remains as LOST and stop.
+        if (!DoSend(&job))
+        {
+            int nLost;
+            EnterCriticalSection(&g_cs);
+            nLost = (g_qTail - g_qHead + WEBHOOK_QUEUE_SIZE) % WEBHOOK_QUEUE_SIZE;
+            LeaveCriticalSection(&g_cs);
+            WriteLog("LOST    shutdown flush aborted - %d message(s) dropped (transport failed)", nLost + 1);
+            break;
+        }
     }
 
     CloseSession();
@@ -695,18 +735,22 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
 // FIX [QueueDrop]: tel weggegooide jobs bij volle queue.
 static unsigned g_droppedJobs = 0;
 
-static void EnqueueLocked(const WebhookJob *job)
+// FIX [QueueDropVisible]: returns TRUE when the job was dropped (queue full) so the caller
+// can log + post status AFTER releasing g_cs. The old in-here WriteLog ran under the feed
+// lock on the GUI thread (synchronous disk I/O in LogManager direct mode), and with
+// LogToFile off the drop was completely invisible (no PostStatus either).
+static BOOL EnqueueLocked(const WebhookJob *job)
 {
     if (QueueFull())
     {
-        // FIX [QueueDrop]: bij burst > WEBHOOK_QUEUE_SIZE werd de job voorheen stil
-        // verworpen, zonder log of teller — dataverlies bleef onzichtbaar.
+        // FIX [QueueDrop]: on a burst > WEBHOOK_QUEUE_SIZE the job used to be silently
+        // discarded - no log, no counter; the data loss stayed invisible.
         g_droppedJobs++;
-        WriteLog("DROP queue full — message discarded (total dropped=%u)", g_droppedJobs);
-        return;
+        return TRUE;
     }
     g_queue[g_qTail] = *job;
     g_qTail = (g_qTail + 1) % WEBHOOK_QUEUE_SIZE;
+    return FALSE;
 }
 
 // ---------------------------------------------------------------------------
@@ -774,10 +818,17 @@ void WebhookShutdown(void)
         g_hThread = NULL;
     }
 
-    if (g_hEvent) { CloseHandle(g_hEvent); g_hEvent = NULL; }
-
+    // FIX [WebhookEventRace]: clear the event handle and reset the ring/accumulator UNDER g_cs,
+    // matching mqtt [MqttEventRace] / telegram [TgEventRace]. The worker is already joined and the
+    // only producer runs on the same GUI thread, so this is defensive - it keeps every access to
+    // these g_cs-protected fields serialized rather than resetting them unlocked.
+    HANDLE hEv = NULL;
+    if (s_webhookCsInit) EnterCriticalSection(&g_cs);
+    hEv = g_hEvent; g_hEvent = NULL;
     ZeroMemory(g_groupAcc, sizeof(g_groupAcc));
     g_qHead = g_qTail = 0;
+    if (s_webhookCsInit) LeaveCriticalSection(&g_cs);
+    if (hEv) CloseHandle(hEv);
 }
 
 // FIX [L3]: final teardown — stops thread and releases the CRITICAL_SECTIONs.
@@ -870,9 +921,17 @@ void WebhookNotify(const char *capcode, const char *message, const char *label,
                                   capcode, label ? label : "", TRUE);
             if (sPos < WEBHOOK_SUBSCRIBERS_LEN - 1) { job.szSubscribers[sPos++] = ']'; job.szSubscribers[sPos] = '\0'; }
         }
-        EnqueueLocked(&job);
+        BOOL bDropped = EnqueueLocked(&job);
+        // FIX [WebhookEventRace]: signal under the lock with a null-guard (like mqtt/telegram),
+        // so a concurrent teardown cannot CloseHandle g_hEvent in the gap after the unlock.
+        if (g_hEvent) SetEvent(g_hEvent);
         LeaveCriticalSection(&g_cs);
-        SetEvent(g_hEvent);
+        if (bDropped)
+        {
+            // FIX [QueueDropVisible]: log outside g_cs, always post the error status.
+            WriteLog("DROP    queue full - message discarded (total dropped=%u)", g_droppedJobs);
+            PostStatus(WHS_ERROR, 0);
+        }
     }
 }
 
@@ -882,6 +941,7 @@ void WebhookFlushGroup(int groupbit)
     if (groupbit < 0 || groupbit >= MAX_GROUPBITS) return;
     if (g_iWebhookFields & WHF_LABEL_PERCAP) return;  // groups already sent individually in WebhookNotify
 
+    BOOL bDropped = FALSE;   // FIX [QueueDropVisible]
     EnterCriticalSection(&g_cs);
     GroupAcc *ga = &g_groupAcc[groupbit];
     if (ga->active)
@@ -905,10 +965,17 @@ void WebhookFlushGroup(int groupbit)
             if (sLen > 0) { job.szSubscribers[sLen++] = ']'; job.szSubscribers[sLen] = '\0'; }
         }
         ZeroMemory(ga, sizeof(*ga));   // clear slot
-        EnqueueLocked(&job);
+        bDropped = EnqueueLocked(&job);
     }
+    // FIX [WebhookEventRace]: signal under the lock with a null-guard (see WebhookNotify).
+    if (g_hEvent) SetEvent(g_hEvent);
     LeaveCriticalSection(&g_cs);
-    SetEvent(g_hEvent);
+    if (bDropped)
+    {
+        // FIX [QueueDropVisible]: log outside g_cs, always post the error status.
+        WriteLog("DROP    queue full - message discarded (total dropped=%u)", g_droppedJobs);
+        PostStatus(WHS_ERROR, 0);
+    }
 }
 
 void WebhookSetStatusWnd(HWND hWnd)

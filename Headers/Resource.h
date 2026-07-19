@@ -1,8 +1,8 @@
 // FIX [Version]: single source of truth for PDW version number
 #define PDW_VERSION_MAJOR  4
 #define PDW_VERSION_MINOR  0
-#define PDW_VERSION_PATCH  6
-#define PDW_VERSION_STR    "4.0.6"
+#define PDW_VERSION_PATCH  4
+#define PDW_VERSION_STR    "4.0.4"
 
 #define IDC_STATIC             -1
 
@@ -65,6 +65,7 @@
 #define IDM_SCREENOPTIONS          253
 #define IDM_SCROLLBACK             254
 #define IDM_SYSTEMTRAY             255
+#define IDM_SHOWMENUBAR            256
 
 #define IDM_POCSAGFLEX             260
 #define IDM_ACARS                  261

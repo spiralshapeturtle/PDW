@@ -168,6 +168,14 @@ static BOOL             g_bLogToFile = FALSE;
 // ---------------------------------------------------------------------------
 
 static SOCKET g_sock     = INVALID_SOCKET;
+// FIX [MysqlConnAbort]: in-progress TryConnect() socket, published so MysqlStop can interrupt a
+// connect/handshake in flight. g_sock (and the existing [MysqlShutdownFd] snapshot+shutdown in
+// MysqlStop) only cover the ESTABLISHED connection used by the main send/receive loop; while
+// TryConnect is running the socket lives in a local variable and g_sock is still INVALID_SOCKET, so
+// without this the GUI thread's INFINITE join in MysqlStop could sit for the full
+// DNS/connect/handshake/auth/provisioning duration (15-65 s against a slow/hung server) with
+// nothing to interrupt it.
+static volatile SOCKET g_connSock = INVALID_SOCKET;
 static BOOL   g_bWsaInit = FALSE;
 
 // ===========================================================================
@@ -641,6 +649,10 @@ static SOCKET TryConnect(void)
     SOCKET s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (s == INVALID_SOCKET) { freeaddrinfo(res); return INVALID_SOCKET; }
 
+    // FIX [MysqlConnAbort]: publish the socket immediately so MysqlStop's shutdown() kick can reach
+    // it while we are still connecting/authenticating below.
+    g_connSock = s;
+
     /* FIX [MysqlConnTimeout]/[ShutdownRace]: non-blocking connect with a 5 s ceiling. A blocking
        connect() to an unreachable host parks the worker for the OS default (~20 s), which slowed
        backoff and — worse — made a clean shutdown/reconfigure join wait that long. Bounded connect
@@ -658,22 +670,28 @@ static SOCKET TryConnect(void)
             int sel = select((int)s + 1, NULL, &wrSet, &exSet, &tv);
             if (sel <= 0 || FD_ISSET(s, &exSet)) {
                 WriteLog("CONNECT FAIL  host=%s port=%d (connect timeout/refused)", g_szHost, g_iPort);
-                closesocket(s); freeaddrinfo(res); return INVALID_SOCKET;
+                closesocket(s); g_connSock = INVALID_SOCKET; freeaddrinfo(res); return INVALID_SOCKET;  // FIX [MysqlConnAbort]
             }
             int soErr = 0, soLen = (int)sizeof(soErr);
             getsockopt(s, SOL_SOCKET, SO_ERROR, (char *)&soErr, &soLen);
             if (soErr != 0) {
                 WriteLog("CONNECT FAIL  host=%s port=%d (connect error %d)", g_szHost, g_iPort, soErr);
-                closesocket(s); freeaddrinfo(res); return INVALID_SOCKET;
+                closesocket(s); g_connSock = INVALID_SOCKET; freeaddrinfo(res); return INVALID_SOCKET;  // FIX [MysqlConnAbort]
             }
         } else if (crc == SOCKET_ERROR) {
             WriteLog("CONNECT FAIL  host=%s port=%d (connect error %d)", g_szHost, g_iPort, WSAGetLastError());
-            closesocket(s); freeaddrinfo(res); return INVALID_SOCKET;
+            closesocket(s); g_connSock = INVALID_SOCKET; freeaddrinfo(res); return INVALID_SOCKET;  // FIX [MysqlConnAbort]
         }
         nb = 0;
         ioctlsocket(s, FIONBIO, &nb);   /* back to blocking for handshake/query */
     }
     freeaddrinfo(res);
+
+    // FIX [MysqlConnAbort]: phase-boundary check #1 (after the connect select succeeds) -- abort
+    // early if a shutdown was requested while we were still connecting, instead of continuing
+    // through keepalive setup, handshake, auth and provisioning against a server we're about to
+    // disconnect from anyway.
+    if (!g_bRunning) { closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET; }
 
     struct tcp_keepalive ka;
     ka.onoff             = 1;
@@ -687,29 +705,32 @@ static SOCKET TryConnect(void)
     int  pktLen = 0;
     if (!ReadPacket(s, pkt, sizeof(pkt), &pktLen)) {
         WriteLog("CONNECT FAIL  host=%s port=%d (no handshake)", g_szHost, g_iPort);
-        closesocket(s); return INVALID_SOCKET;
+        closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
     }
 
     BYTE scramble[20];
     memset(scramble, 0, sizeof(scramble));
     if (!ParseHandshake(pkt, pktLen, scramble)) {
         WriteLog("CONNECT FAIL  host=%s port=%d (bad handshake)", g_szHost, g_iPort);
-        closesocket(s); return INVALID_SOCKET;
+        closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
     }
+
+    // FIX [MysqlConnAbort]: phase-boundary check #2 (after the server handshake packet is read).
+    if (!g_bRunning) { closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET; }
 
     /* 2. Send HandshakeResponse */
     if (!SendHandshakeResponse(s, g_szUser, g_szPass, g_szDatabase, scramble)) {
-        closesocket(s); return INVALID_SOCKET;
+        closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
     }
 
     /* 3. Read auth result */
     if (!ReadPacket(s, pkt, sizeof(pkt), &pktLen) || pktLen < 1) {
-        closesocket(s); return INVALID_SOCKET;
+        closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
     }
     if (pkt[0] == 0xFF) {
         int eCode = (pktLen >= 3) ? (int)((WORD)pkt[1] | ((WORD)pkt[2] << 8)) : 0;
         WriteLog("AUTH FAIL  host=%s user=%s db=%s (error %d)", g_szHost, g_szUser, g_szDatabase, eCode);
-        closesocket(s); return INVALID_SOCKET;
+        closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
     }
     /* FIX [MysqlAuthSwitch]: 0xFE here is an AuthSwitchRequest — the server wants a different auth
        plugin (e.g. caching_sha2_password, the MySQL 8 default). This client only implements
@@ -726,11 +747,14 @@ static SOCKET TryConnect(void)
                  "supports mysql_native_password. Fix: ALTER USER '%s'@'<host>' IDENTIFIED WITH "
                  "mysql_native_password BY '<password>';",
                  g_szHost, g_szUser, plugin[0] ? plugin : "(unknown)", g_szUser);
-        closesocket(s); return INVALID_SOCKET;
+        closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
     }
     if (pkt[0] != 0x00) {
-        closesocket(s); return INVALID_SOCKET;
+        closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
     }
+
+    // FIX [MysqlConnAbort]: phase-boundary check #3 (after the auth response is read).
+    if (!g_bRunning) { closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET; }
 
     /* 4. SET NAMES utf8mb4 */
     {
@@ -746,6 +770,10 @@ static SOCKET TryConnect(void)
             }
         }
     }
+
+    // FIX [MysqlConnAbort]: phase-boundary check #4 (between the provisioning queries: SET NAMES
+    // above, USE/CREATE DATABASE below).
+    if (!g_bRunning) { closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET; }
 
     /* 4b. Select the target database, creating it if missing (we connected without CONNECT_WITH_DB).
        FIX [MysqlProvision]: try USE first — a least-privilege user (INSERT only on an existing DB)
@@ -769,14 +797,14 @@ static SOCKET TryConnect(void)
             if (!SendQuery(s, createDb, (int)strlen(createDb)) ||
                 !ReadQueryResult(s, errMsg2, sizeof(errMsg2))) {
                 WriteLog("PROVISION FAIL  CREATE DATABASE `%s`: %s", g_szDatabase, errMsg2);
-                closesocket(s); return INVALID_SOCKET;
+                closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
             }
             WriteLog("PROVISION  database `%s` created", g_szDatabase);
 
             if (!SendQuery(s, useSql, (int)strlen(useSql)) ||
                 !ReadQueryResult(s, errMsg2, sizeof(errMsg2))) {
                 WriteLog("PROVISION FAIL  USE `%s` after create: %s", g_szDatabase, errMsg2);
-                closesocket(s); return INVALID_SOCKET;
+                closesocket(s); g_connSock = INVALID_SOCKET; return INVALID_SOCKET;  // FIX [MysqlConnAbort]
             }
         }
     }
@@ -800,6 +828,11 @@ static SOCKET TryConnect(void)
     }
 
     WriteLog("CONNECT OK   host=%s port=%d db=%s", g_szHost, g_iPort, g_szDatabase);
+    // FIX [MysqlConnAbort]: connect sequence done -- clear the in-progress marker. The caller
+    // (MysqlWorker) assigns g_sock = TryConnect()'s return value right after this returns; the brief
+    // window between here and that assignment is harmless because nothing blocks on socket I/O in
+    // it, so there is nothing left for MysqlStop to usefully interrupt during that window anyway.
+    g_connSock = INVALID_SOCKET;
     return s;
 }
 
@@ -1184,6 +1217,18 @@ static int BuildInsert(char *out, int outLen, const MysqlJob *job)
 // Worker thread
 // ===========================================================================
 
+// FIX [MysqlStopDrain]: log rows the shutdown-flush drain (tail of MysqlWorker) could not deliver.
+// Called with the row that just failed already dequeued (g_qHead advanced past it), so the queued
+// count still under g_cs is the remainder still waiting; +1 accounts for that already-dequeued row.
+static void LogDrainLoss(void)
+{
+    int nRemaining;
+    EnterCriticalSection(&g_cs);
+    nRemaining = (g_qTail - g_qHead + MYSQL_QUEUE_SIZE) % MYSQL_QUEUE_SIZE;
+    LeaveCriticalSection(&g_cs);
+    WriteLog("LOST      shutdown flush aborted - %d row(s) dropped", nRemaining + 1);
+}
+
 static DWORD WINAPI MysqlWorker(LPVOID)
 {
     DWORD     backoffMs     = 1000;
@@ -1235,6 +1280,9 @@ static DWORD WINAPI MysqlWorker(LPVOID)
             int  sqlLen = BuildInsert(sql, MYSQL_MAX_QUERY, &job);
             if (sqlLen <= 0) {
                 /* Un-buildable row (e.g. allocation failure) — drop it so we don't spin forever. */
+                // FIX [MysqlDropLog]: log the drop -- every other drop path in this file (queue-full,
+                // give-up-after-retries, shutdown-flush) already logs; this one dropped silently.
+                WriteLog("DROP      unbuildable row (out of memory) capcode=%s", job.szCapcode);
                 EnterCriticalSection(&g_cs);
                 g_qHead = (g_qHead + 1) % MYSQL_QUEUE_SIZE;
                 LeaveCriticalSection(&g_cs);
@@ -1300,12 +1348,30 @@ static DWORD WINAPI MysqlWorker(LPVOID)
         LeaveCriticalSection(&g_cs);
         if (!bHaveJob) break;
 
-        if (g_sock != INVALID_SOCKET) {
-            int sqlLen = BuildInsert(sql, MYSQL_MAX_QUERY, &job);
-            if (sqlLen > 0) {
-                SendQuery(g_sock, sql, sqlLen);
-                ReadQueryResult(g_sock, NULL, 0);
+        // FIX [MysqlStopDrain]: bound this flush and log what gets lost instead of silently
+        // discarding it (the old code just skipped the send when g_sock was already gone, with no
+        // log line and no way for the caller/grace-window logic to know rows were lost). Keyed on
+        // g_sock validity + SendQuery's result only -- ReadQueryResult's FALSE return also fires for
+        // a genuine per-row server rejection (bad data/constraint), which is not proof the
+        // connection is dead, so treating it as a drain-abort signal would over-report loss on a
+        // single bad row instead of just skipping that one row. SendQuery failing (or the socket
+        // already being gone) is the real "this connection cannot deliver anything more" signal.
+        if (g_sock == INVALID_SOCKET) {
+            LogDrainLoss();
+            break;
+        }
+
+        int sqlLen = BuildInsert(sql, MYSQL_MAX_QUERY, &job);
+        if (sqlLen > 0) {
+            if (!SendQuery(g_sock, sql, sqlLen)) {
+                LogDrainLoss();
+                break;
             }
+            ReadQueryResult(g_sock, NULL, 0);  /* result ignored: see comment above */
+        }
+        else {
+            /* FIX [MysqlDropLog]: same OOM-drop logging as the main loop - the drain skipped it silently. */
+            WriteLog("DROP      unbuildable row (out of memory) capcode=%s", job.szCapcode);
         }
     }
 
@@ -1435,14 +1501,43 @@ void MysqlStop(void)
     g_bRunning = FALSE;
     if (g_hEvent) SetEvent(g_hEvent);
 
+    // FIX [MysqlStopDrain]: give the worker a bounded grace window to run its shutdown-flush drain
+    // (see the tail of MysqlWorker) over the STILL-INTACT socket before the shutdown() kick below
+    // forcibly interrupts it. Without this, that kick killed the live connection before the drain
+    // loop ever got a chance to send the still-queued rows, so every stop/reconfigure could silently
+    // lose up to MYSQL_QUEUE_SIZE-1 rows with no log line. Healthy server: the worker finishes its
+    // main loop and drains the queue over the live socket well within the grace window, so this
+    // branch handles the common case. Dead/stalled server: the grace window times out and execution
+    // falls through unconditionally to the existing shutdown()+join below -- a second
+    // WaitForSingleObject on an already-signaled thread handle returns immediately, so the INFINITE
+    // join further down stays correct either way.
+    if (g_hThread && WaitForSingleObject(g_hThread, 3000) == WAIT_OBJECT_0) {
+        /* worker exited cleanly - shutdown-flush drain delivered (or gave up) over the live socket */
+    }
+
     /* FIX [ShutdownRace]: interrupt a blocking recv()/select() in the worker so it returns at once,
        then join to FULL completion. The old 5 s timeout could return while the worker was still
        mid-transaction, after which CloseHandle + (later) DeleteCriticalSection ran under a live
        thread (crash on exit) — and a runtime reconfigure (MysqlInit→MysqlStop) would then start a
        SECOND worker sharing g_cs/g_queue/g_sock. With the bounded connect above plus this shutdown,
-       the worker always returns promptly, so INFINITE is safe and correct. Reading g_sock here is a
-       benign race (a stale/closed handle just makes shutdown() a harmless no-op). */
-    if (g_sock != INVALID_SOCKET) shutdown(g_sock, SD_BOTH);
+       the worker always returns promptly, so INFINITE is safe and correct.
+       FIX [MysqlShutdownFd]: snapshot g_sock once so the check and the shutdown() use the SAME
+       descriptor. The worker may closesocket(g_sock) concurrently; re-reading the global could
+       let another feed's just-opened socket reuse that fd number between the test and the call,
+       shutting down an unrelated connection. shutdown() on an already-closed fd is a harmless
+       no-op. (After g_bRunning=FALSE the mysql worker never opens a new socket itself.) */
+    SOCKET sShut = g_sock;
+    if (sShut != INVALID_SOCKET) shutdown(sShut, SD_BOTH);
+
+    // FIX [MysqlConnAbort]: mirror the [MysqlShutdownFd] snapshot above for the in-progress
+    // TryConnect socket -- read g_connSock once so the validity check and the shutdown() call use
+    // the same descriptor. TryConnect resets g_connSock to INVALID_SOCKET on every exit path
+    // (including success), so a stale non-INVALID value here can only be a socket TryConnect is
+    // still actively using; shutdown() on an already-closed fd is a harmless no-op. Only shutdown(),
+    // never closesocket() -- TryConnect (and, on success, the worker via g_sock) still owns and
+    // closes this socket itself.
+    SOCKET sConn = g_connSock;
+    if (sConn != INVALID_SOCKET) shutdown(sConn, SD_BOTH);
 
     if (g_hThread) {
         WaitForSingleObject(g_hThread, INFINITE);

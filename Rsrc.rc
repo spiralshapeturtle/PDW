@@ -130,6 +130,7 @@ BEGIN
         MENUITEM "Screen &Options...",          IDM_SCREENOPTIONS
         MENUITEM "&Scrollback...",              IDM_SCROLLBACK
         MENUITEM "System&tray...\tCtrl-T",      IDM_SYSTEMTRAY
+        MENUITEM "Show &Menu Bar\tCtrl+Shift+M", IDM_SHOWMENUBAR
     END
     POPUP "&Monitor"
     BEGIN
@@ -177,6 +178,7 @@ BEGIN
     "P",            IDM_PLAYBACK,           VIRTKEY, SHIFT, ALT, NOINVERT
     "R",            IDM_RELOAD,             VIRTKEY, CONTROL, NOINVERT
     "R",            IDM_RECORD,             VIRTKEY, SHIFT, ALT, NOINVERT
+    "M",            IDM_SHOWMENUBAR,        VIRTKEY, SHIFT, CONTROL, NOINVERT
     "A",            IDM_AUTORECORD,         VIRTKEY, SHIFT, ALT, NOINVERT
     "S",            IDM_INTERFACE,          VIRTKEY, CONTROL, NOINVERT
     "S",            IDM_MONSTAT,            VIRTKEY, ALT, NOINVERT
@@ -1250,8 +1252,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 4,0,6,0
- PRODUCTVERSION 4,0,6,0
+ FILEVERSION 4,0,4,0
+ PRODUCTVERSION 4,0,4,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -1269,11 +1271,11 @@ BEGIN
             VALUE "Comments", "Supports Windows XP - WIN11"
             VALUE "CompanyName", "WitWarez"
             VALUE "FileDescription", "PDW"
-            VALUE "FileVersion", "4.0.6"
+            VALUE "FileVersion", "4.0.4"
             VALUE "InternalName", "PDW"
             VALUE "OriginalFilename", "PDW3_6.exe"
             VALUE "ProductName", "PDW"
-            VALUE "ProductVersion", "4.0.6"
+            VALUE "ProductVersion", "4.0.4"
         END
     END
     BLOCK "VarFileInfo"

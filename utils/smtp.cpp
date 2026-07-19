@@ -6,6 +6,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <atomic>      // FIX [SmtpAtomicRun]: std::atomic<bool> for the cross-thread run flag
 #include "..\headers\pdw.h"
 #include "smtp_int.h"
 #include "smtp.h"
@@ -29,10 +30,11 @@ static HANDLE hMailEvent = NULL ;
 static SOCKET g_persistSocket = INVALID_SOCKET ;
 static THEMAIL mail ;
 static int nMaxLen ;
-// FIX [SmtpVolatile]: volatile so the compiler cannot hoist the read out of the worker
-// loop (while(keepbusy)) — main thread writes FALSE on shutdown; without this the worker
-// can miss it and the INFINITE join in StartMail hangs. Same fix as mqtt/webhook g_bRunning.
-static volatile BOOL keepbusy = TRUE ;
+// FIX [SmtpAtomicRun]: was `volatile BOOL` ([SmtpVolatile]). volatile blocks hoisting but
+// gives no defined cross-thread ordering; std::atomic<bool> makes the worker's while(keepbusy)
+// reads and the main thread's shutdown write well-defined. Assignment from BOOL TRUE/FALSE and
+// the boolean tests below convert cleanly. Standardizes on the webhook [AtomicRunning] pattern.
+static std::atomic<bool> keepbusy(true) ;
 static BOOL bWsaStartup ;
 
 #define MAX_MAIL		100
@@ -592,7 +594,11 @@ char *EncodeBase64(char *szIn, char *szOut)
 	}
 	*pOut = '\0' ;
 
-	OUTPUTDEBUGMSG((("EncodeBase64(): In >%s< out >%s< \n"),szIn, szOut));
+	// FIX [SmtpCredTrace]: do NOT trace In/Out - smtpLogin base64-encodes mail.user and
+	// mail.password here, so this line leaked both the cleartext and the base64 credential
+	// to any attached debugger. Compiled out in Release, but a debug build defeated the
+	// [SmtpCredLeak] intent. Log only that the encode ran, never its content.
+	OUTPUTDEBUGMSG((("EncodeBase64(): done\n")));
 	return(szOut) ;
 }
 
@@ -672,11 +678,17 @@ void AddResponse(char *buf)
 	HDC		hDC ;
 	SIZE	Size ;
 
-	if(mail.hResponse) {
+	// FIX [SmtpRespSnapshot]: read mail.hResponse ONCE. The GUI thread clears it concurrently
+	// (MailClearResponseWnd / SendMail(0,...)); the old code re-read it five times, so a clear
+	// landing between the check and a use turned GetDC(mail.hResponse) into GetDC(NULL) - the
+	// SCREEN DC - mid-line. One benign window remains (HWND destroyed right after the
+	// snapshot): SendMessageTimeout on a dead HWND fails harmlessly.
+	HWND hResp = mail.hResponse ;
+	if(hResp) {
 		// FIX [SmtpDcLeak]: the device context was fetched with GetDC() but never released — every
 		// response line (every send) leaked a GDI DC while the SMTP monitor/test window was open,
 		// marching toward GDI handle exhaustion. Guard for NULL and ReleaseDC() right after use.
-		hDC = GetDC(mail.hResponse) ;
+		hDC = GetDC(hResp) ;
 		if (hDC) {
 			GetTextExtentPoint32(hDC, buf, strlen(buf), &Size);
 			if(Size.cx > nMaxLen) {
@@ -686,11 +698,11 @@ void AddResponse(char *buf)
 				// non-pumping WaitForSingleObject(MailThread, INFINITE), so a blocking cross-thread
 				// SendMessage to this GUI listbox deadlocked the whole app - guaranteed on the normal
 				// disable path when the worker's smtpQuit() emits a line while the dialog is open.
-				SendMessageTimeout(mail.hResponse, LB_SETHORIZONTALEXTENT, Size.cx, 0L, SMTO_ABORTIFHUNG, 500, NULL) ;
+				SendMessageTimeout(hResp, LB_SETHORIZONTALEXTENT, Size.cx, 0L, SMTO_ABORTIFHUNG, 500, NULL) ;
 			}
-			ReleaseDC(mail.hResponse, hDC) ;
+			ReleaseDC(hResp, hDC) ;
 		}
-		SendMessageTimeout(mail.hResponse, LB_ADDSTRING, 0, (LPARAM) (LPSTR) buf, SMTO_ABORTIFHUNG, 500, NULL) ;	// FIX [SmtpAddRespDeadlock]: see above
+		SendMessageTimeout(hResp, LB_ADDSTRING, 0, (LPARAM) (LPSTR) buf, SMTO_ABORTIFHUNG, 500, NULL) ;	// FIX [SmtpAddRespDeadlock]: see above
 		OUTPUTDEBUGMSG((("AddResponse() : >>> %s"),buf));
 	}
 
@@ -1121,17 +1133,24 @@ static int smtpLogin(int sfd)
 
 
 	if(mail.options & MAIL_OPTION_AUTH) {
+		// FIX [SmtpShutdownNullCfg]: snapshot + guard the credential pointers once.
+		// Belt-and-braces: MailInit now joins the worker before clearing these, but a
+		// NULL must never reach EncodeBase64 (it dereferences unconditionally).
+		char *pUser = mail.user ;
+		char *pPass = mail.password ;
+		if(!pUser || !pPass) return(TRUE) ;
+
 		_snprintf(buf,sizeof(buf)-1,"AUTH LOGIN\r\n");
 		sockPuts(sfd,buf);
 		if(smtpResponse(sfd)) return(TRUE) ;
 
 		// FIX [M5]: send credentials silently — sockPuts echoes to response listbox
-		_snprintf(buf,sizeof(buf)-1, "%s\r\n", EncodeBase64(mail.user, szTmp));
+		_snprintf(buf,sizeof(buf)-1, "%s\r\n", EncodeBase64(pUser, szTmp));
 		AddResponse("[AUTH username - hidden]\n");
 		sockPutsSilent(sfd, buf);
 		if(smtpResponse(sfd)) return(TRUE) ;
 
-		_snprintf(buf,sizeof(buf)-1, "%s\r\n", EncodeBase64(mail.password, szTmp));
+		_snprintf(buf,sizeof(buf)-1, "%s\r\n", EncodeBase64(pPass, szTmp));
 		AddResponse("[AUTH password - hidden]\n");
 		sockPutsSilent(sfd, buf);
 		return(smtpResponse(sfd));
@@ -1445,8 +1464,14 @@ static int nMailRetryCount = 0 ;
 static void MailCommitSlot(int nSlot)
 {
 	szMailToOverride[nSlot][0] = '\0' ;
-	nBufferdMailEnd++ ;
-	if(nBufferdMailEnd >= MAX_MAIL) nBufferdMailEnd = 0 ;
+	// FIX [SmtpRingPublish]: single volatile store of the wrapped value (see SendMail) - the
+	// consumer index must never expose the transient MAX_MAIL to the producer's full-check.
+	{
+		int nNewEnd = nBufferdMailEnd + 1 ;
+		if(nNewEnd >= MAX_MAIL) nNewEnd = 0 ;
+		_WriteBarrier() ;
+		nBufferdMailEnd = nNewEnd ;
+	}
 }
 
 int xSendMail(THEMAIL *pMail)
@@ -1582,8 +1607,8 @@ int QueueAlertMail(const char *szTo, const char *szSubject, const char *szBody)
 	// FIX [SmtpQueueFull]: drop (and count) instead of overrunning the ring and wiping the backlog.
 	if (MailQueueFull()) {
 		nSMTPdropped++ ;
-		OUTPUTDEBUGMSG((("QueueAlertMail() dropped — mail queue full (total dropped=%u)"), nSMTPdropped)) ;
-		AddResponse("SMTP: queue full — alert mail dropped") ;
+		OUTPUTDEBUGMSG((("QueueAlertMail() dropped - mail queue full (total dropped=%u)"), nSMTPdropped)) ;	// FIX [AsciiRuntime]
+		AddResponse("SMTP: queue full - alert mail dropped") ;	// FIX [AsciiRuntime]: was em-dash
 		return 0 ;
 	}
 
@@ -1597,9 +1622,13 @@ int QueueAlertMail(const char *szTo, const char *szSubject, const char *szBody)
 
 	// FIX [SmtpRingVolatile]: commit the slot stores before publishing the new producer index,
 	// so the worker can never observe an advanced index over a half-written slot.
-	_WriteBarrier() ;
-	nBufferdMailStart++ ;
-	if (nBufferdMailStart >= MAX_MAIL) nBufferdMailStart = 0 ;
+	// FIX [SmtpRingPublish]: single volatile store of the wrapped value (see SendMail).
+	{
+		int nNewStart = nBufferdMailStart + 1 ;
+		if (nNewStart >= MAX_MAIL) nNewStart = 0 ;
+		_WriteBarrier() ;
+		nBufferdMailStart = nNewStart ;
+	}
 
 	SetEvent(hMailEvent) ;
 	return 1 ;
@@ -1659,9 +1688,29 @@ void StartMail(int nOptions)
 			OUTPUTDEBUGMSG((("StartMail() MailThread != 0  Mail is already Started!")));
 			return;
 		}
+		// FIX [SmtpThreadStart]: handle CreateEvent/CreateThread failure. Without this a
+		// NULL CreateThread left keepbusy=TRUE and hMailEvent leaked (the disable path
+		// early-returns on MailThread==0, so it never closed the event), and SendMail kept
+		// enqueuing into a consumer-less ring until it filled and silently dropped. Same
+		// class as [RxThreadCheck]/[LogWorkerStart]. On failure: revert to a clean stopped
+		// state so a later StartMail(ENABLE) can retry.
 		hMailEvent = CreateEvent(NULL, FALSE, FALSE, NULL) ;
+		if(!hMailEvent)
+		{
+			keepbusy = FALSE ;
+			OUTPUTDEBUGMSG((("StartMail() CreateEvent failed\n")));
+			return ;
+		}
 		keepbusy = TRUE ;
 		MailThread = CreateThread(0,0,MailThreadFunc,(LPVOID) &mail,0, &dummy);
+		if(!MailThread)
+		{
+			keepbusy = FALSE ;
+			CloseHandle(hMailEvent) ;
+			hMailEvent = NULL ;
+			OUTPUTDEBUGMSG((("StartMail() CreateThread failed\n")));
+			return ;
+		}
 		OUTPUTDEBUGMSG((("StartMail() CreateThread\n")));
 	}
 	else
@@ -1684,11 +1733,30 @@ void StartMail(int nOptions)
 		// socket terugkeren zodat de worker promptt unwindt (zonder de fd al te sluiten;
 		// de worker doet zelf de closesocket in zijn cleanup). connect() in opbouw heeft nog
 		// geen geldige g_persistSocket en valt terug op de OS-connect-timeout.
-		if(g_persistSocket != INVALID_SOCKET) shutdown(g_persistSocket, 2) ;  // 2 = SD_BOTH (winsock 1.1 kent de macro niet in deze TU)
+		// FIX [SmtpShutdownFd]: snapshot the socket once so the read and the shutdown()
+		// use the SAME descriptor. The worker may closesocket(g_persistSocket) between a
+		// re-read of the global and this call; another feed could then reuse that fd number
+		// and we would shutdown() an unrelated connection. shutdown() on an already-closed
+		// fd merely errors harmlessly. (2 = SD_BOTH; winsock 1.1 lacks the macro in this TU.)
+		SOCKET sShut = g_persistSocket ;
+		if(sShut != INVALID_SOCKET) shutdown(sShut, 2) ;
 		WaitForSingleObject(MailThread, INFINITE) ; // join volledig — gegarandeerd één worker
 		CloseHandle(MailThread);
 		MailThread = 0;
 		if(hMailEvent) { CloseHandle(hMailEvent) ; hMailEvent = NULL ; }
+		// FIX [ShutdownLost]: queued-but-unsent mail survives in the ring (it would still be
+		// sent if SMTP is re-enabled in-session) but is lost at process exit - say so instead
+		// of silence. AddResponse also routes to the SMTP disk log when LogErrors is enabled.
+		{
+			int nPending = (nBufferdMailStart - nBufferdMailEnd + MAX_MAIL) % MAX_MAIL ;
+			if(nPending > 0)
+			{
+				char szMsg[80] ;
+				_snprintf(szMsg, sizeof(szMsg) - 1, "SMTP: %d queued message(s) unsent at shutdown", nPending) ;
+				szMsg[sizeof(szMsg) - 1] = '\0' ;
+				AddResponse(szMsg) ;
+			}
+		}
 		OUTPUTDEBUGMSG((("StartMail() CloseHandle(MailThread)\n")));
 	}
 }
@@ -1720,6 +1788,14 @@ static void AppendMailFields(char *dst, size_t dstLen, int mask,
 	}
 #undef APPEND
 }
+
+// FIX [SmtpRespWnd]: clear the response-listbox HWND so the worker never targets a
+// destroyed dialog control. The Test button sets mail.hResponse to the SMTP setup
+// dialog's listbox; if the dialog is cancelled while a test mail is still being sent,
+// the worker's AddResponse would SendMessageTimeout to a dead HWND (guarded, so only
+// cosmetic, but incorrect). Called on the GUI thread (same thread that writes hResponse
+// via SendMail); the aligned pointer write is atomic and AddResponse null-checks it.
+void MailClearResponseWnd(void) { mail.hResponse = NULL ; }
 
 int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP, char *sz1, char *sz2, char *sz3, char *sz4, char *sz5, char *sz6, char *sz7, char *szLabel)
 {
@@ -1833,21 +1909,35 @@ int SendMail(HWND hResponse, bool bMatch, bool bMonitor_only, int iSeparateSMTP,
 		{
 			nSMTPdropped++ ;
 			nSMTPerrors++ ;
-			OUTPUTDEBUGMSG((("SendMail() dropped — mail queue full (total dropped=%u)"), nSMTPdropped)) ;
-			AddResponse("SMTP: queue full — message dropped") ;
+			OUTPUTDEBUGMSG((("SendMail() dropped - mail queue full (total dropped=%u)"), nSMTPdropped)) ;	// FIX [AsciiRuntime]
+			AddResponse("SMTP: queue full - message dropped") ;	// FIX [AsciiRuntime]: was em-dash
 			return(0) ;
 		}
 		OUTPUTDEBUGMSG((("SendMail() Send : >%s<\n"), szBuffer));
 		strncpy(szMailBuffer[nBufferdMailStart], szBuffer, MAX_MAIL_LEN - 1) ;
 		szMailBuffer[nBufferdMailStart][MAX_MAIL_LEN - 1] = '\0' ;
-		szMailToOverride[nBufferdMailStart][0] = '\0' ;   // FIX [RxQualAlert]: normal mail uses mail.to, no override
-		// FIX [SmtpRingVolatile]: publish slot stores before advancing the producer index.
-		_WriteBarrier() ;
-		nBufferdMailStart++ ;
-
-		if(nBufferdMailStart >= MAX_MAIL)
+		// FIX [SmtpToSnapshot]: snapshot the recipient at ENQUEUE time (GUI thread). The worker
+		// read mail.to at CONSUME time, racing the settings dialog's in-place WM_GETTEXT rewrite
+		// of Profile.szMailTo -> a torn recipient for the in-flight mail. The per-slot override
+		// mechanism ([RxQualAlert]) already carries a recipient; fill it for normal mail too.
+		if(mail.to && mail.to[0])
 		{
-			nBufferdMailStart = 0 ;
+			strncpy(szMailToOverride[nBufferdMailStart], mail.to, MAIL_TO_LEN - 1) ;
+			szMailToOverride[nBufferdMailStart][MAIL_TO_LEN - 1] = '\0' ;
+		}
+		else
+			szMailToOverride[nBufferdMailStart][0] = '\0' ;
+		// FIX [SmtpRingVolatile]: publish slot stores before advancing the producer index.
+		// FIX [SmtpRingPublish]: compute the wrapped index in a local and publish it with ONE
+		// volatile store. The old increment-then-wrap briefly stored the out-of-range value
+		// MAX_MAIL; every cross-thread check is an equality test against 0..MAX_MAIL-1, so a
+		// reader catching that transient concluded "not equal" and corrupted the ring state
+		// (worst case: producer laps the consumer -> ring reads empty -> backlog dropped).
+		{
+			int nNewStart = nBufferdMailStart + 1 ;
+			if(nNewStart >= MAX_MAIL) nNewStart = 0 ;
+			_WriteBarrier() ;
+			nBufferdMailStart = nNewStart ;
 		}
 		if(hMailEvent) SetEvent(hMailEvent) ;   // wake mail thread immediately
 	}
@@ -1960,6 +2050,15 @@ int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *s
 	// De velden wijzen naar stabiele Profile-buffers; losse pointer/int-toewijzingen zijn
 	// atomair op de doelplatformen, dus geen memset (die zou de struct wissen terwijl de
 	// worker hem leest).
+	// FIX [SmtpShutdownNullCfg]: on the DISABLE path (the exit path calls
+	// MailInit(NULL, NULL, ..., 0), PDW.cpp WM_DESTROY), stop and JOIN the worker BEFORE
+	// overwriting the config fields. The old order stored the NULLs first and only then
+	// joined via StartMail(0); a worker mid-transaction re-reads mail.user/mail.password
+	// (smtpLogin -> EncodeBase64) and pMail->smtp_server (smtpConnect) and would
+	// dereference NULL -> access violation during shutdown, killing the rest of the
+	// teardown. With the join first, no worker is running when the fields change.
+	if(!(nOptions & MAIL_OPTION_ENABLE))
+		StartMail(nOptions) ;   // stop betrouwbaar (mail uit) - joint de worker volledig
 	mail.from = szMailFrom ;
 	mail.to = szMailTo ;
 	mail.cc = NULL ;
@@ -1970,6 +2069,7 @@ int MailInit(char *szMailHost, char *szMailHeloDomain, char *szMailFrom, char *s
 	mail.password = szMailPassword ;
 	mail.smtp_port = iMailPort ;
 	mail.options = nOptions ;
-	StartMail(nOptions) ;       // start eenmalig (mail aan) of stop betrouwbaar (mail uit)
+	if(nOptions & MAIL_OPTION_ENABLE)
+		StartMail(nOptions) ;   // start eenmalig (mail aan)
 	return(0) ;
 }

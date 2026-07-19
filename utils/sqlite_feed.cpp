@@ -343,15 +343,35 @@ static int PrepareInsert(sqlite3 *db, const char *table, sqlite3_stmt **stmt)
 static void TxnBegin(void)
 {
     if (g_db && !g_bTxnOpen) {
-        if (sqlite3_exec(g_db, "BEGIN;", NULL, NULL, NULL) == SQLITE_OK) g_bTxnOpen = TRUE;
+        if (sqlite3_exec(g_db, "BEGIN;", NULL, NULL, NULL) == SQLITE_OK) {
+            g_bTxnOpen = TRUE;
+        } else {
+            // FIX [SqliteCommitCheck]: a BEGIN can fail precisely because an orphan transaction
+            // is already open (e.g. left behind by a failed COMMIT below) -- resync from the
+            // engine's own state instead of assuming closed, so the commit path below still gets
+            // a chance to close it on a later pass.
+            g_bTxnOpen = (sqlite3_get_autocommit(g_db) == 0);
+        }
     }
 }
 
 static void TxnCommit(void)
 {
     if (g_db && g_bTxnOpen) {
-        sqlite3_exec(g_db, "COMMIT;", NULL, NULL, NULL);
-        g_bTxnOpen = FALSE;
+        int rc = sqlite3_exec(g_db, "COMMIT;", NULL, NULL, NULL);
+        if (rc != SQLITE_OK) {
+            // FIX [SqliteCommitCheck]: COMMIT can fail (SQLITE_BUSY from a concurrent reader/the
+            // Test-button connection, or an I/O error) while the transaction stays open. The old
+            // code discarded rc and unconditionally cleared g_bTxnOpen here, so the next TxnBegin's
+            // BEGIN failed ("cannot start a transaction within a transaction"), g_bTxnOpen stayed
+            // FALSE, and every following INSERT silently landed inside the orphaned, never-committed
+            // transaction until sqlite3_close rolled the whole thing back -- total silent data loss.
+            WriteLog("COMMIT FAIL  rc=%d  %s", rc, sqlite3_errmsg(g_db));
+            sqlite3_exec(g_db, "ROLLBACK;", NULL, NULL, NULL);
+            g_bTxnOpen = (sqlite3_get_autocommit(g_db) == 0);
+        } else {
+            g_bTxnOpen = FALSE;
+        }
     }
 }
 
@@ -398,22 +418,47 @@ static sqlite3_int64 QueryInt(sqlite3 *db, const char *sql)
     return v;
 }
 
+/* FIX [SqliteMaintInterrupt]: progress callback, active ONLY while RunMaintenance runs.
+   Returning non-zero makes SQLite abort the current statement with SQLITE_INTERRUPT
+   (statement-level rollback, db stays consistent). Deliberately scoped to maintenance:
+   the shutdown drain ([SqliteStopDrain]) runs AFTER g_bRunning=FALSE and must still be
+   able to INSERT + COMMIT its remaining jobs, so the handler is removed before return. */
+static int MaintProgressCb(void *)
+{
+    return g_bRunning ? 0 : 1;
+}
+
 /* Onderhoud: leeftijd-purge en/of size-cap. Draait buiten een open transactie. */
 static void RunMaintenance(void)
 {
     if (!g_db) return;
     BOOL didDelete = FALSE;
 
+    /* FIX [SqliteMaintInterrupt]: a stop/reconfigure landing mid-maintenance left
+       SqliteStop's INFINITE join (GUI thread) frozen for up to MINUTES: the age purge
+       was one unbounded DELETE over a possibly multi-GB backlog and incremental_vacuum
+       had no page limit - neither had a cancel point ([SqliteMaintCancel] only checked
+       between size-cap passes). The progress handler makes every statement in here
+       interruptible; the age purge is additionally batched per 5000 rows. */
+    sqlite3_progress_handler(g_db, 5000, MaintProgressCb, NULL);
+
     if (g_bPurgeEnabled && g_iPurgeDays > 0) {
-        char sql[256], mod[32];
+        char sql[512], mod[32];
         _snprintf(mod, sizeof(mod) - 1, "-%d days", g_iPurgeDays);
         _snprintf(sql, sizeof(sql) - 1,
-                  "DELETE FROM \"%s\" WHERE received < datetime('now','localtime','%s');",
-                  g_szTable, mod);
-        if (sqlite3_exec(g_db, sql, NULL, NULL, NULL) == SQLITE_OK) {
+                  "DELETE FROM \"%s\" WHERE id IN (SELECT id FROM \"%s\""
+                  " WHERE received < datetime('now','localtime','%s') LIMIT 5000);",
+                  g_szTable, g_szTable, mod);
+        int total = 0;
+        for (;;) {
+            if (!g_bRunning) break;
+            if (sqlite3_exec(g_db, sql, NULL, NULL, NULL) != SQLITE_OK) break;
             int n = sqlite3_changes(g_db);
-            if (n > 0) { didDelete = TRUE; WriteLog("PURGE age   rows=%d  older_than=%d days", n, g_iPurgeDays); }
+            if (n <= 0) break;
+            total += n;
+            if (n < 5000) break;   /* last partial batch - done */
         }
+        if (total > 0) { didDelete = TRUE; WriteLog("PURGE age   rows=%d  older_than=%d days", total, g_iPurgeDays); }
     }
 
     if (g_iMaxSizeMB > 0) {
@@ -428,6 +473,12 @@ static void RunMaintenance(void)
             // wiped every hour while the file stayed over the limit. Freelist pages grow as rows
             // are deleted, so used-pages shrinks and the loop now stops at the real data size.
             for (;;) {
+                // FIX [SqliteMaintCancel]: bail out promptly if a stop/reconfigure was requested.
+                // This size-cap loop can run up to 1000 DELETE+incremental_vacuum passes; without
+                // a cancel check, SqliteStop's INFINITE join (the sqlite worker has no socket to
+                // interrupt, unlike mysql) could freeze the GUI for seconds when a stop lands mid-
+                // maintenance. Data stays consistent; we just finish the loop early.
+                if (!g_bRunning) break;
                 sqlite3_int64 pageCount = QueryInt(g_db, "PRAGMA page_count;");
                 sqlite3_int64 freeList  = QueryInt(g_db, "PRAGMA freelist_count;");
                 sqlite3_int64 usedPages = pageCount - freeList;
@@ -440,16 +491,23 @@ static void RunMaintenance(void)
                 if (sqlite3_exec(g_db, sql, NULL, NULL, NULL) != SQLITE_OK) break;
                 if (sqlite3_changes(g_db) == 0) break;   /* table empty -- nothing left to delete */
                 didDelete = TRUE;
-                sqlite3_exec(g_db, "PRAGMA incremental_vacuum;", NULL, NULL, NULL);
+                /* FIX [SqliteMaintInterrupt]: bounded per pass (the loop iterates anyway);
+                   an argument-less incremental_vacuum walks the ENTIRE freelist in one call. */
+                sqlite3_exec(g_db, "PRAGMA incremental_vacuum(1000);", NULL, NULL, NULL);
             }
             if (didDelete) WriteLog("PURGE size  max_mb=%d", g_iMaxSizeMB);
         }
     }
 
     if (didDelete) {
+        /* Both interruptible via the progress handler installed above. */
         sqlite3_exec(g_db, "PRAGMA incremental_vacuum;", NULL, NULL, NULL);
         sqlite3_exec(g_db, "PRAGMA wal_checkpoint(TRUNCATE);", NULL, NULL, NULL);
     }
+
+    /* FIX [SqliteMaintInterrupt]: remove the handler - normal inserts and the shutdown
+       drain must never be aborted. */
+    sqlite3_progress_handler(g_db, 0, NULL, NULL);
 }
 
 /* Open (or create) the db file + schema + prepared statement. Returns TRUE on success. */
@@ -580,7 +638,16 @@ static DWORD WINAPI SqliteWorker(LPVOID)
             LeaveCriticalSection(&g_cs);
             if (!have) break;
             TxnBegin();
-            if (InsertJob(&job) != SQLITE_DONE) break;
+            if (InsertJob(&job) != SQLITE_DONE) {
+                // FIX [SqliteDrainLog]: the main loop's INSERT-FAIL path (above) logs and reopens;
+                // this shutdown drain used to break out silently, discarding the failed row plus
+                // everything still queued behind it with no trace in the log. Report the exact loss.
+                EnterCriticalSection(&g_cs);
+                int nLost = (g_qTail - g_qHead + SQLITE_QUEUE_SIZE) % SQLITE_QUEUE_SIZE;
+                LeaveCriticalSection(&g_cs);
+                WriteLog("LOST        shutdown flush aborted - %d row(s) dropped (insert failed)", nLost + 1);
+                break;
+            }
         }
         TxnCommit();
     }

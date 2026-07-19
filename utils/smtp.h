@@ -63,5 +63,6 @@ int QueueAlertMail(const char *szTo, const char *szSubject, const char *szBody) 
 void LogSmtpError(int errCode) ;	// FIX [SmtpLog]: convert error code to text, store in global, optionally log to disk
 const char *GetLastSmtpError(void) ;	// FIX [SmtpLog]: get last SMTP error for display in Setup dialog
 unsigned GetSmtpDroppedCount(void) ;	// FIX [SmtpQueueFull]: # mails dropped due to a full send queue
+void MailClearResponseWnd(void) ;	// FIX [SmtpRespWnd]: clear response-listbox HWND on dialog close
 
 #endif /* ! SMTP_H */

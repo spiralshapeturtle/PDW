@@ -20,6 +20,7 @@ build-*/
 cmake-build-*/
 CMakeCache.txt
 CMakeFiles/
+assets/
 obj/
 *.log
 *.sln
@@ -46,6 +47,7 @@ pdw_web/
 *.bak
 
 CLAUDE.md
+ARCHITECTURE_DECISIONS.md
 
 
 # scratch commit message file
