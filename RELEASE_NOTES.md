@@ -118,19 +118,19 @@ come back exactly as before. On windows too narrow for the panel the classic cor
   panel drew nothing while still claiming the corner, leaving neither the panel nor the classic
   needle/RX-Q box visible until resources recovered. The claim is now withdrawn on failure so the
   classic corner renders again on the next repaint.
-- **Overall-status rollup dot (FIX [HealthRollup]).** A single summary dot at the far left of the
-  panel shows the worst of everything at a glance - the RX health, the COM input link and every
-  enabled feed. It is green only when the whole chain is healthy, and turns orange/red the moment
-  anything degrades or fails, so you no longer have to scan all the individual dots to know something
-  is wrong. Its tooltip summarises how many faults/warnings are active.
+- **Overall-status accent bar (FIX [HealthRollupBar]).** A full-height colour strip on the panel's
+  left edge is the "one light to glance at": it shows the worst of everything - the RX health, the
+  COM input link and every enabled feed. Green when the whole chain is healthy, orange/red the moment
+  anything degrades or fails, so you no longer have to scan all the individual dots. Being part of the
+  panel edge rather than an inline dot next to the number, a red bar reads as "the strip has a problem"
+  and is never mistaken for the RX score itself being red. Its tooltip summarises the active
+  faults/warnings.
 - **"RX" caption on the score (FIX [HealthScoreLabel]).** A small `RX` label precedes the percentage
   so the number is unmistakably the RX-health score and not confused with the RX-Q box it replaces.
 - **Click an entry to open its settings (FIX [HealthClickConfig]).** Left-click a feed dot to open
   that feed's configuration dialog, the COM dot to open Interface setup, or the score to open the
   System Alerts dialog. The tooltips mention the click target. Right-click still opens the panel's
   own menu (source / trend window / hide).
-- **Group separators (FIX [HealthGroupSep]).** Thin etched dividers now visually group the score, the
-  trend graph and the status dots, drawn within the existing spacing so the layout is unchanged.
 - **Soft area fill under the trend line (FIX [HealthSparkFill]).** The sparkline now has a light tint
   under the curve in the current status colour, making the trend direction easier to read at a glance;
   the bold status line and the dotted alert-level marker stay crisp on top.

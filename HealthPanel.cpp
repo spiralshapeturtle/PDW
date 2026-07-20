@@ -586,13 +586,14 @@ static void ComputeLayout(HWND hwnd, HPLAYOUT *lo)
 	int wScore = TextW(hdc, pdw_font[FONT_RXQUAL], "100%");
 	int pad    = Scale(4);
 	int dot    = Scale(8);	// FIX [HealthDotSize]: was Scale(7, too small), then Scale(10, too big) - 8 is the sweet spot (Rob)
-	int dotBig = dot + Scale(2);	// FIX [HealthRollup]: summary dot a touch larger so it reads as a rollup, not another feed dot
 	int gapDot = Scale(3);
 	int gapEnt = Scale(6);
-	// FIX [HealthRollup] + [HealthScoreLabel]: leading summary dot + a small "RX"
-	// caption so the bare percentage is unmistakably the RX-health score.
-	int wRx     = TextW(hdc, pdw_font[FONT_LABELS], "RX");
-	int rollupW = (lo->showCom || lo->nFeeds > 0) ? (dotBig + gapEnt) : 0;
+	// FIX [HealthScoreLabel]: small "RX" caption so the bare percentage is
+	// unmistakably the RX-health score.
+	int wRx  = TextW(hdc, pdw_font[FONT_LABELS], "RX");
+	// FIX [HealthRollupBar]: left-edge accent bar (overall status) + its leading pad.
+	int accW = (lo->showCom || lo->nFeeds > 0) ? Scale(4) : 0;
+	int lead = accW ? (accW + pad) : pad;
 
 	int wDots = 0, wDotsLbl = 0;
 	if (lo->showCom)
@@ -611,8 +612,8 @@ static void ComputeLayout(HWND hwnd, HPLAYOUT *lo)
 
 	/* Tier 1: labels + sparkline. Tier 2: dots only + sparkline.
 	** Tier 3: dots only, no sparkline. Otherwise: hide. */
-	// FIX [HealthRollup]/[HealthScoreLabel]: rollup dot + "RX" caption + score block
-	int fixed = pad + rollupW + wRx + gapDot + wScore + pad;
+	// FIX [HealthRollupBar]/[HealthScoreLabel]: accent-bar lead + "RX" caption + score block
+	int fixed = lead + wRx + gapDot + wScore + pad;
 	int tail  = pad;                                /* right padding */
 
 	lo->showLabels = TRUE;
@@ -764,17 +765,6 @@ static void DrawStatusDot(HDC hdc, int x, int cy, int d, int sev)
 		DrawDot(hdc, x, cy, d, s_penGreen, s_brGreen);
 		break;
 	}
-}
-
-/* FIX [HealthGroupSep]: subtle vertical group divider, drawn inside the existing
-** pad gap (consumes no layout width). A single etched line - dark with a white
-** companion - matching the panel's sunken frame, inset top/bottom. */
-static void DrawVSep(HDC hdc, int x, int top, int bot)
-{
-	SelectObject(hdc, SysPEN[DARKGRAY]);
-	MoveToEx(hdc, x, top, NULL); LineTo(hdc, x, bot);
-	SelectObject(hdc, SysPEN[WHITE]);
-	MoveToEx(hdc, x + 1, top, NULL); LineTo(hdc, x + 1, bot);
 }
 
 static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
@@ -957,12 +947,12 @@ void HealthPanel_Draw(HWND hwnd)
 
 	int pad    = Scale(4);
 	int dot    = Scale(8);	// FIX [HealthDotSize]: was Scale(7, too small), then Scale(10, too big) - 8 is the sweet spot (Rob)
-	int dotBig = dot + Scale(2);	// FIX [HealthRollup]: summary dot slightly larger
 	int gapDot = Scale(3);
 	int gapEnt = Scale(6);
 	int cy     = h / 2;
-	int x      = pad;
-	int sepTop = Scale(5), sepBot = h - Scale(5);	// FIX [HealthGroupSep]
+	// FIX [HealthRollupBar]: left-edge accent bar carries the overall status (see below).
+	int accW   = (lo.showCom || lo.nFeeds > 0) ? Scale(4) : 0;
+	int x      = accW ? (accW + pad) : pad;
 
 	SetBkMode(mem, TRANSPARENT);
 
@@ -974,14 +964,24 @@ void HealthPanel_Draw(HWND hwnd)
 #define HP_TIPRECT(x0, x1) { rcTip.left = lo.rc.left + (x0); rcTip.top = lo.rc.top; \
 	                         rcTip.right = lo.rc.left + (x1); rcTip.bottom = lo.rc.bottom; }
 
-	/* --- rollup summary dot (FIX [HealthRollup]) ------------------------ */
-	if (lo.showCom || lo.nFeeds > 0)
+	/* --- overall-status accent bar (FIX [HealthRollupBar]) --------------
+	** A full-height colour strip on the panel's LEFT EDGE, just inside the
+	** etched frame. It carries the worst of everything (RX / COM / feeds) as
+	** the "one light to glance at", but being part of the panel edge - not an
+	** inline dot next to the number - a red bar reads as "the strip has a
+	** problem", never as "the RX score is red". Replaces the earlier inline
+	** rollup dot ([HealthRollup]), which sat too close to the RX value. */
+	if (accW)
 	{
 		int rsev = ComputeRollup(&lo, szTip, sizeof(szTip));
-		DrawStatusDot(mem, x, cy, dotBig, rsev);
-		HP_TIPRECT(x, x + dotBig);
+		HBRUSH br = (rsev == 2) ? s_brRed : (rsev == 1) ? s_brOrange : s_brGreen;
+		SelectObject(mem, null_pen);
+		SelectObject(mem, br);
+		Rectangle(mem, 1, 1, 1 + accW, h - 1);
+		/* hover region = the bar plus its trailing pad, so it is easy to hit
+		** without ever overlapping the RX score's own region */
+		HP_TIPRECT(0, accW + pad);
 		TipSet(hwnd, HP_ROLLUP_SLOT, &rcTip, szTip, 0);
-		x += dotBig + gapEnt;
 	}
 	else
 	{
@@ -1029,10 +1029,6 @@ void HealthPanel_Draw(HWND hwnd)
 		TipSet(hwnd, 0, &rcTip, szTip, IDM_RXQUAL_ALERT);
 
 		x += wScore + pad;
-
-		// FIX [HealthGroupSep]: divider between the score group and the trend/dots,
-		// drawn in the existing pad gap (no layout width consumed).
-		DrawVSep(mem, x - pad / 2, sepTop, sepBot);
 	}
 
 	/* --- sparkline ------------------------------------------------------ */
@@ -1052,10 +1048,6 @@ void HealthPanel_Draw(HWND hwnd)
 		TipSet(hwnd, 1, &rcTip, szTip, 0);
 
 		x += lo.sparkW + pad;
-
-		// FIX [HealthGroupSep]: divider between the trend and the status dots.
-		if (lo.showCom || lo.nFeeds > 0)
-			DrawVSep(mem, x - pad / 2, sepTop, sepBot);
 	}
 	else
 	{
