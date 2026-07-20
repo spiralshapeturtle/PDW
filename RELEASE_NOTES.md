@@ -85,9 +85,12 @@ come back exactly as before. On windows too narrow for the panel the classic cor
 - **Feed/COM dot size tuned (FIX [HealthDotSize]).** Went 7px -> 10px (too small on hi-DPI/RDP) ->
   8px, which reads as the sweet spot between the two. The layout recalculates itself around the new
   size, and the retry ring / error "minus" bar scale with it automatically.
-- **Softer status green (FIX [HealthGreenLighter]).** The health score, sparkline and status dots now
-  use a lighter, less "heavy" green than the dark green used for on-screen message text elsewhere in
-  PDW - orange and red are unchanged. The message-text colour palette itself is untouched.
+- **Re-tuned status colours (FIX [HealthStatusTriad], supersedes [HealthGreenLighter]).** The green,
+  orange and red now form one coherent triad tuned for a status strip that sits permanently on the
+  light-gray toolbar band. The green is darker and more saturated than the earlier light green, which
+  read too faint on the "100%" score text; the red is a strong, deep red so a fault reads instantly;
+  orange stays clearly distinct from both. The message-text colour palette (used for on-screen paging
+  text) is untouched - these are panel-local colours only.
 - **Colour-blind-friendly dot shapes (FIX [HealthDotShapes]).** Status is no longer colour-only:
   a retrying feed draws as a *ring* (hollow), a failed feed as a solid disc with a small "minus"
   bar, healthy stays a solid disc. The COM dot uses the same coding (ring = open but no data,
@@ -115,6 +118,22 @@ come back exactly as before. On windows too narrow for the panel the classic cor
   panel drew nothing while still claiming the corner, leaving neither the panel nor the classic
   needle/RX-Q box visible until resources recovered. The claim is now withdrawn on failure so the
   classic corner renders again on the next repaint.
+- **Overall-status rollup dot (FIX [HealthRollup]).** A single summary dot at the far left of the
+  panel shows the worst of everything at a glance - the RX health, the COM input link and every
+  enabled feed. It is green only when the whole chain is healthy, and turns orange/red the moment
+  anything degrades or fails, so you no longer have to scan all the individual dots to know something
+  is wrong. Its tooltip summarises how many faults/warnings are active.
+- **"RX" caption on the score (FIX [HealthScoreLabel]).** A small `RX` label precedes the percentage
+  so the number is unmistakably the RX-health score and not confused with the RX-Q box it replaces.
+- **Click an entry to open its settings (FIX [HealthClickConfig]).** Left-click a feed dot to open
+  that feed's configuration dialog, the COM dot to open Interface setup, or the score to open the
+  System Alerts dialog. The tooltips mention the click target. Right-click still opens the panel's
+  own menu (source / trend window / hide).
+- **Group separators (FIX [HealthGroupSep]).** Thin etched dividers now visually group the score, the
+  trend graph and the status dots, drawn within the existing spacing so the layout is unchanged.
+- **Soft area fill under the trend line (FIX [HealthSparkFill]).** The sparkline now has a light tint
+  under the curve in the current status colour, making the trend direction easier to read at a glance;
+  the bold status line and the dotted alert-level marker stay crisp on top.
 
 ## COM link-lost e-mail alert + "System Alerts" dialog (FIX [ComLinkAlert])
 A new, optional e-mail alert for the serial input, complementing the RX-quality alert. The RX-quality

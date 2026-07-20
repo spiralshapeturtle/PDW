@@ -1163,6 +1163,19 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			SetToolTXT(ghInstance, lParam);
 			break;
 
+			// FIX [HealthClickConfig]: left-click on a Health-panel entry opens its
+			// config dialog (feed dots -> that feed's setup, COM dot -> Interface setup,
+			// score -> RX-quality alert). Same coordinate mapping as NM_RCLICK below.
+			case NM_CLICK:
+			if (((LPNMHDR)lParam)->hwndFrom == hToolbar)
+			{
+				POINT pt = ((LPNMMOUSE)lParam)->pt;
+				MapWindowPoints(hToolbar, hWnd, &pt, 1);
+				if (HealthPanel_OnToolbarLClick(hWnd, pt))
+					return TRUE;		// handled - suppress default processing
+			}
+			break;
+
 			// FIX [HealthPanel]: right-click on the toolbar band. The comctl32 toolbar
 			// child covers the whole band, so the parent never sees WM_RBUTTONDOWN
 			// there; the toolbar forwards it as NM_RCLICK with the click position in

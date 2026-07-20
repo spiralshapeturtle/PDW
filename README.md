@@ -462,12 +462,17 @@ A compact status strip on the right side of the toolbar band. While shown it **r
 needle meter and RX-Q percentage box (a clean switchover, nothing is displayed twice); hide it via the
 right-click menu and the classic corner returns exactly as before. It shows:
 
-- **Health score** (0-100%) in green/orange/red. Right-click the panel to choose the source:
+- **Overall-status rollup dot** at the far left — the single light to glance at. It shows the worst
+  of everything (RX health, COM input link and every enabled feed): green only when the whole chain
+  is healthy, orange/red the moment anything degrades or fails.
+- **Health score** (0-100%) in green/orange/red, prefixed with a small `RX` caption so it reads
+  clearly as the RX-health score. Right-click the panel to choose the source:
   *RX needle (classic)* — the same lenient score as the RX-Q corner box (default) — or
   *Penalty system* — a stricter bucket-penalty score with "instant drop, slow recovery" behaviour
   (the same algorithm as the internal telnet wire score, but it works regardless of the telnet server).
-- **Trend sparkline** of the score over a configurable window (1/5/15/60 minutes), with a dotted
-  marker line at the mail-alert threshold so the headroom to the alarm level is visible at a glance.
+- **Trend sparkline** of the score over a configurable window (1/5/15/60 minutes), with a soft
+  colour-tinted area fill under the curve and an optional dotted marker line at the mail-alert
+  threshold so the headroom to the alarm level is visible at a glance.
 - **COM dot** (only when serial input is enabled): green = open + receiving, orange ring = open but
   stalled, red = not open.
 - **Feed dots** for every *enabled* output feed (`SM` SMTP, `WH` webhook, `TG` Telegram, `PO`
@@ -491,9 +496,11 @@ a retry never downgrades red back to orange - only a real success clears the dot
 overnight can be diagnosed the next morning.
 
 The panel adapts to the available width (labels drop first, then the sparkline); on windows too
-narrow for it the classic corner is shown instead. Right-click it to switch source, set the trend
-window, or hide/show the panel. Settings persist in `pdw.ini` under `[HealthPanel]` (`Visible`,
-`Source`, `SparkMinutes`).
+narrow for it the classic corner is shown instead. **Left-click** an entry to jump straight to its
+settings: a feed dot opens that feed's configuration dialog, the COM dot opens Interface setup, and
+the score opens the System Alerts dialog. **Right-click** it to switch source, set the trend window,
+or hide/show the panel. Settings persist in `pdw.ini` under `[HealthPanel]` (`Visible`, `Source`,
+`SparkMinutes`).
 
 ---
 
@@ -585,7 +592,8 @@ Combined stability and hardening release: a full source-code audit (memory safet
 - **New toolbar Health panel (FIX [HealthPanel], [HealthSource], [FeedStatus], [FeedStatusConn], [HealthPanelCorner], [HealthSparkColor])** — a compact status strip on the right of the toolbar band: colour-coded health score with a selectable source (classic RX-Q score or the stricter "Penalty system" score), a status-coloured trend sparkline (1/5/15/60 min; a healthy period reads as a solid green line), a COM-port link dot, and one status dot per enabled output feed (green = no known problem, orange = retrying, red = failing; connection-oriented feeds track their connection live). The existing RX-quality mail alert follows the selected health source. While shown, the panel replaces the classic needle + RX-Q corner (clean switchover, nothing displayed twice); hide it via the right-click menu to get the classic corner back. Settings persist under `[HealthPanel]` in `pdw.ini`. (A per-entry hover-tooltip addition was tried and pulled the same day - FIX [HealthPanelTipsDisabled] - after it introduced the only new, unverified risk alongside a reported crash.)
 - **Health panel follow-up fixes (FIX [HealthRxqStale], [Rs232LinkRealData], [HealthPanelFitsFail])** — the Penalty-system score now reads 0% after 2 minutes of dead air instead of freezing at its last healthy value, so the low-quality mail alert also catches a receiver that dies after a healthy period (the telnet wire score keeps exact p2kflex parity and is untouched); the COM dot no longer shows green on a serial link that reopens fine but delivers no data (e.g. a Moxa NPort with its TCP tunnel down) - it is now judged by actually received bytes; and a failed off-screen back-buffer (GDI-handle pressure) no longer leaves the toolbar corner empty - the classic needle/RX-Q corner returns on the next repaint.
 - **Health log no longer logs routine "idle -> OK" (FIX [HealthLogNoIdleOk])** — a feed's first successful contact after startup (or after MQTT's periodic idle-reconnect) is not a failure; that specific transition is no longer written to `{date}_health.log`. Every transition that involves an actual problem (going into RETRYING/FAILED, and the recovery back to OK) still logs exactly as before, so the file stays a record of what actually went wrong.
-- **Health panel dot size and colour tuned (FIX [HealthDotSize], [HealthGreenLighter])** — the feed/COM status dots settled at 8px (7px was too small, 10px too big); the layout and the retry-ring/error-bar shapes scale with the new size automatically. The health score, sparkline and dots also use a lighter, softer green than the dark green used for on-screen message text elsewhere in PDW; the message-text colour palette is unchanged.
+- **Health panel dot size and colour tuned (FIX [HealthDotSize], [HealthStatusTriad])** — the feed/COM status dots settled at 8px (7px was too small, 10px too big); the layout and the retry-ring/error-bar shapes scale with the new size automatically. The status colours were re-tuned into one coherent triad for the light-gray toolbar band: a darker, more saturated green (the earlier light green read too faint on the "100%" score text), a strong deep red so faults read instantly, and a clearly distinct orange. The message-text colour palette is unchanged.
+- **Health panel usability (FIX [HealthRollup], [HealthScoreLabel], [HealthClickConfig], [HealthGroupSep], [HealthSparkFill])** — a new overall-status rollup dot summarises RX/COM/feeds at a glance; an `RX` caption labels the score; left-clicking an entry opens its settings dialog; thin dividers group the score/trend/dots; and the sparkline gained a soft colour-tinted area fill under the curve.
 - **Show/hide the menu bar (FIX [MenuBarToggle])** — new **Display > Show Menu Bar** checkbox (shortcut Ctrl+Shift+M) hides the whole menu bar while keeping the toolbar visible; the panes reflow to use the freed space immediately. With the menu bar hidden it can still be brought back via the shortcut or via right-click anywhere in the main window (toolbar included). The state is remembered in `pdw.ini` (`ShowMenuBar`, default on).
 - **New high-resolution toolbar + themed dialogs (FIX [ToolbarHiResIcons])** — the toolbar now uses 72x72 32-bit icons with a real alpha channel, box-filtered down to the current DPI; the manifest opts in to Common Controls v6, so every dialog also gets the modern themed look instead of the classic Windows 2000 style.
 - **Toolbar icons squared up to one grid (FIX [ToolbarIconGrid])** — cosmetic follow-up so every button carries the same optical weight: all 13 glyphs are drawn to one 54 px content box centred on the canvas (the folder and copy-pane icons enlarged, the statistics bars widened and raised, the pause bars thickened so they no longer look small, and the help "?" given a larger ring with clear whitespace and a 1 px optical bump for the round shape), corner radii unified, and the button-to-button spacing set to a single fixed 8 px grid gutter. No button, tooltip or behaviour changed.

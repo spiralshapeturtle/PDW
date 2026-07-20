@@ -50,6 +50,8 @@ static HPEN    s_penSparkG = NULL, s_penSparkO = NULL, s_penSparkR = NULL;
 /* FIX [HealthSparkThreshold]: dotted marker at the mail-alert level in the sparkline.
 ** FIX [HealthDotShapes]: ring pen (retry) + white bar pen (error) for the status dots. */
 static HPEN    s_penThresh = NULL, s_penRingO = NULL, s_penWhiteBar = NULL;
+/* FIX [HealthSparkFill]: light-tint pens for the area fill under the trend line. */
+static HPEN    s_penFillG = NULL, s_penFillO = NULL, s_penFillR = NULL;
 static HBRUSH  s_brGreen  = NULL, s_brOrange = NULL, s_brRed = NULL, s_brGray = NULL;
 static UINT    s_gdiDpi   = 0;     /* DPI the pens were created for */
 
@@ -63,7 +65,12 @@ static UINT    s_gdiDpi   = 0;     /* DPI the pens were created for */
 ** (GetCursorPos + PtInRect against rects captured during Draw). No subclassing,
 ** no foreign control, no per-draw messages - the tooltip is only touched when
 ** the hover state actually changes. */
-#define HP_TIP_SLOTS          (3 + FEED_COUNT)   /* 0=score, 1=spark, 2=COM, 3+i=feed i */
+/* Slots: 0=score, 1=spark, 2=COM, 3+i=feed i, and the rollup summary dot last.
+** FIX [HealthRollup]: rollup appended as the final slot so the existing 0..2 and
+** 3+i feed indices are unchanged. FIX [HealthClickConfig]: s_slotCmd[] carries the
+** WM_COMMAND id a left-click on that slot posts (0 = not clickable). */
+#define HP_ROLLUP_SLOT        (3 + FEED_COUNT)
+#define HP_TIP_SLOTS          (4 + FEED_COUNT)   /* 0=score, 1=spark, 2=COM, 3+i=feed, last=rollup */
 #define HP_TIP_TIMER_ID       0xE210             /* far above PDW's timer ids 101..107 */
 #define HP_TIP_POLL_MS        150
 #define HP_TIP_DWELL_TICKS    3                  /* ~450 ms hover before showing */
@@ -73,6 +80,7 @@ static BOOL     s_tipToolAdded = FALSE;
 static UINT_PTR s_tipTimer = 0;
 static char     s_tipText[HP_TIP_SLOTS][224];    /* per-entry text, filled during Draw */
 static RECT     s_tipRect[HP_TIP_SLOTS];         /* main-window client coords; empty = off */
+static UINT     s_slotCmd[HP_TIP_SLOTS];         /* FIX [HealthClickConfig]: WM_COMMAND on left-click, 0 = none */
 static char     s_trackText[224];                /* buffer registered with the control */
 static int      s_tipSlot = -1;                  /* slot currently shown (-1 = hidden) */
 static int      s_hoverSlot = -1;                /* slot currently under the cursor */
@@ -101,14 +109,29 @@ static BOOL s_fitsValid = FALSE;
 #define HPM_SPARK_60     6
 #define HPM_TOGGLE_SHOW  7
 
-/* Palette (ORANGE/RED still match rgbColor[] in Gfx.cpp). FIX [HealthGreenLighter]:
-** GREEN is intentionally lighter/softer than rgbColor[]'s message-text GREEN (0,128,0) -
-** that dark a green read as too "heavy" for a status dot/score that's on screen
-** constantly; the message-color palette itself is untouched (Rob). */
-#define HP_RGB_GREEN   RGB(40, 167, 69)
-#define HP_RGB_ORANGE  RGB(255, 165, 0)
-#define HP_RGB_RED     RGB(255, 0, 0)
+/* FIX [HealthStatusTriad]: one coherent status triad, tuned for a status panel
+** that sits permanently on the light-gray (COLOR_3DFACE) toolbar band and where
+** a fault MUST read instantly. The three come from one design family (deep,
+** saturated, a step back from the pure primaries) so they harmonise on gray,
+** yet RED stays loud:
+**   - GREEN darkened/saturated vs the earlier (40,167,69): that read too light
+**     on the "100%" score TEXT against the gray band. This green keeps a healthy
+**     dot but gives the numeral real contrast (Rob).
+**   - RED a strong, minimal-blue red (not a soft crimson): errors have to shout.
+**   - ORANGE a clear orange, distinct from both green and red.
+** The message-text palette in Gfx.cpp (rgbColor[]) is untouched; these are
+** panel-local only, and the panel replaces the classic RX-Q corner while active
+** so there is no side-by-side clash with rgbColor[]'s pure RED. */
+#define HP_RGB_GREEN   RGB( 21, 128,  61)
+#define HP_RGB_ORANGE  RGB(249, 115,  22)
+#define HP_RGB_RED     RGB(220,  38,  38)
 #define HP_RGB_GRAY    RGB(138, 138, 138)
+#define HP_RGB_GRAYLT  RGB(170, 170, 170)	/* threshold marker: lighter than the data line */
+/* FIX [HealthSparkFill]: light tints of the triad for the soft area fill under
+** the trend line, so trend direction reads at a glance without drowning the line. */
+#define HP_RGB_FILLG   RGB(198, 224, 205)
+#define HP_RGB_FILLO   RGB(250, 226, 193)
+#define HP_RGB_FILLR   RGB(244, 203, 203)
 
 /* ---------------------------------------------------------------------------
 ** Layout
@@ -134,6 +157,9 @@ static void EnsureGdiObjects(void)
 	if (s_penThresh) { DeleteObject(s_penThresh); s_penThresh = NULL; }
 	if (s_penRingO)  { DeleteObject(s_penRingO);  s_penRingO  = NULL; }
 	if (s_penWhiteBar) { DeleteObject(s_penWhiteBar); s_penWhiteBar = NULL; }
+	if (s_penFillG)  { DeleteObject(s_penFillG);  s_penFillG  = NULL; }	// FIX [HealthSparkFill]
+	if (s_penFillO)  { DeleteObject(s_penFillO);  s_penFillO  = NULL; }
+	if (s_penFillR)  { DeleteObject(s_penFillR);  s_penFillR  = NULL; }
 	if (s_penGreen)  { DeleteObject(s_penGreen);  s_penGreen  = NULL; }
 	if (s_penOrange) { DeleteObject(s_penOrange); s_penOrange = NULL; }
 	if (s_penRed)    { DeleteObject(s_penRed);    s_penRed    = NULL; }
@@ -153,7 +179,13 @@ static void EnsureGdiObjects(void)
 	s_penSparkR = CreatePen(PS_SOLID, pwSpark, HP_RGB_RED);
 	// FIX [HealthSparkThreshold]: PS_DOT only dots with width 1 on classic GDI.
 	// Gray, not red (Rob): a neutral marker, the data line carries the colours.
-	s_penThresh = CreatePen(PS_DOT, 1, HP_RGB_GRAY);
+	// FIX [HealthStatusTriad]: lighter gray than the data line so "reference level"
+	// clearly reads as secondary to the measured trend.
+	s_penThresh = CreatePen(PS_DOT, 1, HP_RGB_GRAYLT);
+	// FIX [HealthSparkFill]: 1px light-tint pens draw the soft area fill under the trend.
+	s_penFillG  = CreatePen(PS_SOLID, pw, HP_RGB_FILLG);
+	s_penFillO  = CreatePen(PS_SOLID, pw, HP_RGB_FILLO);
+	s_penFillR  = CreatePen(PS_SOLID, pw, HP_RGB_FILLR);
 	// FIX [HealthDotShapes]: ring stroke matches the spark stroke; the white bar
 	// stays thin so the red disc keeps reading as red
 	s_penRingO   = CreatePen(PS_SOLID, pwSpark, HP_RGB_ORANGE);
@@ -341,14 +373,17 @@ static void TipEnsure(void)
 }
 
 /* Capture one hover region. rcMain = main-window client coords. Pure data
-** store - the tooltip control is never touched from the draw path. */
-static void TipSet(HWND hMain, int slot, const RECT *rcMain, const char *text)
+** store - the tooltip control is never touched from the draw path.
+** FIX [HealthClickConfig]: cmd = WM_COMMAND id posted on a left-click on this
+** slot (0 = not clickable). */
+static void TipSet(HWND hMain, int slot, const RECT *rcMain, const char *text, UINT cmd)
 {
 	(void)hMain;
 	if (slot < 0 || slot >= HP_TIP_SLOTS) return;
 	_snprintf(s_tipText[slot], sizeof(s_tipText[slot]) - 1, "%s", text ? text : "");
 	s_tipText[slot][sizeof(s_tipText[slot]) - 1] = '\0';
 	s_tipRect[slot] = *rcMain;
+	s_slotCmd[slot] = cmd;
 }
 
 /* Panel hidden/unfit: clear all hover regions and hide any visible tip. */
@@ -360,6 +395,7 @@ static void TipParkAll(HWND hMain)
 	{
 		s_tipRect[slot].left = s_tipRect[slot].top = 0;
 		s_tipRect[slot].right = s_tipRect[slot].bottom = 0;
+		s_slotCmd[slot] = 0;	// FIX [HealthClickConfig]
 	}
 	TipHide();
 }
@@ -429,6 +465,65 @@ static void CollectFeeds(HPLAYOUT *lo)
 	lo->showCom = Profile.comPortEnabled ? TRUE : FALSE;
 }
 
+/* FIX [HealthClickConfig]: which config dialog a left-click on an entry opens.
+** Mirrors the Interface menu WM_COMMAND ids handled in PDW.cpp. */
+static UINT FeedMenuCmd(int feed)
+{
+	switch (feed)
+	{
+		case FEED_SMTP:     return IDM_MAIL;
+		case FEED_WEBHOOK:  return IDM_WEBHOOK;
+		case FEED_TELEGRAM: return IDM_TELEGRAM;
+		case FEED_PUSHOVER: return IDM_PUSHOVER;
+		case FEED_MQTT:     return IDM_MQTT;
+		case FEED_MYSQL:    return IDM_MYSQL;
+		case FEED_SQLITE:   return IDM_SQLITE;
+		case FEED_TELNET:   return IDM_TELNETSERVER;
+	}
+	return 0;
+}
+
+/* FIX [HealthRollup]: severity of a single "overall" summary dot = the worst of
+** the RX health, the COM input link and every enabled feed (0 ok, 1 degraded,
+** 2 fault). Also fills a short reason for the tooltip. This is the one light to
+** glance at: green only when the whole chain (input -> decode -> every feed) is
+** healthy. It intentionally folds in the RX score too, so the summary is red
+** whenever anything - signal OR plumbing - is wrong. */
+static int ComputeRollup(const HPLAYOUT *lo, char *why, int cbWhy)
+{
+	int worst = 0, nErr = 0, nWarn = 0, i;
+
+	int hs = Health_GetStatus();
+	if (hs == HSTAT_RED)         { worst = 2; nErr++; }
+	else if (hs == HSTAT_ORANGE) { if (worst < 1) worst = 1; nWarn++; }
+
+	if (lo->showCom)
+	{
+		int link = Rs232LinkState();
+		int sev  = (link == 2) ? 0 : (link == 1) ? 1 : 2;
+		if (sev == 2) { worst = 2; nErr++; }
+		else if (sev == 1) { if (worst < 1) worst = 1; nWarn++; }
+	}
+
+	for (i = 0; i < lo->nFeeds; i++)
+	{
+		int fs = FeedStatus_Get(lo->feeds[i]);
+		if (fs == FS_ERROR) { worst = 2; nErr++; }
+		else if (fs == FS_RETRY) { if (worst < 1) worst = 1; nWarn++; }
+	}
+
+	if (why && cbWhy > 0)
+	{
+		if (worst == 0)
+			_snprintf(why, cbWhy - 1, "Overall status: all OK (RX, input and every enabled feed healthy)");
+		else
+			_snprintf(why, cbWhy - 1, "Overall status: %d fault%s, %d warning%s - see the score and dots",
+			          nErr, nErr == 1 ? "" : "s", nWarn, nWarn == 1 ? "" : "s");
+		why[cbWhy - 1] = '\0';
+	}
+	return worst;
+}
+
 /* Measure text with a given font against the MAIN window DC. */
 static int TextW(HDC hdc, HFONT font, const char *s)
 {
@@ -491,8 +586,13 @@ static void ComputeLayout(HWND hwnd, HPLAYOUT *lo)
 	int wScore = TextW(hdc, pdw_font[FONT_RXQUAL], "100%");
 	int pad    = Scale(4);
 	int dot    = Scale(8);	// FIX [HealthDotSize]: was Scale(7, too small), then Scale(10, too big) - 8 is the sweet spot (Rob)
+	int dotBig = dot + Scale(2);	// FIX [HealthRollup]: summary dot a touch larger so it reads as a rollup, not another feed dot
 	int gapDot = Scale(3);
 	int gapEnt = Scale(6);
+	// FIX [HealthRollup] + [HealthScoreLabel]: leading summary dot + a small "RX"
+	// caption so the bare percentage is unmistakably the RX-health score.
+	int wRx     = TextW(hdc, pdw_font[FONT_LABELS], "RX");
+	int rollupW = (lo->showCom || lo->nFeeds > 0) ? (dotBig + gapEnt) : 0;
 
 	int wDots = 0, wDotsLbl = 0;
 	if (lo->showCom)
@@ -511,7 +611,8 @@ static void ComputeLayout(HWND hwnd, HPLAYOUT *lo)
 
 	/* Tier 1: labels + sparkline. Tier 2: dots only + sparkline.
 	** Tier 3: dots only, no sparkline. Otherwise: hide. */
-	int fixed = pad + wScore + pad;                 /* score block */
+	// FIX [HealthRollup]/[HealthScoreLabel]: rollup dot + "RX" caption + score block
+	int fixed = pad + rollupW + wRx + gapDot + wScore + pad;
 	int tail  = pad;                                /* right padding */
 
 	lo->showLabels = TRUE;
@@ -665,6 +766,17 @@ static void DrawStatusDot(HDC hdc, int x, int cy, int d, int sev)
 	}
 }
 
+/* FIX [HealthGroupSep]: subtle vertical group divider, drawn inside the existing
+** pad gap (consumes no layout width). A single etched line - dark with a white
+** companion - matching the panel's sunken frame, inset top/bottom. */
+static void DrawVSep(HDC hdc, int x, int top, int bot)
+{
+	SelectObject(hdc, SysPEN[DARKGRAY]);
+	MoveToEx(hdc, x, top, NULL); LineTo(hdc, x, bot);
+	SelectObject(hdc, SysPEN[WHITE]);
+	MoveToEx(hdc, x + 1, top, NULL); LineTo(hdc, x + 1, bot);
+}
+
 static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
 {
 	int windowSec = Profile.nHealthSparkMin * 60;
@@ -689,29 +801,16 @@ static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
 	if (red < 1)  red = 1;
 	if (red > 95) red = 95;
 
-	// FIX [HealthSparkThreshold]: OPTIONAL dotted marker line at the mail-alert
-	// threshold (System Alerts dialog / [HealthPanel] ThresholdLine, default off),
-	// so the trend reads against the alarm level instead of colour flips only.
-	// Drawn first; the data line paints over it. Skipped when it would sit on the
-	// frame edge (threshold near 0/100).
-	if (Profile.nHealthThreshLine)
-	{
-		int ty = iy + (int)(((100.0 - (double)red) * (ih - 1)) / 100.0 + 0.5);
-		if (ty > iy && ty < iy + ih - 1)
-		{
-			SelectObject(hdc, s_penThresh);
-			MoveToEx(hdc, ix, ty, NULL);
-			LineTo(hdc, ix + iw, ty);
-		}
-	}
-
-	/* Newest sample at the right edge. One column = windowSec/iw seconds,
-	** averaged; gaps (no measurement) break the polyline. The line is drawn in
-	** status colours per segment (FIX [HealthSparkColor]) - a healthy history
-	** is a solid green line, degradation shows as orange/red stretches. */
-	BOOL penDown = FALSE;
-	HPEN curPen  = NULL;
-	int  col;
+	/* One column = windowSec/iw seconds, averaged; gaps (no measurement) break
+	** the polyline. Newest sample at the right edge. Computed once into small
+	** stack arrays so the three draw passes below (soft fill, threshold marker,
+	** then the bold status line on top) render in the right order. */
+#define HP_SPARK_MAXCOLS 512
+	if (iw > HP_SPARK_MAXCOLS) iw = HP_SPARK_MAXCOLS;
+	static int  cPy [HP_SPARK_MAXCOLS];	/* GUI thread only - safe as static */
+	static char cIdx[HP_SPARK_MAXCOLS];	/* 0 green, 1 orange, 2 red        */
+	static char cOn [HP_SPARK_MAXCOLS];	/* 1 = has a measurement           */
+	int col;
 	for (col = 0; col < iw; col++)
 	{
 		int aFrom = (int)(( (double)(iw - 1 - col)     * windowSec) / iw);
@@ -724,24 +823,71 @@ static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
 			float v = HistAt(a);
 			if (v >= 0.0f) { sum += v; n++; }
 		}
-		if (!n) { penDown = FALSE; continue; }
+		if (!n) { cOn[col] = 0; continue; }
 
 		double avg = sum / n;
 		if (avg < 0.0)   avg = 0.0;
 		if (avg > 100.0) avg = 100.0;
 
-		HPEN segPen = (avg < (double)red) ? s_penSparkR
-		            : (avg >= 96.0)       ? s_penSparkG
-		                                  : s_penSparkO;
-		if (segPen != curPen) { SelectObject(hdc, segPen); curPen = segPen; }	/* keeps the current position */
-
-		int py = iy + (int)(((100.0 - avg) * (ih - 1)) / 100.0 + 0.5);
-		int px = ix + col;
-
-		if (penDown) LineTo(hdc, px, py);
-		else         MoveToEx(hdc, px, py, NULL);
-		penDown = TRUE;
+		cIdx[col] = (char)((avg < (double)red) ? 2 : (avg >= 96.0) ? 0 : 1);
+		cPy [col] = iy + (int)(((100.0 - avg) * (ih - 1)) / 100.0 + 0.5);
+		cOn [col] = 1;
 	}
+
+	// FIX [HealthSparkFill]: soft area fill under the line first, in the light
+	// tint of each column's status, so trend direction reads at a glance. Painted
+	// before the threshold + data line so both stay crisp on top.
+	{
+		HPEN fillPens[3] = { s_penFillG, s_penFillO, s_penFillR };
+		HPEN curFill = NULL;
+		for (col = 0; col < iw; col++)
+		{
+			if (!cOn[col]) continue;
+			HPEN fp = fillPens[(int)cIdx[col]];
+			if (fp != curFill) { SelectObject(hdc, fp); curFill = fp; }
+			int px = ix + col;
+			MoveToEx(hdc, px, cPy[col] + 1, NULL);
+			LineTo(hdc, px, iy + ih);
+		}
+	}
+
+	// FIX [HealthSparkThreshold]: OPTIONAL dotted marker line at the mail-alert
+	// threshold (System Alerts dialog / [HealthPanel] ThresholdLine, default off),
+	// so the trend reads against the alarm level instead of colour flips only.
+	// Drawn over the fill, under the data line. Skipped when it would sit on the
+	// frame edge (threshold near 0/100).
+	if (Profile.nHealthThreshLine)
+	{
+		int ty = iy + (int)(((100.0 - (double)red) * (ih - 1)) / 100.0 + 0.5);
+		if (ty > iy && ty < iy + ih - 1)
+		{
+			SelectObject(hdc, s_penThresh);
+			MoveToEx(hdc, ix, ty, NULL);
+			LineTo(hdc, ix + iw, ty);
+		}
+	}
+
+	/* Bold status line on top (FIX [HealthSparkColor]) - a healthy history is a
+	** solid green line, degradation shows as orange/red stretches. Each segment
+	** is drawn explicitly from the previous point so it never depends on the GDI
+	** current position (the fill pass moved it around). */
+	{
+		HPEN segPens[3] = { s_penSparkG, s_penSparkO, s_penSparkR };
+		HPEN curPen  = NULL;
+		BOOL havePrev = FALSE;
+		int  prevPx = 0, prevPy = 0;
+		for (col = 0; col < iw; col++)
+		{
+			if (!cOn[col]) { havePrev = FALSE; continue; }
+			HPEN sp = segPens[(int)cIdx[col]];
+			if (sp != curPen) { SelectObject(hdc, sp); curPen = sp; }
+			int px = ix + col, py = cPy[col];
+			if (havePrev) { MoveToEx(hdc, prevPx, prevPy, NULL); LineTo(hdc, px, py); }
+			else          { MoveToEx(hdc, px, py, NULL); LineTo(hdc, px + 1, py); }	/* lone point: 1px stub so it shows */
+			prevPx = px; prevPy = py; havePrev = TRUE;
+		}
+	}
+#undef HP_SPARK_MAXCOLS
 }
 
 void HealthPanel_Draw(HWND hwnd)
@@ -811,10 +957,12 @@ void HealthPanel_Draw(HWND hwnd)
 
 	int pad    = Scale(4);
 	int dot    = Scale(8);	// FIX [HealthDotSize]: was Scale(7, too small), then Scale(10, too big) - 8 is the sweet spot (Rob)
+	int dotBig = dot + Scale(2);	// FIX [HealthRollup]: summary dot slightly larger
 	int gapDot = Scale(3);
 	int gapEnt = Scale(6);
 	int cy     = h / 2;
 	int x      = pad;
+	int sepTop = Scale(5), sepBot = h - Scale(5);	// FIX [HealthGroupSep]
 
 	SetBkMode(mem, TRANSPARENT);
 
@@ -826,8 +974,34 @@ void HealthPanel_Draw(HWND hwnd)
 #define HP_TIPRECT(x0, x1) { rcTip.left = lo.rc.left + (x0); rcTip.top = lo.rc.top; \
 	                         rcTip.right = lo.rc.left + (x1); rcTip.bottom = lo.rc.bottom; }
 
-	/* --- active health score ------------------------------------------- */
+	/* --- rollup summary dot (FIX [HealthRollup]) ------------------------ */
+	if (lo.showCom || lo.nFeeds > 0)
 	{
+		int rsev = ComputeRollup(&lo, szTip, sizeof(szTip));
+		DrawStatusDot(mem, x, cy, dotBig, rsev);
+		HP_TIPRECT(x, x + dotBig);
+		TipSet(hwnd, HP_ROLLUP_SLOT, &rcTip, szTip, 0);
+		x += dotBig + gapEnt;
+	}
+	else
+	{
+		RECT rcOff = { 0, 0, 0, 0 };
+		TipSet(hwnd, HP_ROLLUP_SLOT, &rcOff, "", 0);
+	}
+
+	/* --- active health score (with a small "RX" caption) --------------- */
+	{
+		int xEntry = x;
+
+		/* "RX" caption so the bare percentage is unmistakably the RX score
+		** (FIX [HealthScoreLabel]). */
+		HFONT oldL = (HFONT)SelectObject(mem, pdw_font[FONT_LABELS]);
+		SetTextColor(mem, RGB(0, 0, 0));
+		SIZE szl; GetTextExtentPoint32(mem, "RX", 2, &szl);
+		TextOut(mem, x, cy - szl.cy / 2, "RX", 2);
+		x += szl.cx + gapDot;
+		SelectObject(mem, oldL);
+
 		char szScore[8];
 		int  hstat = Health_GetStatus();
 		if (hstat == HSTAT_IDLE) strcpy(szScore, "--%");
@@ -846,14 +1020,19 @@ void HealthPanel_Draw(HWND hwnd)
 		/* reserve the full "100%" width so the sparkline doesn't shift */
 		int wScore = TextW(mem, pdw_font[FONT_RXQUAL], "100%");
 
-		_snprintf(szTip, sizeof(szTip) - 1, "Health score%s - source: %s",
+		// FIX [HealthClickConfig]: click the score to open the RX-quality alert config
+		_snprintf(szTip, sizeof(szTip) - 1, "Health score%s - source: %s (click to open alert settings)",
 		          (hstat == HSTAT_IDLE) ? " (no data yet)" : "",
 		          Health_SourceName(Profile.nHealthSource));
 		szTip[sizeof(szTip) - 1] = '\0';
-		HP_TIPRECT(x, x + wScore);
-		TipSet(hwnd, 0, &rcTip, szTip);
+		HP_TIPRECT(xEntry, x + wScore);
+		TipSet(hwnd, 0, &rcTip, szTip, IDM_RXQUAL_ALERT);
 
 		x += wScore + pad;
+
+		// FIX [HealthGroupSep]: divider between the score group and the trend/dots,
+		// drawn in the existing pad gap (no layout width consumed).
+		DrawVSep(mem, x - pad / 2, sepTop, sepBot);
 	}
 
 	/* --- sparkline ------------------------------------------------------ */
@@ -870,14 +1049,18 @@ void HealthPanel_Draw(HWND hwnd)
 			          Profile.nHealthSparkMin, Profile.nHealthSparkMin == 1 ? "" : "s");
 		szTip[sizeof(szTip) - 1] = '\0';
 		HP_TIPRECT(x, x + lo.sparkW);
-		TipSet(hwnd, 1, &rcTip, szTip);
+		TipSet(hwnd, 1, &rcTip, szTip, 0);
 
 		x += lo.sparkW + pad;
+
+		// FIX [HealthGroupSep]: divider between the trend and the status dots.
+		if (lo.showCom || lo.nFeeds > 0)
+			DrawVSep(mem, x - pad / 2, sepTop, sepBot);
 	}
 	else
 	{
 		RECT rcOff = { 0, 0, 0, 0 };
-		TipSet(hwnd, 1, &rcOff, "");	/* sparkline dropped: park its hover region */
+		TipSet(hwnd, 1, &rcOff, "", 0);	/* sparkline dropped: park its hover region */
 	}
 
 	/* --- COM link dot ---------------------------------------------------- */
@@ -897,18 +1080,18 @@ void HealthPanel_Draw(HWND hwnd)
 			x += gapDot + sz.cx;
 		}
 
-		_snprintf(szTip, sizeof(szTip) - 1, "Serial input (COM port): %s",
+		_snprintf(szTip, sizeof(szTip) - 1, "Serial input (COM port): %s (click for interface setup)",
 		          (link == 2) ? "open and receiving" : (link == 1) ? "open, but no data coming in" : "not open");
 		szTip[sizeof(szTip) - 1] = '\0';
 		HP_TIPRECT(xEntry, x);
-		TipSet(hwnd, 2, &rcTip, szTip);
+		TipSet(hwnd, 2, &rcTip, szTip, IDM_INTERFACE);	// FIX [HealthClickConfig]
 
 		x += gapEnt;
 	}
 	else
 	{
 		RECT rcOff = { 0, 0, 0, 0 };
-		TipSet(hwnd, 2, &rcOff, "");
+		TipSet(hwnd, 2, &rcOff, "", 0);
 	}
 
 	/* --- feed dots -------------------------------------------------------- */
@@ -930,8 +1113,14 @@ void HealthPanel_Draw(HWND hwnd)
 			}
 
 			BuildFeedTip(lo.feeds[i], szTip, sizeof(szTip));	// FIX [FeedLastError]: state + since + last problem
+			// FIX [HealthClickConfig]: append the click hint (BuildFeedTip left room)
+			{
+				int n = (int)strlen(szTip);
+				_snprintf(szTip + n, sizeof(szTip) - 1 - n, " (click to open settings)");
+				szTip[sizeof(szTip) - 1] = '\0';
+			}
 			HP_TIPRECT(xEntry, x);
-			TipSet(hwnd, 3 + i, &rcTip, szTip);
+			TipSet(hwnd, 3 + i, &rcTip, szTip, FeedMenuCmd(lo.feeds[i]));	// FIX [HealthClickConfig]
 
 			x += gapEnt;
 		}
@@ -939,7 +1128,7 @@ void HealthPanel_Draw(HWND hwnd)
 		for (i = lo.nFeeds; i < FEED_COUNT; i++)
 		{
 			RECT rcOff = { 0, 0, 0, 0 };
-			TipSet(hwnd, 3 + i, &rcOff, "");
+			TipSet(hwnd, 3 + i, &rcOff, "", 0);
 		}
 	}
 	SelectObject(mem, oldF);
@@ -970,6 +1159,26 @@ void HealthPanel_Draw(HWND hwnd)
 ** Context menu (right-click on the panel area, forwarded from the toolbar's
 ** NM_RCLICK in PDW.cpp). Returns TRUE when the click was on the panel strip.
 ** ---------------------------------------------------------------------------*/
+/* FIX [HealthClickConfig]: left-click on a panel entry opens its config dialog.
+** Hit-tests the hover rects captured during the last Draw (main-window client
+** coords, same space as the forwarded click) and posts the slot's WM_COMMAND.
+** Returns TRUE when a clickable entry was hit (caller suppresses default). */
+BOOL HealthPanel_OnToolbarLClick(HWND hMain, POINT ptMainClient)
+{
+	int i;
+	if (!Profile.nHealthPanelVisible || !s_lastValid || !HealthPanel_Active())
+		return FALSE;
+	for (i = 0; i < HP_TIP_SLOTS; i++)
+	{
+		if (s_slotCmd[i] && s_tipText[i][0] && PtInRect(&s_tipRect[i], ptMainClient))
+		{
+			PostMessage(hMain, WM_COMMAND, MAKEWPARAM(s_slotCmd[i], 0), 0);
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 BOOL HealthPanel_OnToolbarRClick(HWND hMain, POINT ptMainClient)
 {
 	HPLAYOUT lo;
@@ -1091,6 +1300,9 @@ void HealthPanel_Free(void)
 	if (s_penThresh) { DeleteObject(s_penThresh); s_penThresh = NULL; }
 	if (s_penRingO)  { DeleteObject(s_penRingO);  s_penRingO  = NULL; }
 	if (s_penWhiteBar) { DeleteObject(s_penWhiteBar); s_penWhiteBar = NULL; }
+	if (s_penFillG)  { DeleteObject(s_penFillG);  s_penFillG  = NULL; }	// FIX [HealthSparkFill]
+	if (s_penFillO)  { DeleteObject(s_penFillO);  s_penFillO  = NULL; }
+	if (s_penFillR)  { DeleteObject(s_penFillR);  s_penFillR  = NULL; }
 	if (s_penGreen)  { DeleteObject(s_penGreen);  s_penGreen  = NULL; }
 	if (s_penOrange) { DeleteObject(s_penOrange); s_penOrange = NULL; }
 	if (s_penRed)    { DeleteObject(s_penRed);    s_penRed    = NULL; }

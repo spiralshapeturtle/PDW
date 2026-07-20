@@ -31,6 +31,7 @@ void HealthPanel_OnSecond(void);         /* 1 Hz: sample active score into trend
 ** high-frequency needle path. */
 BOOL HealthPanel_Active(void);
 BOOL HealthPanel_OnToolbarRClick(HWND hMain, POINT ptMainClient); /* context menu     */
+BOOL HealthPanel_OnToolbarLClick(HWND hMain, POINT ptMainClient); /* FIX [HealthClickConfig]: open feed config */
 void HealthPanel_OnDisplayChange(void);  /* drop cached DDB/pens after display/DPI change */
 void HealthPanel_Free(void);             /* delete all cached GDI objects             */
 
