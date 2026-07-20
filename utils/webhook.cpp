@@ -28,6 +28,7 @@
 #include "..\headers\initapp.h"
 #include "webhook.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store
 
 extern TCHAR szPath[];          // from Initapp.cpp — PDW executable directory
 
@@ -134,6 +135,7 @@ static HWND g_hStatusWnd = NULL;   // protected by g_cs
 static void PostStatus(int status, LPARAM lp)
 {
     HWND hWnd;
+    FeedStatus_Set(FEED_WEBHOOK, status);   // FIX [FeedStatus]: pollable last outcome for the Health panel
     EnterCriticalSection(&g_cs);
     hWnd = g_hStatusWnd;
     LeaveCriticalSection(&g_cs);
@@ -606,6 +608,7 @@ static BOOL DoSend(const WebhookJob *job)
         // token in the path/query (Discord/Slack/Home-Assistant), so writing it to
         // _webhook.log would persist a replayable credential (CLAUDE.md: no secrets).
         WriteLog("ERROR   URL parse failed");
+        FeedStatus_SetDetail(FEED_WEBHOOK, "URL parse failed");   // FIX [FeedLastError]
         PostStatus(WHS_ERROR, 0);
         return FALSE;   // FIX [FlushBounded]: unusable URL - nothing in the queue can be delivered
     }
@@ -627,6 +630,7 @@ static BOOL DoSend(const WebhookJob *job)
                 WriteLog("LOST    shutdown during retry - message dropped");
                 return FALSE;   // FIX [FlushBounded]: transport failed + shutdown in progress
             }
+            FeedStatus_SetDetail(FEED_WEBHOOK, "transport error - retry %d/%d", attempt, MAX_RETRIES);   // FIX [FeedLastError]
             PostStatus(WHS_RETRY, attempt);
             WriteLog("RETRY   %d/%d", attempt, MAX_RETRIES);
             Sleep(g_retryDelays[attempt - 1]);
@@ -647,6 +651,7 @@ static BOOL DoSend(const WebhookJob *job)
             // HTTP error (e.g. 4xx/5xx) - server reachable but rejected; no point retrying.
             // FIX [WebhookUrlSecret]: log outcome only, never the URL (embeds token).
             WriteLog("ERROR   POST -> HTTP %d", httpStatus);
+            FeedStatus_SetDetail(FEED_WEBHOOK, "endpoint rejected POST (HTTP %d)", httpStatus);   // FIX [FeedLastError]
             PostStatus(WHS_ERROR, httpStatus);
             return TRUE;   // FIX [FlushBounded]: endpoint alive (fast definitive answer) - keep flushing
         }
@@ -654,6 +659,7 @@ static BOOL DoSend(const WebhookJob *job)
     }
 
     WriteLog("ERROR   all retries failed (transport error)");
+    FeedStatus_SetDetail(FEED_WEBHOOK, "transport error - all retries failed");   // FIX [FeedLastError]
     PostStatus(WHS_ERROR, 0);
     return FALSE;   // FIX [FlushBounded]
 }
@@ -974,6 +980,7 @@ void WebhookFlushGroup(int groupbit)
     {
         // FIX [QueueDropVisible]: log outside g_cs, always post the error status.
         WriteLog("DROP    queue full - message discarded (total dropped=%u)", g_droppedJobs);
+        FeedStatus_SetDetail(FEED_WEBHOOK, "queue full - message dropped (total %u)", g_droppedJobs);   // FIX [FeedLastError]
         PostStatus(WHS_ERROR, 0);
     }
 }

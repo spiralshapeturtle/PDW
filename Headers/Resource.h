@@ -561,6 +561,10 @@
 #define IDC_RXQA_MIN              1404
 #define IDC_RXQA_COOL             1405
 #define IDC_RXQA_WARN             1406
+#define IDC_RXQA_COM_EN           1407
+#define IDC_RXQA_COM_MIN          1408
+#define IDC_RXQA_COM_COOL         1409
+#define IDC_RXQA_THRLINE          1410
 
 // FIX [MySQLFeed]: MySQL output feed dialog (utils/mysql.cpp)
 #define MYSQL_DLGBOX              136

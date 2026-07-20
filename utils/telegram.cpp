@@ -37,6 +37,7 @@
 #include "..\headers\initapp.h"
 #include "telegram.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -155,6 +156,7 @@ static volatile BOOL   g_bChatIdsDirty = FALSE;
 static void PostStatus(int status, LPARAM lp)
 {
     HWND hWnd;
+    FeedStatus_Set(FEED_TELEGRAM, status);   // FIX [FeedStatus]: pollable last outcome for the Health panel
     EnterCriticalSection(&g_cs);
     hWnd = g_hStatusWnd;
     LeaveCriticalSection(&g_cs);
@@ -509,6 +511,7 @@ static BOOL SendToChat(const char *token, const char *chatId, const char *htmlTe
                 WriteLog("LOST    chat_id=%s shutdown during retry - message dropped", chatId);
                 return FALSE;
             }
+            FeedStatus_SetDetail(FEED_TELEGRAM, "transport error - retrying (attempt %d)", attempt);   // FIX [FeedLastError]
             PostStatus(TGS_RETRY, attempt);
         }
 
@@ -533,6 +536,7 @@ static BOOL SendToChat(const char *token, const char *chatId, const char *htmlTe
                 waitMs = (DWORD)(ra * 1000);
             }
             WriteLog("RATE    chat_id=%s 429 retry_after=%llds", chatId, (LONGLONG)(waitMs / 1000));
+            FeedStatus_SetDetail(FEED_TELEGRAM, "rate limited (HTTP 429)");   // FIX [FeedLastError]
             PostStatus(TGS_RETRY, attempt + 1);
             if (!g_bRunning)
             {
@@ -580,6 +584,7 @@ static BOOL SendToChat(const char *token, const char *chatId, const char *htmlTe
         {
             // 4xx (bot blocked, kicked from group, bad token) — no point retrying.
             WriteLog("ERROR   chat_id=%s -> HTTP %d", chatId, status);
+            FeedStatus_SetDetail(FEED_TELEGRAM, "API rejected message (HTTP %d)", status);   // FIX [FeedLastError]
             PostStatus(TGS_ERROR, status);
             return TRUE;   // FIX [FlushBounded]: endpoint alive (fast definitive answer)
         }
@@ -594,6 +599,7 @@ static BOOL SendToChat(const char *token, const char *chatId, const char *htmlTe
         InterruptibleSleep(g_retryDelays[attempt]);
     }
     WriteLog("ERROR   chat_id=%s all retries failed", chatId);
+    FeedStatus_SetDetail(FEED_TELEGRAM, "transport error - all retries failed");   // FIX [FeedLastError]
     PostStatus(TGS_ERROR, 0);
     return FALSE;   // FIX [FlushBounded]
 }
@@ -852,6 +858,7 @@ static void EnqueueJob(const TelegramJob *job)
         // disk I/O and this runs on the GUI thread) and ALWAYS post the error status - with
         // LogToFile off the drop was previously completely invisible to the operator.
         WriteLog("DROP queue full - message discarded (total dropped=%u)", nDropped);
+        FeedStatus_SetDetail(FEED_TELEGRAM, "queue full - message dropped (total %u)", nDropped);   // FIX [FeedLastError]
         PostStatus(TGS_ERROR, 0);
     }
 }

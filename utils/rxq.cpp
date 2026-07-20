@@ -47,6 +47,18 @@ static uint64_t  g_addressErrors = 0;    /* statistics only */
 static volatile double g_rxQualityEMA = 99.5;    /* p2kflex initial value */
 static char            g_rxqTrend     = 0;       /* '+', '-' or 0 */
 
+/* FIX [HealthSource]: TRUE once the EMA has really been recomputed from
+** decoded data (first Rxq_UpdateTimeBased call). Read-only flag for the GUI
+** Health panel/source; no effect on the p2kflex-parity algorithm above. */
+static volatile int    g_rxqHasData   = 0;
+
+/* FIX [HealthRxqStale]: tick of the last real EMA recompute. The EMA only
+** updates on decoded frames, so on dead air it freezes at its last value;
+** HealthSource.cpp uses this tick to detect that staleness. Read-only
+** instrumentation - no effect on the p2kflex-parity algorithm or wire score.
+** (64-bit volatile: a torn read on Win32 is accepted, see header comment.) */
+static volatile ULONGLONG g_rxqLastUpdateMs = 0;
+
 /* ---------------------------------------------------------------------------
 ** Bucket shift — verbatim from p2kflexDecoder Decode.cpp:188-206
 ** When bucket[0] fills up, slide all buckets down and halve historical
@@ -153,6 +165,8 @@ void Rxq_UpdateTimeBased(void)
 
     if (newEMA >= 99.9) newEMA = 100.0;
     g_rxQualityEMA = newEMA;
+    g_rxqHasData   = 1;    /* FIX [HealthSource]: first real measurement done */
+    g_rxqLastUpdateMs = GetTickCount64();    /* FIX [HealthRxqStale] */
 
     /* Trend — exact match to p2kflex behavior: ANY delta tips +/-. */
     if      (newEMA > oldEMA) g_rxqTrend = '+';
@@ -167,7 +181,11 @@ void Rxq_Reset(void)
     g_addressErrors = 0;
     g_rxQualityEMA  = 99.5;
     g_rxqTrend      = 0;
+    g_rxqHasData    = 0;    /* FIX [HealthSource] */
+    g_rxqLastUpdateMs = 0;  /* FIX [HealthRxqStale] */
 }
 
 double Rxq_GetEMA(void)   { return g_rxQualityEMA; }
 char   Rxq_GetTrend(void) { return g_rxqTrend; }
+int    Rxq_HasData(void)  { return g_rxqHasData; }    /* FIX [HealthSource] */
+unsigned long long Rxq_LastUpdateTick(void) { return g_rxqLastUpdateMs; }    /* FIX [HealthRxqStale] */

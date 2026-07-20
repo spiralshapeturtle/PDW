@@ -15,7 +15,8 @@
    - 4.3 [Discriminatortap](#43-discriminatortap)
 5. [Hoofdvenster](#5-hoofdvenster)
    - 5.1 [Signaalmeter / RX Kwaliteitsbalk](#51-signaalmeter--rx-kwaliteitsbalk)
-   - 5.2 [Berichtkolommen](#52-berichtkolommen)
+   - 5.2 [Health-paneel](#52-health-paneel)
+   - 5.3 [Berichtkolommen](#53-berichtkolommen)
 6. [Bestandsmenu](#6-bestandsmenu)
 7. [Monitormenu](#7-monitormenu)
    - 7.1 [Statistiekenvenster](#71-statistiekenvenster)
@@ -36,7 +37,7 @@
     - 10.4 [Telnetserver](#104-telnetserver)
     - 10.5 [MySQL-uitvoer](#105-mysql-uitvoer)
     - 10.6 [SQLite-uitvoer](#106-sqlite-uitvoer)
-    - 10.7 [RX Kwaliteitsmelding](#107-rx-kwaliteitsmelding)
+    - 10.7 [Systeemmeldingen](#107-systeemmeldingen)
     - 10.8 [Logbestanden en schrijfbuffering](#108-logbestanden-en-schrijfbuffering)
     - 10.9 [Programmaopties](#109-programmaopties)
 11. [Weergavemenu](#11-weergavemenu)
@@ -141,7 +142,33 @@ Het hoofdvenster toont een scrollende lijst van gedecodeerde berichten. Elke rij
 
 De balk rechts in de werkbalk toont de huidige ontvangstqualiteit als percentage (0-100 %). Een hogere waarde betekent een schoner signaal.
 
-### 5.2 Berichtkolommen
+### 5.2 Health-paneel
+
+Rechts op de werkbalkband kan een compacte statusstrip staan. Dit is een echte omschakeling met de klassieke hoek: zolang het health-paneel zichtbaar is **vervangt** het de signaalmeter en het RX-Q-percentagevak, zodat niets dubbel wordt getoond; verberg het paneel (rechtsklikmenu) en de klassieke naald + RX-Q-hoek komen exact terug zoals voorheen. Van links naar rechts:
+
+- **Health-score** — de actieve ontvangstqualiteitsscore (0-100 %) in groen (>= 96 %), oranje of rood (onder de drempel van de e-mailmelding). `--%` betekent nog geen meting.
+- **Trendgrafiekje** — de score over de laatste 1, 5, 15 of 60 minuten, getekend in statuskleuren: een gezonde periode is een dikke groene lijn, verslechtering toont oranje en tijd onder de meldingsdrempel toont rood. Een dun gestippeld lijntje markeert de meldingsdrempel zelf, zodat je ziet hoeveel marge de score nog heeft voordat de melding zou afgaan. De grafiek vult van rechts (nieuwste seconde rechts), dus kort na de start staat er alleen rechts al een lijn.
+- **COM-stip** — alleen als seriële invoer aanstaat: groen = poort open en data komt binnen, oranje ring = open maar geen data, rode schijf met streepje = poort niet open.
+- **Feed-stippen** — een stip + tag per **ingeschakelde** uitvoerfeed (`SM` SMTP, `WH` webhook, `TG` Telegram, `PO` Pushover, `MQ` MQTT, `MY` MySQL, `SQ` SQLite, `TS` telnetserver). Groen = geen bekend probleem — dat geldt ook voor "ingeschakeld maar nog niets afgeleverd", dus de per-bericht-feeds (webhook, Telegram, Pushover, SMTP) zijn vanaf de start groen, ook als hun eerste push dagen op zich laat wachten. Oranje = bezig met opnieuw proberen na een tijdelijk probleem, rood = laatste aflevering of verbinding mislukt. Voor kleurenblind-leesbaarheid verschillen de statussen ook in vorm: opnieuw proberen tekent als een holle **ring**, mislukt als een gevulde schijf met een klein **"min"-streepje**, gezond als een gewone gevulde schijf. Uitgeschakelde feeds worden niet getoond. De verbindingsgerichte feeds (MQTT, MySQL, telnetserver) volgen de verbinding live: rood zolang de broker/server onbereikbaar is, weer groen zodra de verbinding hersteld is.
+
+De feed-stip toont de laatste **uitkomst**, vastgehouden: een verzending die alleen maar bezig is verandert de stip nooit (een kapotte feed knippert dus niet groen aan het begin van elke poging), en een retry verlaagt een rode stip nooit terug naar oranje — alleen een echte geslaagde aflevering of verbinding maakt de stip weer groen.
+
+**Beweeg de muis** over een onderdeel voor uitleg: de score noemt zijn actieve bron, het grafiekje zijn venster en meldingsniveau, de COM-stip de linkstatus, en elke feed-stip zijn volledige status inclusief het **laatste probleem** en het tijdstip van de statuswissel, bijv. `Telegram: FAILED since 14:02 - API rejected message (HTTP 401)`.
+
+Elke status**wissel** — feed-stippen en COM-link — wordt bovendien weggeschreven naar een dagelijks logbestand `{datum}_health.log` in de ingestelde logmap (één regel per overgang, bijv. `TG (Telegram): OK -> FAILED - API rejected message (HTTP 401)`). Stabiele statussen schrijven niets, dus het bestand blijft klein; gebruik het om een probleem te onderzoeken dat zichzelf oploste terwijl je weg was. De allereerste succesvolle poging van een feed na opstarten (`idle -> OK`) is geen probleem en wordt niet gelogd; elke overgang die wél een echt probleem betreft (naar retrying/failed, en het herstel terug naar OK) blijft gewoon loggen.
+
+**Rechtsklik op het paneel** voor het menu:
+
+| Item | Beschrijving |
+|------|--------------|
+| Health source: RX needle (classic) | Dezelfde score als het RX-Q-vak rechtsboven (standaard) |
+| Health source: Penalty system | Strengere score die direct daalt bij fouten en langzaam herstelt |
+| Trend window | Venster van het trendgrafiekje: 1 / 5 / 15 / 60 minuten |
+| Hide/Show health panel | Paneel verbergen of tonen (rechtsklik op dezelfde plek om het terug te halen) |
+
+De gekozen health-bron voedt ook de **RX Kwaliteitsmelding** per e-mail (zie paragraaf 10.7): wissel je de bron, dan wisselt ook waar de melding op reageert. Met de Penalty-system-bron zakt de score naar 0 % als er ongeveer twee minuten niets decodeerbaars is ontvangen (dode ether), zodat een ontvanger die stilvalt rood toont in plaats van zijn laatste gezonde waarde vast te houden; op netwerken met legitieme pauzes van meerdere minuten tussen uitzendingen dipt deze bron dus tussen de uitzendingen door, en is de klassieke naald-bron daar de betere keuze. Bij een smal venster laat het paneel eerst de labels vallen, dan het grafiekje; past zelfs dat niet, dan verschijnt de klassieke hoek tot er weer ruimte is. Instellingen staan in `pdw.ini` onder `[HealthPanel]`.
+
+### 5.3 Berichtkolommen
 
 | Kolom | Inhoud |
 |-------|--------|
@@ -693,11 +720,11 @@ De kolomnamen en inhoud zijn identiek aan het MySQL Geoptimaliseerd schema; de e
 
 Klik op **Test** in het dialoogvenster om te verifiëren dat het bestand kan worden geopend. De database kan worden bekeken met een SQLite-browser (bijv. DB Browser for SQLite).
 
-### 10.7 RX Kwaliteitsmelding
+### 10.7 Systeemmeldingen
 
-Configureer via **Opties → RX Kwaliteitsmelding**.
+Configureer via **Opties → Systeemmeldingen**. Dit ene dialoogvenster bevat twee onafhankelijke e-mailmeldingen die dezelfde ontvangerlijst delen: de **RX-kwaliteitsmelding** en de **COM-verbindingsmelding**.
 
-Verstuurt een e-mailmelding wanneer de ontvangstqualiteit gedurende een aanhoudende periode onder een drempel blijft.
+**RX-kwaliteitsmelding** - verstuurt een e-mailmelding wanneer de ontvangstqualiteit gedurende een aanhoudende periode onder een drempel blijft.
 
 | Instelling | Standaard | Beschrijving |
 |------------|-----------|--------------|
@@ -707,6 +734,19 @@ Verstuurt een e-mailmelding wanneer de ontvangstqualiteit gedurende een aanhoude
 | Afkoeltijd | 120 min | Minimale tijd tussen herhaalde meldingen |
 
 Gebruikt dezelfde SMTP-instellingen als op filters gebaseerde meldingen. Het ontvangeradres kan apart worden geconfigureerd van het filtermailontvanger.
+
+De kwaliteitswaarde die de melding bewaakt is de **actieve health-bron** die op het Health-paneel in de werkbalk is gekozen (zie paragraaf 5.2): de klassieke RX-Q-score (standaard) of de strengere Penalty-system-score. De bron wisselen op het paneel wisselt direct wat de melding meet; de meldingsmail vermeldt de gebruikte bron. Let op het verschil bij totale radiostilte: de Penalty-system-score zakt na ongeveer twee minuten zonder iets decodeerbaars naar 0 %, zodat een stilgevallen ontvanger de melding wel degelijk triggert; de klassieke RX-Q-score verandert alleen als er gedecodeerd wordt en houdt bij dode ether zijn laatste waarde vast - gebruik bij die bron de COM-stip op het paneel om een dode seriële verbinding te zien.
+
+**COM-verbindingsmelding (alleen seriële invoer).** De tweede melding in hetzelfde dialoogvenster bewaakt de seriële verbinding zelf in plaats van de decodeerkwaliteit. Hij verstuurt een e-mail wanneer seriële (COM) invoer aanstaat maar er gedurende een instelbaar aantal minuten geen data is ontvangen. Dit vangt het geval dat de kwaliteitsmelding met de klassieke bron kan missen: als de seriële invoer volledig wegvalt (adapter losgekoppeld, of een Moxa NPort waarvan de netwerktunnel wegvalt) bevriest de klassieke RX-Q-score alleen maar en triggert hij nooit - de COM-verbindingsmelding vangt precies dat. Hij herstelt automatisch zodra er weer data binnenkomt en mailt hooguit eens per afkoeltijd zolang de verbinding weg blijft.
+
+Vink **Enable COM link-lost alert** aan in het dialoogvenster en stel de twee waarden in:
+
+| Instelling | Standaard | Beschrijving |
+|------------|-----------|--------------|
+| Alert after no serial data for | 3 min | Hoe lang zonder seriële data voordat de eerste melding komt |
+| Suppress repeated alerts for | 120 min | Minimale tijd tussen herhaalde meldingen |
+
+Hij hergebruikt de ontvangerlijst en SMTP-host van de RX-kwaliteitsmelding (beide meldingen mailen naar dezelfde ontvangers). De instellingen worden in `pdw.ini` bewaard onder `[ComLinkAlert]` (`Enabled`, `Minutes`, `Cooldown`). Alleen actief bij seriële (COM) invoer; wordt genegeerd bij geluidskaartinvoer. Omdat een Moxa NPort de virtuele COM-poort open houdt wanneer de netwerkzijde wegvalt, ziet PDW dan "open maar geen data" (de COM-stip wordt oranje, niet rood); de melding behandelt zowel "open maar geen data" als "poort niet open" als een weggevallen verbinding.
 
 ### 10.8 Logbestanden en schrijfbuffering
 

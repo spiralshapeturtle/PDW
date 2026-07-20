@@ -325,6 +325,8 @@
 #include "utils\logmanager.h"
 #include "RxQualAlertDlg.h"		// FIX [RxQualAlert]
 #include "RxQualMonitor.h"		// FIX [RxQualAlert]
+#include "HealthSource.h"		// FIX [HealthSource]
+#include "HealthPanel.h"		// FIX [HealthPanel]
 #include "utils\winrt_toast.h"  // FIX [WinRTToast]: WinRT Toast API — Action Center notificaties
 
 #include "headers\helper_funcs.h"	// Extra functies van Andreas
@@ -611,6 +613,19 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.nRxQualMinutes      = 15;
 	Profile.nRxQualCooldown     = 120;
 
+	// FIX [ComLinkAlert]: COM link-lost e-mail alert defaults (opt-in; reuses the
+	// RX-quality recipient + SMTP host). Shorter grace than the quality alert - a
+	// serial dropout is black/white, but allow a few minutes for a slow Moxa reopen.
+	Profile.bComLinkAlertEnabled = false;
+	Profile.nComLinkMinutes      = 3;
+	Profile.nComLinkCooldown     = 120;
+
+	// FIX [HealthPanel]/[HealthSource]: toolbar Health panel defaults
+	Profile.nHealthPanelVisible = 1;
+	Profile.nHealthSource       = HEALTH_SRC_NEEDLE;	// classic score = backward compatible
+	Profile.nHealthSparkMin     = 5;
+	Profile.nHealthThreshLine   = 0;	// FIX [HealthSparkThreshold]: opt-in via System Alerts dialog
+
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
 	Profile.ShowFragMarker		= 0;	// FIX [FragMarkerOptional]: '*' fragment marker off by default
@@ -651,7 +666,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.percent			= 65;	// Set pane1 to 65% of client area
 
 	// setup default font information
-	Profile.fontInfo.lfHeight			= -11;
+	Profile.fontInfo.lfHeight			= -16;	// FIX [DefaultFontConsolas]: 12pt @ 96-DPI baseline
 	Profile.fontInfo.lfWidth			= 0;
 	Profile.fontInfo.lfEscapement		= 0;
 	Profile.fontInfo.lfOrientation		= 0;
@@ -664,7 +679,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.fontInfo.lfClipPrecision	= CLIP_DEFAULT_PRECIS;
 	Profile.fontInfo.lfQuality			= DEFAULT_QUALITY;
 	Profile.fontInfo.lfPitchAndFamily	= FIXED_PITCH | FF_MODERN;
-	lstrcpy(Profile.fontInfo.lfFaceName, "Courier New");
+	lstrcpy(Profile.fontInfo.lfFaceName, "Consolas");	// FIX [DefaultFontConsolas]
 
 	Profile.reverse_msg = FALSE;	// Flag to reverse message output.
 	Profile.lang_mi_index = 0;		// Set default language menu item.
@@ -869,6 +884,7 @@ void Free_Common_Objects(void)
 	FreeSysObjects();				// see gfx.cpp
 	FreeLogFONTS();					// see gfx.cpp
 	FreeSigInd();					// see sigind.cpp
+	HealthPanel_Free();				// FIX [HealthPanel]: pens/brushes/back-buffer
 	FreeToolBarImages(ghInstance);	// Free toolbar button bitmaps
 }
 
@@ -1009,7 +1025,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				// (that was many redraws/sec; this is one). Also keeps the divider continuous under the
 				// gauge as a belt-and-suspenders for [SigindDividerClip].
 				PdwResyncToolbarLayout();	// FIX [ToolbarResync]: heal RDP/theme toolbar-height drift before repaint
-				DrawTitleBarGfx(ghWnd);
+				HealthPanel_OnSecond();		// FIX [HealthPanel]: sample the active health score into the trend ring
+				DrawTitleBarGfx(ghWnd);		// (also repaints the Health panel via PANEHEALTH)
 
 				lTime = time(NULL);		// Get current systemtime
 				// FIX [F3]: (unsigned long) overloopt na ~49 dagen; gebruik unsigned long long
@@ -1068,6 +1085,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 				case RXQUAL_TIMER:	// FIX [RxQualAlert]: RX quality monitor tick
 				RxQualMonitor_OnTimer();
+				ComLinkMonitor_OnTimer();	// FIX [ComLinkAlert]: same 60 s tick, watches the serial link
 				break;
 
 				case CLICK_TIMER:	// Handle click timer
@@ -1145,6 +1163,25 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			SetToolTXT(ghInstance, lParam);
 			break;
 
+			// FIX [HealthPanel]: right-click on the toolbar band. The comctl32 toolbar
+			// child covers the whole band, so the parent never sees WM_RBUTTONDOWN
+			// there; the toolbar forwards it as NM_RCLICK with the click position in
+			// toolbar-client coordinates. Map to main-client and hit-test the panel.
+			case NM_RCLICK:
+			if (((LPNMHDR)lParam)->hwndFrom == hToolbar)
+			{
+				POINT pt = ((LPNMMOUSE)lParam)->pt;
+				MapWindowPoints(hToolbar, hWnd, &pt, 1);
+				if (HealthPanel_OnToolbarRClick(hWnd, pt))
+				{
+					DrawSigInd(hWnd);	// heal the corner after the menu overlapped it
+					DrawPaneLabels(hWnd, PANERXQUAL | PANEHEALTH);
+					return TRUE;		// handled - suppress default processing
+				}
+			}
+			// not on the panel: fall through to the default band self-heal
+			// (deliberate fallthrough)
+
 			default:
 			// FIX [NotifyRedraw]: toolbar hot-track/hover notifies arrive in bursts.
 			// The toolbar repaint only overdraws the parent-drawn graphics that lie ON
@@ -1153,7 +1190,7 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			// both header rows below the toolbar for nothing - visible as flicker when
 			// hovering the toolbar buttons.
 			DrawSigInd(hWnd); // Draw the signal indicator
-			DrawPaneLabels(hWnd, PANERXQUAL);
+			DrawPaneLabels(hWnd, PANERXQUAL | PANEHEALTH);	// FIX [HealthPanel]: hover repaint overdraws the panel too
 			break;
 		}
 		break;
@@ -2361,8 +2398,9 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		// corner so the fix is visible immediately.
 		ReloadSigInd(ghInstance);
 		ReloadExclamBitmap();
+		HealthPanel_OnDisplayChange();	// FIX [HealthPanel]: drop cached DDB/pens for the new display
 		DrawSigInd(hWnd);
-		DrawPaneLabels(hWnd, PANERXQUAL);
+		DrawPaneLabels(hWnd, PANERXQUAL | PANEHEALTH);
 		PdwScheduleToolbarResync(hWnd);
 		return (DefWindowProc(hWnd, uMsg, wParam, lParam));
 
@@ -11949,7 +11987,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->fontInfo.lfQuality		=(BYTE) GetPrivateProfileInt(lpszAppTitle, TEXT("Font.Quality"), (INT) pProfile->fontInfo.lfQuality, lpszIniPathName);
 	pProfile->fontInfo.lfPitchAndFamily	=(BYTE) GetPrivateProfileInt(lpszAppTitle, TEXT("Font.PitchAndFamily"), (INT) pProfile->fontInfo.lfPitchAndFamily, lpszIniPathName);
 
-	GetPrivateProfileString(lpszAppTitle, TEXT("Font.FaceName"),"Courier New", pProfile->fontInfo.lfFaceName, LF_FACESIZE, lpszIniPathName);
+	GetPrivateProfileString(lpszAppTitle, TEXT("Font.FaceName"),"Consolas", pProfile->fontInfo.lfFaceName, LF_FACESIZE, lpszIniPathName);	// FIX [DefaultFontConsolas]
 
 	GetPrivateProfileString(lpszAppTitle, TEXT("Color.Background"), "", color_str, 13, lpszIniPathName);
 	if (sscanf(color_str, "%d,%d,%d", &red, &green, &blue) == 3) pProfile->color_background = RGB(red, green, blue);
@@ -12199,6 +12237,23 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->nRxQualMinutes   = (INT) GetPrivateProfileInt("RxQualAlert", "Minutes",   15,  lpszIniPathName);
 	pProfile->nRxQualCooldown  = (INT) GetPrivateProfileInt("RxQualAlert", "Cooldown",  120, lpszIniPathName);
 	RxQualMonitor_Reset();
+
+	// FIX [ComLinkAlert]: COM link-lost e-mail alert settings (reuses [RxQualAlert] MailTo + SMTP host)
+	pProfile->bComLinkAlertEnabled = (bool) GetPrivateProfileInt("ComLinkAlert", "Enabled",  0,   lpszIniPathName);
+	pProfile->nComLinkMinutes      = (INT)  GetPrivateProfileInt("ComLinkAlert", "Minutes",  3,   lpszIniPathName);
+	pProfile->nComLinkCooldown     = (INT)  GetPrivateProfileInt("ComLinkAlert", "Cooldown", 120, lpszIniPathName);
+	if (pProfile->nComLinkMinutes  < 1) pProfile->nComLinkMinutes  = 1;
+	if (pProfile->nComLinkCooldown < 0) pProfile->nComLinkCooldown = 0;
+	ComLinkMonitor_Reset();
+
+	// FIX [HealthPanel]/[HealthSource]: toolbar Health panel settings
+	pProfile->nHealthPanelVisible = (INT) GetPrivateProfileInt("HealthPanel", "Visible",      1, lpszIniPathName);
+	pProfile->nHealthSource       = (INT) GetPrivateProfileInt("HealthPanel", "Source",       0, lpszIniPathName);
+	pProfile->nHealthSparkMin     = (INT) GetPrivateProfileInt("HealthPanel", "SparkMinutes", 5, lpszIniPathName);
+	pProfile->nHealthThreshLine   = (INT) GetPrivateProfileInt("HealthPanel", "ThresholdLine", 0, lpszIniPathName);	// FIX [HealthSparkThreshold]
+	if (pProfile->nHealthSource != HEALTH_SRC_TELNET) pProfile->nHealthSource = HEALTH_SRC_NEEDLE;
+	if (pProfile->nHealthSparkMin < 1)  pProfile->nHealthSparkMin = 1;
+	if (pProfile->nHealthSparkMin > 60) pProfile->nHealthSparkMin = 60;
 
 	pProfile->bDebugLog           = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),        0,    lpszIniPathName);
 	pProfile->logBufferEnabled    = (INT) GetPrivateProfileInt("Logging", TEXT("BufferEnabled"),    0,    lpszIniPathName);
@@ -12868,6 +12923,19 @@ void WriteSettings()
 		fprintf(pFile, "Recover=%i\n",   Profile.nRxQualRecover);
 		fprintf(pFile, "Minutes=%i\n",   Profile.nRxQualMinutes);
 		fprintf(pFile, "Cooldown=%i\n",  Profile.nRxQualCooldown);
+
+		// FIX [ComLinkAlert]: COM link-lost alert (recipient/host shared with [RxQualAlert])
+		fprintf(pFile, "\n[ComLinkAlert]\n");
+		fprintf(pFile, "Enabled=%i\n",  Profile.bComLinkAlertEnabled ? 1 : 0);
+		fprintf(pFile, "Minutes=%i\n",  Profile.nComLinkMinutes);
+		fprintf(pFile, "Cooldown=%i\n", Profile.nComLinkCooldown);
+
+		// FIX [HealthPanel]/[HealthSource]
+		fprintf(pFile, "\n[HealthPanel]\n");
+		fprintf(pFile, "Visible=%i\n",      Profile.nHealthPanelVisible);
+		fprintf(pFile, "Source=%i\n",       Profile.nHealthSource);
+		fprintf(pFile, "SparkMinutes=%i\n", Profile.nHealthSparkMin);
+		fprintf(pFile, "ThresholdLine=%i\n", Profile.nHealthThreshLine);	// FIX [HealthSparkThreshold]
 
 		fprintf(pFile, "\n[Logging]\n");
 		fprintf(pFile, "DebugLog=%i\n",          Profile.bDebugLog);

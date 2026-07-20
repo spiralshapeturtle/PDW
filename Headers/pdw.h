@@ -61,6 +61,7 @@ typedef struct
 #define PANE1		 0x01	// PH : Used in DrawPaneLabels(HWND hwnd, int pane)
 #define PANE2		 0x02	// PH : Used in DrawPaneLabels(HWND hwnd, int pane)
 #define PANERXQUAL	 0x04	// PH : Used in DrawPaneLabels(HWND hwnd, int pane)
+#define PANEHEALTH	 0x08	// FIX [HealthPanel]: toolbar Health panel (HealthPanel.cpp)
 
 #define MOBITEX_SHOW_MPAK	0x01
 #define MOBITEX_SHOW_TEXT	0x02
@@ -214,6 +215,20 @@ typedef struct
 	int  nRxQualRecover;			// reset alert when quality rises above this (default 90)
 	int  nRxQualMinutes;			// minutes below threshold before alerting (default 15)
 	int  nRxQualCooldown;			// minutes to suppress repeated alerts (default 120)
+
+	// FIX [ComLinkAlert]: serial-input (COM) link-lost e-mail alert. Fires when the
+	// serial input is enabled but the link is not receiving (Rs232LinkState() != 2:
+	// stalled OR not open) for nComLinkMinutes consecutive minutes. Reuses the RX-quality
+	// alert recipient (szRxQualMailTo) and SMTP host (szMailHost) - no separate config.
+	bool bComLinkAlertEnabled;		// 1 = mail when the COM link stops receiving (default 0)
+	int  nComLinkMinutes;			// minutes without serial data before alerting (default 3)
+	int  nComLinkCooldown;			// minutes to suppress repeated alerts (default 120)
+
+	// FIX [HealthPanel]/[HealthSource]: toolbar Health panel
+	int  nHealthPanelVisible;		// 1 = show the Health panel on the toolbar band (default 1)
+	int  nHealthSource;				// HEALTH_SRC_NEEDLE (0, classic) or HEALTH_SRC_TELNET (1)
+	int  nHealthSparkMin;			// sparkline trend window in minutes (1/5/15/60, default 5)
+	int  nHealthThreshLine;			// FIX [HealthSparkThreshold]: 1 = dotted alert-level line in the sparkline (default 0)
 
 	COLORREF color_background;
 	COLORREF color_address;

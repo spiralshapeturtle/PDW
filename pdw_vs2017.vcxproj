@@ -227,6 +227,9 @@
     <ClCompile Include="utils\winrt_toast.cpp" />
     <ClCompile Include="RxQualAlertDlg.cpp" />
     <ClCompile Include="RxQualMonitor.cpp" />
+    <ClCompile Include="HealthSource.cpp" />
+    <ClCompile Include="HealthPanel.cpp" />
+    <ClCompile Include="utils\feedstatus.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="utils\sqlite_feed.h" />
@@ -252,6 +255,9 @@
     <ClInclude Include="headers\toolbar.h" />
     <ClInclude Include="RxQualAlertDlg.h" />
     <ClInclude Include="RxQualMonitor.h" />
+    <ClInclude Include="HealthSource.h" />
+    <ClInclude Include="HealthPanel.h" />
+    <ClInclude Include="utils\feedstatus.h" />
     <ClInclude Include="openssl-0.9.8l\inc32\openssl\aes.h" />
     <ClInclude Include="openssl-0.9.8l\inc32\openssl\asn1.h" />
     <ClInclude Include="openssl-0.9.8l\inc32\openssl\asn1t.h" />

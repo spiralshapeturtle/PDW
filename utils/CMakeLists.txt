@@ -20,6 +20,7 @@ set( PDW_INCLUDES
   ${CMAKE_CURRENT_SOURCE_DIR}/sqlite_feed.h
   ${CMAKE_CURRENT_SOURCE_DIR}/logmanager.h
   ${CMAKE_CURRENT_SOURCE_DIR}/rxq.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/feedstatus.h
   ${CMAKE_CURRENT_SOURCE_DIR}/winrt_toast.h
 
   PARENT_SCOPE
@@ -46,6 +47,7 @@ set( PDW_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/sqlite/sqlite3.c
   ${CMAKE_CURRENT_SOURCE_DIR}/logmanager.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/rxq.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feedstatus.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/winrt_toast.cpp
 
   PARENT_SCOPE

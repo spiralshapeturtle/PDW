@@ -87,6 +87,16 @@ static volatile ULONGLONG g_lastDataTickMs = 0;
 // g_connectTickMs is set on every rs232_connect() and rs232_worker_reopen()
 // so the stall watchdog can suppress itself during the Moxa TCP warmup period.
 static volatile ULONGLONG g_connectTickMs  = 0;
+// FIX [Rs232LinkRealData]: clocks for Rs232LinkState() (Health-panel COM dot),
+// SEPARATE from the watchdog clocks above. g_lastDataTickMs/g_connectTickMs are
+// reset by every successful worker reopen, so on a dead-but-reopenable link
+// (Moxa with its TCP tunnel down: the virtual port opens fine, ReadFile returns
+// 0 bytes) the ~6 s reopen cycle kept the link state in its warmup branch
+// virtually forever - a green "receiving" dot on a link delivering nothing.
+// g_lastRealDataTickMs is only ever set by actually received bytes (0 = nothing
+// received this session); g_openTickMs only by the USER-initiated connect.
+static volatile ULONGLONG g_lastRealDataTickMs = 0;
+static volatile ULONGLONG g_openTickMs         = 0;
 #define RS232_STALL_MS              5000u
 #define RS232_RECONNECT_BACKOFF_MS  2000u
 // Moxa NPort needs 1-4 s after CreateFile to start delivering data.
@@ -366,6 +376,8 @@ int rs232_connect(const SLICER_IN_STR *pInSlicer, SLICER_OUT_STR *pOutSlicer)
 	m_bConnectedToComport= TRUE;
 	g_connectTickMs  = GetTickCount64();
 	g_lastDataTickMs = g_connectTickMs;
+	g_openTickMs         = g_connectTickMs;	// FIX [Rs232LinkRealData]: user-initiated open
+	g_lastRealDataTickMs = 0;				// FIX [Rs232LinkRealData]: nothing received yet this session
 	LeaveCriticalSection(&g_handleCs);
 
 	/************************************************************************************
@@ -521,6 +533,7 @@ DWORD WINAPI RxThread(LPVOID pCl)
 		ULONGLONG now = GetTickCount64();
 		if (bytesRead > 0) {
 			g_lastDataTickMs = now;
+			g_lastRealDataTickMs = now;	// FIX [Rs232LinkRealData]: real bytes, not a reopen reset
 		}
 		else if ((now - g_lastDataTickMs) > RS232_STALL_MS &&
 		         (now - g_connectTickMs)  > RS232_WARMUP_MS) {
@@ -889,4 +902,37 @@ int *FindComPorts(void)
 int GetRs232DriverType(void)
 {
 	return(m_bConnectedToComport ? (bSlicerDriver ?  DRIVER_TYPE_SLICER : DRIVER_TYPE_RS232) : DRIVER_TYPE_NOT_LOADED) ;
+}
+
+
+// FIX [HealthPanel]: GUI-thread poll of the serial link for the toolbar Health
+// panel.
+//   0 = COM port not open
+//   1 = open, but no data for > RS232_STALL_MS (stalled) or never any data
+//       past the initial warmup grace
+//   2 = open and receiving (or still inside the post-OPEN warmup grace)
+// FIX [Rs232LinkRealData]: judged by REAL received data only. The first version
+// read the stall watchdog's own clocks (g_lastDataTickMs/g_connectTickMs), but a
+// successful worker reopen resets BOTH - so on a dead-but-reopenable link the
+// watchdog's ~6 s reopen cycle kept this function inside its warmup branch
+// virtually forever, showing a green dot on a link delivering nothing. Warmup
+// grace now counts from the USER-initiated open only, and once any byte has
+// arrived the verdict follows the last real byte.
+// Cross-thread note: the tick globals are 64-bit volatiles written by RxThread;
+// on Win32 a read can theoretically tear. That is accepted here exactly as
+// utils/rxq.cpp documents for its EMA double: this is a 1 Hz status dot, a torn
+// read self-corrects on the next tick, and putting a lock on the RxThread hot
+// path is not worth that.
+int Rs232LinkState(void)
+{
+	if (!m_bConnectedToComport) return 0;
+
+	ULONGLONG now      = GetTickCount64();
+	ULONGLONG lastReal = g_lastRealDataTickMs;
+
+	if (lastReal)
+		return ((now - lastReal) < RS232_STALL_MS) ? 2 : 1;
+
+	// Nothing received since the user opened the port: Moxa warmup grace, then stalled.
+	return ((now - g_openTickMs) < RS232_WARMUP_MS) ? 2 : 1;
 }

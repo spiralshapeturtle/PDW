@@ -9,6 +9,132 @@ and misconfigured or corrupt `pdw.ini` / `filters.ini` files - so day-to-day beh
 No decoder output or configuration format changes; existing `pdw.ini` and `filters.ini` files work
 unchanged.
 
+## Default message font (FIX [DefaultFontConsolas])
+The built-in default message-display font changed from Courier New (8pt) to **Consolas 12pt**. This
+only affects a fresh install or a `pdw.ini` with no `Font.*` keys yet - anyone with an existing
+`pdw.ini` keeps whatever font they already have configured. The shipped release `pdw.ini`
+(`release-template/pdw.ini`) was updated to match (`Font.FaceName=Consolas`, `Font.Height=-16`).
+
+## Toolbar Health panel (FIX [HealthPanel]/[HealthSource]/[FeedStatus]/[FeedStatusConn]/[HealthPanelCorner]/[HealthSparkColor]/[HealthDotGreenStart]/[HealthPanelTips2]/[FeedDotLatch]/[FeedLastError]/[FeedTransitionLog]/[HealthSparkThreshold]/[HealthDotShapes])
+A new, compact status strip on the right side of the toolbar band. It is a true switchover with the
+classic corner: while the panel is shown it **replaces** the needle meter and the RX-Q percentage box
+(so nothing is displayed twice); hide the panel (right-click menu) and the classic needle + RX-Q corner
+come back exactly as before. On windows too narrow for the panel the classic corner is shown as well.
+- **Health score with colour coding.** Shows the active RX-health score (0-100%) in green/orange/red.
+  Two selectable sources: the classic RX-Q score (default, backward compatible) or the stricter
+  "Penalty system" score ("instant drop, slow recovery") that PDW already computed internally for the
+  telnet wire format - it works regardless of the telnet server being enabled.
+  Right-click the panel to switch; the choice is saved to `pdw.ini` (`[HealthPanel] Source`).
+- **The low-quality mail alert follows the selected source.** The existing RX-quality e-mail alert
+  now reads the same score the panel shows, so switching the source also switches what the alert
+  reacts to. Thresholds, hysteresis and cooldown behave exactly as before; the alert mail now also
+  names the active source.
+- **Trend sparkline.** A small graph of the health score over a configurable window (1/5/15/60
+  minutes, right-click menu; `[HealthPanel] SparkMinutes`). The line is drawn in status colours
+  (FIX [HealthSparkColor]): a healthy period is a solid green line, degradation shows as orange, and
+  below the mail-alert threshold the line turns red.
+- **COM link dot.** When serial input is enabled: green = port open and receiving, orange = open but
+  no data (stall/warmup), red = port not open.
+- **Output-feed dots.** One dot + short tag per *enabled* output feed (SMTP `SM`, webhook `WH`,
+  Telegram `TG`, Pushover `PO`, MQTT `MQ`, MySQL `MY`, SQLite `SQ`, telnet server `TS`): green = no
+  known problem (FIX [HealthDotGreenStart]: this includes "enabled but nothing delivered yet" - the
+  per-message feeds can legitimately go days before their first push), orange = retrying, red = last
+  delivery/connection failed. Disabled feeds are hidden so the strip stays compact. For the
+  connection-oriented feeds the dot also tracks the *connection itself* (FIX [FeedStatusConn]): MQTT
+  turns green as soon as the warm broker connection is established (and red while the broker is
+  unreachable), and MySQL turns green on a successful (re)connect instead of waiting for the next
+  INSERT - so the panel shows a sensible state right after startup.
+- **Hover tooltips (FIX [HealthPanelTips2]).** Every panel entry explains itself on mouse-over: the
+  score shows its active source, the sparkline its window and alert level, the COM dot the link
+  state, and each feed dot its full status (see the "last problem" item below). An earlier attempt
+  ([HealthPanelTipsDisabled]) attached a second, independent tooltip control to the toolbar with its
+  own message-subclassing hook - a fragile combination that was pulled after a crash report. The new
+  implementation registers the hover regions with the toolbar's *own* tooltip control instead (the
+  one that already serves the button tooltips), so no extra window and no second subclassing hook
+  are involved.
+- **Tooltips no longer clip off the right edge (FIX [HealthPanelTipPos]/[HealthPanelTipPos2]).** The
+  panel hugs the right window edge, so the rightmost feed tooltips are drawn to the *left* of the
+  cursor. They were still running off the screen because the bubble was measured before the tooltip
+  control had laid out the new text (so an old, too-small width was used). The tooltip is now shown
+  first, then measured, then positioned, with a hard clamp to the monitor work area - so every tip
+  stays fully on-screen regardless of how wide it is or how close to the edge the dot sits.
+- **Steady feed dots - no more green/orange/red strobing (FIX [FeedDotLatch]).** The feed dot now
+  shows the last *outcome*, not the instantaneous state of the current attempt. Previously a
+  continuously failing feed cycled on every message: a new send briefly flashed the dot green
+  ("sending"), then orange per retry, then red again. Two rules stop that: an in-flight send never
+  changes the dot (activity is not an outcome), and a retry never downgrades a red dot back to
+  orange - once red, only a real successful delivery/connection turns the dot green again.
+- **Feed dots remember what went wrong (FIX [FeedLastError]).** Each feed records a short "last
+  problem" description (e.g. `API rejected message (HTTP 401)`, `broker unreachable`, `queue full -
+  message dropped`) plus the time of the last status change. The tooltip of an orange/red dot shows
+  it: `Telegram: FAILED since 14:02 - API rejected message (HTTP 401)`. Cleared automatically on the
+  next successful delivery.
+- **Health log: status transitions on disk (FIX [FeedTransitionLog]).** Every feed status *change*
+  (and every COM link state change) is written to a new daily log file `{date}_health.log` via the
+  central log manager, e.g. `TG (Telegram): OK -> FAILED - API rejected message (HTTP 401)`. A dot
+  that was red during the night is now diagnosable the next morning even though the panel itself is
+  long green again. Steady states write nothing, so the file stays tiny.
+- **Health log: no more routine "idle -> OK" noise (FIX [HealthLogNoIdleOk]).** A feed's first
+  successful contact after startup (or after MQTT's proactive idle-reconnect) is not a failure and
+  used to log anyway, cluttering the file with harmless entries. That specific transition is now
+  skipped; every transition that involves an actual problem - going into RETRYING/FAILED, and the
+  later recovery back to OK - still logs exactly as before.
+- **Alert-threshold marker in the sparkline (FIX [HealthSparkThreshold]).** A thin dotted line marks
+  the mail-alert level inside the trend graph, so you can see how much headroom the score has before
+  the alert would fire, instead of only the colour flip.
+- **Feed/COM dot size tuned (FIX [HealthDotSize]).** Went 7px -> 10px (too small on hi-DPI/RDP) ->
+  8px, which reads as the sweet spot between the two. The layout recalculates itself around the new
+  size, and the retry ring / error "minus" bar scale with it automatically.
+- **Softer status green (FIX [HealthGreenLighter]).** The health score, sparkline and status dots now
+  use a lighter, less "heavy" green than the dark green used for on-screen message text elsewhere in
+  PDW - orange and red are unchanged. The message-text colour palette itself is untouched.
+- **Colour-blind-friendly dot shapes (FIX [HealthDotShapes]).** Status is no longer colour-only:
+  a retrying feed draws as a *ring* (hollow), a failed feed as a solid disc with a small "minus"
+  bar, healthy stays a solid disc. The COM dot uses the same coding (ring = open but no data,
+  disc + bar = not open).
+- The panel adapts to the free space (labels drop first, then the sparkline) and hides itself on very
+  narrow windows. Right-click the panel area to hide it; right-click the same spot to show it again
+  (`[HealthPanel] Visible`). Fully DPI-aware, drawn with the same GDI style as the rest of the toolbar.
+- **Dead-receiver detection for the Penalty-system source (FIX [HealthRxqStale]).** The penalty score
+  is only recomputed when frames are actually decoded, so on dead air it froze at its last (typically
+  healthy) value: a receiver that died after a healthy period kept showing a green ~100% and the
+  low-quality mail alert could never fire for this source. The Health panel and the alert now treat a
+  penalty score that has not been recomputed for 2 minutes as dead air and read 0%. The telnet wire
+  score itself is untouched (it keeps exact p2kflex parity and still freezes, like the reference
+  implementation). Note: on networks with legitimate multi-minute transmission gaps this source dips
+  to 0% between transmissions - the classic needle source is the better pick for such channels.
+- **COM dot no longer green on a dead-but-reopenable link (FIX [Rs232LinkRealData]).** The serial
+  link dot was derived from the reconnect watchdog's own clocks, and every successful automatic
+  reopen reset the "just opened" grace period - so a link that reopens fine but delivers nothing
+  (e.g. a Moxa NPort whose TCP tunnel is down: the virtual port opens, reads return 0 bytes) showed
+  a green "receiving" dot indefinitely. The dot is now judged by actually received data: the warmup
+  grace applies only after a user-initiated open, and the dot turns orange as soon as no data has
+  arrived for more than 5 seconds.
+- **Toolbar corner can no longer go blank under GDI pressure (FIX [HealthPanelFitsFail]).** If the
+  panel's off-screen back-buffer could not be created (GDI-handle exhaustion, display churn) the
+  panel drew nothing while still claiming the corner, leaving neither the panel nor the classic
+  needle/RX-Q box visible until resources recovered. The claim is now withdrawn on failure so the
+  classic corner renders again on the next repaint.
+
+## COM link-lost e-mail alert + "System Alerts" dialog (FIX [ComLinkAlert])
+A new, optional e-mail alert for the serial input, complementing the RX-quality alert. The RX-quality
+alert watches *decode quality*; on a total loss of serial data (a COM/USB adapter unplugged, or a Moxa
+NPort whose network tunnel drops) the classic RX-needle score simply freezes at its last value and the
+quality alert never fires. This alert instead watches the physical link state directly and e-mails when
+the serial input is enabled but no data has been received for a configurable number of minutes
+(default 3). It recovers automatically when data resumes, and re-mails at most once per cooldown period
+(default 120 min) while the link stays down.
+- **The old "RX Quality Alert" menu/dialog is now "System Alerts"** and holds *both* alerts (RX quality
+  and COM link-lost) in two clearly separated groups that share one recipient list. Enable the COM
+  alert with the **Enable COM link-lost alert** checkbox and set its "no serial data for" and cooldown
+  minutes - no `pdw.ini` editing required.
+- Opt-in, off by default. Reuses the RX-quality alert's recipient list and SMTP host - no separate
+  mail configuration. Settings persist in `pdw.ini` under `[ComLinkAlert]` (`Enabled`, `Minutes`,
+  `Cooldown`). Only active when serial (COM) input is enabled; ignored for sound-card input.
+- Note: a Moxa NPort keeps the virtual COM port *open* when its network side drops, so PDW sees "open
+  but no data" (the COM dot goes orange, not red) - this alert treats both "open but no data" and "port
+  not open" as the link being down.
+
 ## Output-feed & logging robustness audit
 A focused concurrency/lifetime scrub of the multi-threaded output-feed and logging machinery
 (producer/consumer ring buffers, worker-thread lifecycles, shutdown/reconfigure paths). Findings and

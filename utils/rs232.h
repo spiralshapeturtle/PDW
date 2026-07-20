@@ -29,3 +29,7 @@ EXTERN_C int CloseComPort(void) ;
 EXTERN_C int *FindComPorts(void) ;
 
 EXTERN_C int GetRs232DriverType(void) ;
+
+// FIX [HealthPanel]: serial link state for the toolbar Health panel.
+// 0 = not open, 1 = open but stalled (no data), 2 = open + receiving.
+EXTERN_C int Rs232LinkState(void) ;

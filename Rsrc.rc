@@ -106,7 +106,7 @@ BEGIN
         MENUITEM "Te&legram...",                IDM_TELEGRAM
         MENUITEM "&Pushover...",                IDM_PUSHOVER
         MENUITEM "Telnet &Server...\tCtrl-N",   IDM_TELNETSERVER
-        MENUITEM "RX &Quality Alert...",        IDM_RXQUAL_ALERT
+        MENUITEM "System &Alerts...",           IDM_RXQUAL_ALERT
         MENUITEM "&MySQL...",                   IDM_MYSQL
         MENUITEM "SQ&Lite...",                  IDM_SQLITE
         MENUITEM SEPARATOR
@@ -1001,31 +1001,46 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,288,287,44,14
 END
 
-RXQUAL_ALERT_DLGBOX DIALOG 10, 10, 316, 196
+RXQUAL_ALERT_DLGBOX DIALOG 10, 10, 316, 308
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "RX Quality Alert"
+CAPTION "System Alerts"
 FONT 8, "Verdana"
 BEGIN
-    CONTROL         "Enable RX Quality Alert",IDC_RXQA_EN,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,8,180,10
-    LTEXT           "Mail recipients (semicolon-separated):",IDC_STATIC,8,24,200,8
-    EDITTEXT        IDC_RXQA_MAILTO,8,34,296,13,ES_AUTOHSCROLL
-    LTEXT           "Tip: separate multiple addresses with ;",IDC_STATIC,8,50,200,8
-    GROUPBOX        "Thresholds",IDC_STATIC,4,62,308,98
-    LTEXT           "Alert when quality drops below:",IDC_STATIC,12,76,140,8
-    EDITTEXT        IDC_RXQA_THR,156,74,28,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "%",IDC_STATIC,188,76,12,8
-    LTEXT           "Reset alert when quality rises above:",IDC_STATIC,12,94,140,8
-    EDITTEXT        IDC_RXQA_REC,156,92,28,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "%",IDC_STATIC,188,94,12,8
-    LTEXT           "Only alert after quality is low for:",IDC_STATIC,12,112,140,8
-    EDITTEXT        IDC_RXQA_MIN,156,110,28,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "minutes",IDC_STATIC,188,112,36,8
-    LTEXT           "Suppress repeated alerts for:",IDC_STATIC,12,130,140,8
-    EDITTEXT        IDC_RXQA_COOL,156,128,28,13,ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "minutes",IDC_STATIC,188,130,36,8
-    LTEXT           "WARNING: SMTP server required - configure in SMTP/Email settings.",IDC_RXQA_WARN,8,164,296,16
-    DEFPUSHBUTTON   "OK",IDOK,208,178,44,14
-    PUSHBUTTON      "Cancel",IDCANCEL,264,178,44,14
+    LTEXT           "E-mail alerts for low signal quality and lost serial input. Both use the recipients below.",IDC_STATIC,8,8,300,8
+    LTEXT           "Mail recipients (semicolon-separated):",IDC_STATIC,8,22,200,8
+    EDITTEXT        IDC_RXQA_MAILTO,8,32,300,13,ES_AUTOHSCROLL
+    LTEXT           "Tip: separate multiple addresses with ;",IDC_STATIC,8,48,200,8
+
+    GROUPBOX        "RX quality alert",IDC_STATIC,4,60,308,124
+    CONTROL         "Enable RX quality alert",IDC_RXQA_EN,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,72,180,10
+    LTEXT           "Alert when quality drops below:",IDC_STATIC,12,88,140,8
+    EDITTEXT        IDC_RXQA_THR,156,86,28,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "%",IDC_STATIC,188,88,12,8
+    LTEXT           "Reset alert when quality rises above:",IDC_STATIC,12,104,140,8
+    EDITTEXT        IDC_RXQA_REC,156,102,28,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "%",IDC_STATIC,188,104,12,8
+    LTEXT           "Only alert after quality is low for:",IDC_STATIC,12,120,140,8
+    EDITTEXT        IDC_RXQA_MIN,156,118,28,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "minutes",IDC_STATIC,188,120,36,8
+    LTEXT           "Suppress repeated alerts for:",IDC_STATIC,12,136,140,8
+    EDITTEXT        IDC_RXQA_COOL,156,134,28,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "minutes",IDC_STATIC,188,136,36,8
+    CONTROL         "Show alert level as dotted line in the Health trend graph",IDC_RXQA_THRLINE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,152,290,10
+    LTEXT           "Follows the health source selected on the toolbar Health panel.",IDC_STATIC,12,167,294,8
+
+    GROUPBOX        "COM link-lost alert (serial input only)",IDC_STATIC,4,190,308,74
+    CONTROL         "Enable COM link-lost alert",IDC_RXQA_COM_EN,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,202,200,10
+    LTEXT           "Alert after no serial data for:",IDC_STATIC,12,218,140,8
+    EDITTEXT        IDC_RXQA_COM_MIN,156,216,28,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "minutes",IDC_STATIC,188,218,36,8
+    LTEXT           "Suppress repeated alerts for:",IDC_STATIC,12,234,140,8
+    EDITTEXT        IDC_RXQA_COM_COOL,156,232,28,13,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "minutes",IDC_STATIC,188,234,36,8
+    LTEXT           "Watches the COM link directly - catches a dead feed the quality alert can miss.",IDC_STATIC,12,250,294,8
+
+    LTEXT           "WARNING: SMTP server required - configure in SMTP/Email settings.",IDC_RXQA_WARN,8,270,300,10
+    DEFPUSHBUTTON   "OK",IDOK,208,286,44,14
+    PUSHBUTTON      "Cancel",IDCANCEL,264,286,44,14
 END
 
 MQTT_DLGBOX DIALOGEX 10, 10, 260, 292

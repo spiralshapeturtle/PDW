@@ -38,6 +38,7 @@
 #include "..\headers\pdw.h"
 #include "mysql.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -202,6 +203,7 @@ static void WriteLog(const char *fmt, ...)
 static void PostStatus(int status)
 {
     HWND hWnd;
+    FeedStatus_Set(FEED_MYSQL, status);   // FIX [FeedStatus]: pollable last outcome for the Health panel
     EnterCriticalSection(&g_cs);
     hWnd = g_hStatusWnd;
     LeaveCriticalSection(&g_cs);
@@ -1239,7 +1241,7 @@ static DWORD WINAPI MysqlWorker(LPVOID)
     // A MYSQL_MAX_QUERY (128 kB) array on the thread stack — per iteration, in two places — risked
     // a stack overflow; a single reused heap buffer is both safe and cheaper than malloc-per-row.
     char *sql = (char *)malloc(MYSQL_MAX_QUERY);
-    if (!sql) { PostStatus(MYS_ERROR); return 0; }
+    if (!sql) { FeedStatus_SetDetail(FEED_MYSQL, "out of memory (query buffer)"); PostStatus(MYS_ERROR); return 0; }   // FIX [FeedLastError]
 
     while (g_bRunning) {
         WaitForSingleObject(g_hEvent, 200);
@@ -1254,10 +1256,16 @@ static DWORD WINAPI MysqlWorker(LPVOID)
             if (g_sock == INVALID_SOCKET) {
                 nextConnectMs = GetTickCount64() + backoffMs;
                 backoffMs     = (backoffMs < 30000) ? backoffMs * 2 : 30000;
+                FeedStatus_SetDetail(FEED_MYSQL, "connect failed (%s:%d)", g_szHost, g_iPort);   // FIX [FeedLastError]
                 PostStatus(MYS_ERROR);
                 continue;
             }
             backoffMs = 1000;
+            // FIX [FeedStatusConn]: a successful (re)connect turns the Health-panel dot green
+            // immediately instead of leaving the previous connect-failure red (or the startup
+            // hollow) standing until the next INSERT, which can be hours away. Deliberately NOT
+            // via PostStatus: the config dialog keeps showing per-insert status only.
+            FeedStatus_Set(FEED_MYSQL, MYS_OK);
         }
 
         while (g_bRunning) {
@@ -1304,6 +1312,7 @@ static DWORD WINAPI MysqlWorker(LPVOID)
                 PostStatus(MYS_OK);
             } else {
                 WriteLog("INSERT FAIL  capcode=%s  %s", job.szCapcode, errMsg);
+                FeedStatus_SetDetail(FEED_MYSQL, "INSERT failed: %.80s", errMsg);   // FIX [FeedLastError]
                 PostStatus(MYS_ERROR);
 
                 /* A "MySQL error N" reply means the server is reachable but rejected THIS row

@@ -30,7 +30,8 @@ enum LogCat : uint32_t {
     LC_SMTP     = 1u << 7,   // {YYMMDD}_mail.log
     LC_TELEGRAM = 1u << 8,   // {YYMMDD}_telegram.log  // FIX [Telegram]
     LC_PUSHOVER = 1u << 9,   // {YYMMDD}_pushover.log  // FIX [Pushover]
-    LC_ALL      = 0x000003FFu
+    LC_HEALTH   = 1u << 10,  // {YYMMDD}_health.log    // FIX [FeedTransitionLog]
+    LC_ALL      = 0x000007FFu
 };
 
 // Maximum length of a single formatted log line (timestamp + tag + message).
@@ -147,5 +148,6 @@ private:
 #define PDW_SMTPLOG(fmt, ...)    LogManager::Get().Write(LC_SMTP,    fmt, ##__VA_ARGS__)
 #define PDW_TELEGRAMLOG(fmt, ...) LogManager::Get().Write(LC_TELEGRAM, fmt, ##__VA_ARGS__)
 #define PDW_PUSHOVERLOG(fmt, ...) LogManager::Get().Write(LC_PUSHOVER, fmt, ##__VA_ARGS__)
+#define PDW_HEALTHLOG(fmt, ...)   LogManager::Get().Write(LC_HEALTH,   fmt, ##__VA_ARGS__)   // FIX [FeedTransitionLog]
 
 #endif // PDW_LOGMANAGER_H

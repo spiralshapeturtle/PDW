@@ -15,7 +15,8 @@
    - 4.3 [Discriminator tap](#43-discriminator-tap)
 5. [Main window](#5-main-window)
    - 5.1 [Signal indicator / RX Quality bar](#51-signal-indicator--rx-quality-bar)
-   - 5.2 [Message columns](#52-message-columns)
+   - 5.2 [Health panel](#52-health-panel)
+   - 5.3 [Message columns](#53-message-columns)
 6. [File menu](#6-file-menu)
 7. [Monitor menu](#7-monitor-menu)
    - 7.1 [Statistics window](#71-statistics-window)
@@ -36,7 +37,7 @@
     - 10.4 [Telnet server](#104-telnet-server)
     - 10.5 [MySQL output](#105-mysql-output)
     - 10.6 [SQLite output](#106-sqlite-output)
-    - 10.7 [RX Quality Alert](#107-rx-quality-alert)
+    - 10.7 [System Alerts](#107-system-alerts)
     - 10.8 [Log files and write buffering](#108-log-files-and-write-buffering)
     - 10.9 [Program options](#109-program-options)
 11. [Display menu](#11-display-menu)
@@ -140,7 +141,33 @@ The main window shows a scrolling list of decoded messages. Each row is one pagi
 
 The bar at the right of the toolbar shows the current receive quality as a percentage (0-100 %). A higher value means a cleaner signal.
 
-### 5.2 Message columns
+### 5.2 Health panel
+
+The right side of the toolbar band can show a compact health strip. It is a switchover with the classic corner: while the health panel is shown it **replaces** the signal meter and the RX-Q percentage box, so the information is never displayed twice; hide the panel (right-click menu) and the classic needle + RX-Q corner return exactly as before. From left to right the panel shows:
+
+- **Health score** — the active receive-quality score (0-100 %) in green (>= 96 %), orange, or red (below the mail-alert threshold). `--%` means no measurement yet.
+- **Trend sparkline** — the score over the last 1, 5, 15 or 60 minutes, drawn in status colours: a healthy period is a solid green line, degraded stretches show orange, and time below the mail-alert threshold shows red. A thin dotted line marks the mail-alert threshold itself, so you can see how much headroom the score has before the alert would fire. The graph fills from the right (newest second at the right edge), so shortly after startup only the right-hand part contains a line yet.
+- **COM dot** — only when serial input is enabled: green = port open and receiving, orange ring = open but no data coming in, red disc with a bar = port not open.
+- **Feed dots** — one dot + tag per **enabled** output feed (`SM` SMTP, `WH` webhook, `TG` Telegram, `PO` Pushover, `MQ` MQTT, `MY` MySQL, `SQ` SQLite, `TS` telnet server). Green = no known problem — this includes "enabled but nothing delivered yet", so the per-message feeds (webhook, Telegram, Pushover, SMTP) are green from startup even if their first push is days away. Orange = retrying after a temporary problem, red = the last delivery or connection failed. For colour-blind readability the states also differ in shape: retrying draws as a hollow **ring**, failed as a solid disc with a small **"minus" bar**, healthy as a plain solid disc. Disabled feeds are not shown. The connection-oriented feeds (MQTT, MySQL, telnet server) track their connection live: red while the broker/server is unreachable, green again as soon as the connection is restored.
+
+The feed dot shows the last **outcome**, latched: a send that is merely in progress never changes the dot (so a broken feed does not blink green at the start of every attempt), and a retry never downgrades a red dot back to orange — only a real successful delivery or connection turns the dot green again.
+
+**Hover the mouse** over any entry for an explanation: the score names its active source, the sparkline its window and alert level, the COM dot its link state, and each feed dot its full status including the **last problem** and the time the state changed, e.g. `Telegram: FAILED since 14:02 - API rejected message (HTTP 401)`.
+
+Every status **change** — feed dots and COM link alike — is also written to a daily log file `{date}_health.log` in the configured log directory (one line per transition, e.g. `TG (Telegram): OK -> FAILED - API rejected message (HTTP 401)`). Steady states write nothing, so the file stays tiny; use it to diagnose a problem that resolved itself while you were away. A feed's very first successful contact after startup (`idle -> OK`) is not a problem and is not logged; every transition that involves an actual issue — going into retrying/failed, and the later recovery back to OK — still logs.
+
+**Right-click the panel** to open its menu:
+
+| Item | Description |
+|------|-------------|
+| Health source: RX needle (classic) | Use the same score as the RX-Q corner box (default) |
+| Health source: Penalty system | Use a stricter score that drops instantly on errors and recovers slowly |
+| Trend window | Sparkline window: 1 / 5 / 15 / 60 minutes |
+| Hide/Show health panel | Toggle the panel (right-click the same spot to bring it back) |
+
+The selected health source also feeds the **RX Quality Alert** e-mail (see section 10.7), so switching the source switches what the alert reacts to. With the Penalty-system source the score falls to 0 % when nothing decodable has been received for about two minutes (dead air), so a receiver that goes silent shows red instead of holding its last healthy value; on networks with legitimate multi-minute gaps between transmissions this source therefore dips between transmissions, and the classic needle source is the better choice there. On narrow windows the panel first drops its labels, then the sparkline; if even that does not fit, the classic corner is shown until there is room again. Settings are stored in `pdw.ini` under `[HealthPanel]`.
+
+### 5.3 Message columns
 
 | Column | Content |
 |--------|---------|
@@ -806,11 +833,11 @@ The column names and content are identical to the MySQL Optimized schema; the on
 
 Click **Test** in the dialog to verify the file can be opened. The database can be inspected with any SQLite browser (e.g. DB Browser for SQLite).
 
-### 10.7 RX Quality Alert
+### 10.7 System Alerts
 
-Configure via **Options → RX Quality Alert**.
+Configure via **Options → System Alerts**. This one dialog holds two independent e-mail alerts that share the same recipient list: the **RX quality alert** and the **COM link-lost alert**.
 
-Sends an e-mail alert when the receive quality stays below a threshold for a sustained period.
+**RX quality alert** - sends an e-mail when the receive quality stays below a threshold for a sustained period.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -820,6 +847,19 @@ Sends an e-mail alert when the receive quality stays below a threshold for a sus
 | Cooldown | 120 min | Minimum time between repeated alerts |
 
 Uses the same SMTP settings as filter-based alerts. The recipient address can be configured separately from the filter mail recipient.
+
+The quality value the alert watches is the **active health source** selected on the toolbar Health panel (see section 5.2): the classic RX-Q score (default) or the stricter Penalty-system score. Switching the source on the panel immediately switches what the alert measures; the alert mail names the source it used. Note the difference on total radio silence: the Penalty-system score falls to 0 % after about two minutes without anything decodable, so a receiver that goes silent does trip the alert; the classic RX-Q score only changes when decoding is attempted and holds its last value on dead air - with that source, use the panel's COM dot to spot a dead serial link.
+
+**COM link-lost alert (serial input only).** The second alert in the same dialog watches the serial link itself rather than decode quality. It sends an e-mail when serial (COM) input is enabled but no data has been received for a configurable number of minutes. This catches the case the quality alert can miss with the classic source: when the serial feed dies completely (adapter unplugged, or a Moxa NPort whose network tunnel drops) the classic RX-Q score just freezes and never trips, but the COM link-lost alert fires. It recovers automatically when data resumes and re-mails at most once per cooldown while the link stays down.
+
+Tick **Enable COM link-lost alert** in the dialog and set the two values:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Alert after no serial data for | 3 min | How long without serial data before the first alert |
+| Suppress repeated alerts for | 120 min | Minimum time between repeated alerts |
+
+It reuses the RX quality alert's recipient list and SMTP host (both alerts mail the same recipients). The settings are stored in `pdw.ini` under `[ComLinkAlert]` (`Enabled`, `Minutes`, `Cooldown`). Only active with serial (COM) input; ignored for sound-card input. Because a Moxa NPort keeps the virtual COM port open when its network side drops, PDW then sees "open but no data" (the COM dot shows orange, not red); the alert treats both "open but no data" and "port not open" as the link being down.
 
 ### 10.8 Log files and write buffering
 

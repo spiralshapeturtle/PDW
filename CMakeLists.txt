@@ -60,6 +60,8 @@ set( PDW_SRCS
         sound_in.cpp
         RxQualAlertDlg.cpp
         RxQualMonitor.cpp
+        HealthSource.cpp
+        HealthPanel.cpp
 )
 
 # SQLite amalgamation: same per-file compile flags the VS project uses (see pdw_vs2017.vcxproj).

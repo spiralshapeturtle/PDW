@@ -392,6 +392,7 @@ void LogManager::BuildPath(char* out, int outSize, LogCat cat, const SYSTEMTIME&
     case LC_SMTP:    suffix = "_mail.log";              break;
     case LC_TELEGRAM: suffix = "_telegram.log";         break;
     case LC_PUSHOVER: suffix = "_pushover.log";         break;
+    case LC_HEALTH:  suffix = "_health.log";            break;   // FIX [FeedTransitionLog]
     default:         suffix = "_pdw.log";               break;
     }
 

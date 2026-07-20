@@ -12,6 +12,7 @@
 #include "smtp.h"
 #include "..\utils\debug.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store (SMTP passes FS_* directly)
 
 #include "openssl\ssl.h"
 #include "openssl\err.h"
@@ -1535,7 +1536,11 @@ int xSendMail(THEMAIL *pMail)
 		{
 			g_persistSocket = smtpConnect(pMail->smtp_server, pMail->smtp_port);
 			if(g_persistSocket == INVALID_SOCKET)
+			{
+				FeedStatus_SetDetail(FEED_SMTP, "server unreachable - message held");   // FIX [FeedLastError]
+				FeedStatus_Set(FEED_SMTP, FS_RETRY);   // FIX [FeedStatus]: server unreachable, message held
 				return(0);   // FIX [SmtpRequeue]: server unreachable — hold the message (uncounted), retry next pass
+			}
 			nSMTPsessions++;
 			if(smtpHelo(g_persistSocket) || smtpLogin(g_persistSocket))
 			{
@@ -1559,6 +1564,7 @@ int xSendMail(THEMAIL *pMail)
 			// FIX [SmtpRequeue]: confirmed sent — commit the slot and reset the retry counter.
 			MailCommitSlot(nSlot) ;
 			nMailRetryCount = 0 ;
+			FeedStatus_Set(FEED_SMTP, FS_OK) ;   // FIX [FeedStatus]
 			return(1);
 		}
 
@@ -1576,11 +1582,15 @@ int xSendMail(THEMAIL *pMail)
 	if(++nMailRetryCount < SMTP_MAX_SEND_RETRIES)
 	{
 		AddResponse("SMTP: send failed — will retry message on next pass") ;
+		FeedStatus_SetDetail(FEED_SMTP, "send failed - retrying (%d/%d)", nMailRetryCount, SMTP_MAX_SEND_RETRIES) ;   // FIX [FeedLastError]
+		FeedStatus_Set(FEED_SMTP, FS_RETRY) ;   // FIX [FeedStatus]
 		return(0) ;   // slot NOT advanced — same message retried
 	}
 	AddResponse("SMTP: send failed after retries — message dropped") ;
 	MailCommitSlot(nSlot) ;
 	nMailRetryCount = 0 ;
+	FeedStatus_SetDetail(FEED_SMTP, "message dropped after %d retries", SMTP_MAX_SEND_RETRIES) ;   // FIX [FeedLastError]
+	FeedStatus_Set(FEED_SMTP, FS_ERROR) ;   // FIX [FeedStatus]: message lost after retries
 	return(0);
 }
 

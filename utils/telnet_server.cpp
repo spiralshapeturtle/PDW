@@ -35,6 +35,7 @@
 #include "telnet_server.h"
 #include "rxq.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -330,6 +331,7 @@ static void PostStatus(int state)
     // CRITICAL_SECTION is re-entrant, dus dit is veilig ook als de caller de lock al houdt.
     HWND h;
     int  count;
+    FeedStatus_Set(FEED_TELNET, state);   // FIX [FeedStatus]: pollable last outcome for the Health panel
     if (g_tsCsInit) EnterCriticalSection(&g_tsCs);
     h     = g_tsStatusWnd;
     count = g_tsClientCount;
@@ -1472,6 +1474,7 @@ void TelnetServerInit(void)
     LeaveCriticalSection(&g_tsCs);
 
     if (!OpenListenSocket()) {
+        FeedStatus_SetDetail(FEED_TELNET, "bind/listen failed (port in use?)");   // FIX [FeedLastError]
         PostStatus(TSS_ERROR);
         FlushPendingWireLog();     // FIX [TsEventLogStaged]: bind/listen failures stage TsLog lines
         return;
@@ -1486,6 +1489,7 @@ void TelnetServerInit(void)
         g_tsEnabled = FALSE;
         closesocket(g_tsListenSock);
         g_tsListenSock = INVALID_SOCKET;
+        FeedStatus_SetDetail(FEED_TELNET, "worker thread creation failed");   // FIX [FeedLastError]
         PostStatus(TSS_ERROR);
         return;
     }

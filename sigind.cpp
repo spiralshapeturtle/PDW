@@ -24,6 +24,7 @@
 #include "headers\gfx.h"
 #include "headers\initapp.h"
 #include "headers\sigind.h"
+#include "HealthPanel.h"	// FIX [HealthPanelCorner]: panel replaces the meter while active
 
 #define MAX_SI_POS        20	// 0-20. Max positions available to signal indicator.
 #define AUDIO_POINT_VALUE 2	// Used for working out samples per signal
@@ -168,6 +169,9 @@ void PaintGauge(int pos)
 	int fx, fy, tx, ty, hr;
 	HDC hdc;
 
+	// FIX [HealthPanelCorner]: the Health panel replaces the meter while active; this is
+	// the high-frequency needle path (decode/audio), so the gate is two static reads.
+	if (HealthPanel_Active()) return;
 	if (!got_sigind) return;
 	if (pos < 0) pos = 0; else if (pos > MAX_SI_POS) pos = MAX_SI_POS;
 	if (!(hdc = GetDC(ghWnd))) return;
@@ -258,6 +262,9 @@ void DrawSigInd(HWND hwnd)
 {
 	HDC hdc;
 	RECT r;
+	// FIX [HealthPanelCorner]: while the Health panel is active it replaces this meter
+	// (the panel paints over the same right-corner span). Skip so the two never fight.
+	if (HealthPanel_Active()) return;
 	// FIX [SigindFlatGauge]: the drawn footprint is the FIXED logical size (SIGIND_LOGW x
 	// SIGIND_LOGH), not the face bitmap's pixel size - the bitmap is now a 4x hi-res source
 	// that gets downscaled into this box, so the toolbar layout stays exactly as before.

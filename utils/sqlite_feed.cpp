@@ -39,6 +39,7 @@
 #include "sqlite_feed.h"
 #include "sqlite\sqlite3.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store
 
 extern TCHAR szPath[];          /* PDW exe-directory — uit Initapp.cpp */
 
@@ -156,6 +157,7 @@ static void WriteLog(const char *fmt, ...)
 static void PostStatus(int status)
 {
     HWND hWnd;
+    FeedStatus_Set(FEED_SQLITE, status);   // FIX [FeedStatus]: pollable last outcome for the Health panel
     EnterCriticalSection(&g_cs);
     hWnd = g_hStatusWnd;
     LeaveCriticalSection(&g_cs);
@@ -572,7 +574,7 @@ static DWORD WINAPI SqliteWorker(LPVOID)
             if (now < nextOpenMs) continue;
             if (!OpenDb()) {
                 nextOpenMs = now + SQLITE_OPEN_RETRY_MS;
-                if (!bErrorPosted) { PostStatus(SQS_ERROR); bErrorPosted = TRUE; }
+                if (!bErrorPosted) { FeedStatus_SetDetail(FEED_SQLITE, "cannot open database file"); PostStatus(SQS_ERROR); bErrorPosted = TRUE; }   // FIX [FeedLastError]
                 continue;
             }
             bErrorPosted = FALSE;
@@ -595,6 +597,7 @@ static DWORD WINAPI SqliteWorker(LPVOID)
                 // Write error: row is lost (unlike MySQL we don't reconnect a socket;
                 // a local I/O error is usually fatal for this db handle). Log + reopen.
                 WriteLog("INSERT FAIL  capcode=%s  rc=%d  %s", job.szCapcode, rc, sqlite3_errmsg(g_db));
+                FeedStatus_SetDetail(FEED_SQLITE, "write failed rc=%d: %.60s", rc, sqlite3_errmsg(g_db));   // FIX [FeedLastError]
                 TxnCommit();
                 CloseDb();
                 nextOpenMs = GetTickCount64() + SQLITE_OPEN_RETRY_MS;

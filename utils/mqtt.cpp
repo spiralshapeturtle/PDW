@@ -47,6 +47,7 @@
 #include "mqtt.h"
 #include "MQTTClient.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store
 
 extern TCHAR szPath[];   // from Initapp.cpp — PDW executable directory
 
@@ -163,6 +164,7 @@ static HWND g_hStatusWnd = NULL;   // protected by g_cs
 static void PostStatus(int status, LPARAM lp)
 {
     HWND hWnd;
+    FeedStatus_Set(FEED_MQTT, status);   // FIX [FeedStatus]: pollable last outcome for the Health panel
     EnterCriticalSection(&g_cs);
     hWnd = g_hStatusWnd;
     LeaveCriticalSection(&g_cs);
@@ -561,6 +563,7 @@ static BOOL DoSend(const MqttJob *job)
                 WriteLog("LOST      shutdown during retry - giving up on this message");
                 break;
             }
+            FeedStatus_SetDetail(FEED_MQTT, "publish failed - retrying (attempt %d)", attempt);   // FIX [FeedLastError]
             PostStatus(MHS_RETRY, attempt);
             ClientDestroy();
             Sleep(s_retryDelays[attempt - 1]);
@@ -568,7 +571,11 @@ static BOOL DoSend(const MqttJob *job)
 
         if (!EnsureConnected())
         {
-            if (bLast) WriteLog("ERROR     connect failed: %s:%d", g_szBroker, g_iPort);
+            if (bLast)
+            {
+                WriteLog("ERROR     connect failed: %s:%d", g_szBroker, g_iPort);
+                FeedStatus_SetDetail(FEED_MQTT, "broker unreachable (%s:%d)", g_szBroker, g_iPort);   // FIX [FeedLastError]
+            }
             else       WriteLog("RECONNECT connect failed - retrying: %s:%d", g_szBroker, g_iPort);
             continue;
         }
@@ -610,7 +617,11 @@ static BOOL DoSend(const MqttJob *job)
             return TRUE;
         }
 
-        if (bLast) WriteLog("ERROR     publish failed rc=%d (%s) topic=%s (after reconnect)", rc, MqttRcText(rc), szTopic);
+        if (bLast)
+        {
+            WriteLog("ERROR     publish failed rc=%d (%s) topic=%s (after reconnect)", rc, MqttRcText(rc), szTopic);
+            FeedStatus_SetDetail(FEED_MQTT, "publish failed rc=%d (%s)", rc, MqttRcText(rc));   // FIX [FeedLastError]
+        }
         else       WriteLog("RECONNECT publish rc=%d (%s) (stale connection) - reconnecting", rc, MqttRcText(rc));
     }
 
@@ -710,11 +721,22 @@ static DWORD WINAPI WorkerThreadProc(LPVOID)
                     WriteLog("CONNECT   idle (re)connect OK - warm connection established: %s:%d", g_szBroker, g_iPort);
                     bIdleFailLogged = FALSE;
                     dwLastYieldMs   = now;   // fresh session: restart the ping cadence
+                    // FIX [FeedStatusConn]: reflect the CONNECTION state on the Health panel, not
+                    // just per-publish outcomes. The warm connect at startup/after an outage turns
+                    // the dot green right away (deliberately NOT via PostStatus: the config dialog
+                    // keeps showing per-send status only).
+                    FeedStatus_Set(FEED_MQTT, MHS_OK);
                 }
-                else if (!bIdleFailLogged)
+                else
                 {
-                    WriteLog("WARN      idle (re)connect failed (broker down?) - retrying every 60 s: %s:%d", g_szBroker, g_iPort);
-                    bIdleFailLogged = TRUE;
+                    // FIX [FeedStatusConn]: broker unreachable while idle = configured-but-failing (red).
+                    FeedStatus_SetDetail(FEED_MQTT, "idle reconnect failed - broker down? (%s:%d)", g_szBroker, g_iPort);   // FIX [FeedLastError]
+                    FeedStatus_Set(FEED_MQTT, MHS_ERROR);
+                    if (!bIdleFailLogged)
+                    {
+                        WriteLog("WARN      idle (re)connect failed (broker down?) - retrying every 60 s: %s:%d", g_szBroker, g_iPort);
+                        bIdleFailLogged = TRUE;
+                    }
                 }
             }
         }
@@ -1019,6 +1041,7 @@ void MqttFlushGroup(int groupbit)
     {
         // FIX [QueueDropVisible]: log outside g_cs, always post the error status.
         WriteLog("DROP      queue full - message discarded (total dropped=%u)", g_droppedJobs);
+        FeedStatus_SetDetail(FEED_MQTT, "queue full - message dropped (total %u)", g_droppedJobs);   // FIX [FeedLastError]
         PostStatus(MHS_ERROR, 0);
     }
 }

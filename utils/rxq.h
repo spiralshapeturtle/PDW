@@ -59,6 +59,17 @@ double Rxq_GetEMA(void);
 /* Read current trend character: '+' rising, '-' falling, 0 stable. */
 char   Rxq_GetTrend(void);
 
+/* FIX [HealthSource]: TRUE once the EMA has been recomputed from decoded
+** data at least once (i.e. Rxq_GetEMA() is a real measurement, not the
+** 99.5 initial value). GUI-side helper; does not affect p2kflex parity. */
+int    Rxq_HasData(void);
+
+/* FIX [HealthRxqStale]: GetTickCount64() of the last real EMA recompute,
+** 0 = never. The EMA only updates on decoded frames and freezes on dead air;
+** HealthSource.cpp turns that staleness into a 0-score so the Health panel
+** and mail alert see a dead receiver. Does not affect p2kflex parity. */
+unsigned long long Rxq_LastUpdateTick(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -34,6 +34,7 @@
 #include "..\headers\initapp.h"
 #include "pushover.h"
 #include "logmanager.h"
+#include "feedstatus.h"   // FIX [FeedStatus]: Health-panel last-outcome store
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -145,6 +146,7 @@ static unsigned         g_droppedJobs = 0;
 static void PostStatus(int status, LPARAM lp)
 {
     HWND hWnd;
+    FeedStatus_Set(FEED_PUSHOVER, status);   // FIX [FeedStatus]: pollable last outcome for the Health panel
     EnterCriticalSection(&g_cs);
     hWnd = g_hStatusWnd;
     LeaveCriticalSection(&g_cs);
@@ -391,6 +393,7 @@ static BOOL DoSend(const PushoverJob *job)
                 WriteLog("LOST    capcode=%s shutdown during retry - message dropped", job->szCapcode);
                 return FALSE;   // FIX [FlushBounded]: transport failed + shutdown in progress
             }
+            FeedStatus_SetDetail(FEED_PUSHOVER, "transport error - retrying (attempt %d)", attempt);   // FIX [FeedLastError]
             PostStatus(PUS_RETRY, attempt);
             InterruptibleSleep(g_retryDelays[attempt - 1]);
         }
@@ -419,6 +422,7 @@ static BOOL DoSend(const PushoverJob *job)
         {
             // 4xx (bad token/user/message) — server reachable but rejected; do not retry.
             WriteLog("ERROR   capcode=%s -> HTTP %d", job->szCapcode, status);
+            FeedStatus_SetDetail(FEED_PUSHOVER, "API rejected message (HTTP %d)", status);   // FIX [FeedLastError]
             PostStatus(PUS_ERROR, status);
             return TRUE;   // FIX [FlushBounded]: endpoint alive (fast definitive answer)
         }
@@ -426,6 +430,7 @@ static BOOL DoSend(const PushoverJob *job)
         CloseConnection();
     }
     WriteLog("ERROR   capcode=%s all retries failed", job->szCapcode);
+    FeedStatus_SetDetail(FEED_PUSHOVER, "transport error - all retries failed");   // FIX [FeedLastError]
     PostStatus(PUS_ERROR, 0);
     return FALSE;   // FIX [FlushBounded]
 }
@@ -570,6 +575,7 @@ static void EnqueueJob(const PushoverJob *job)
         // disk I/O and this runs on the GUI thread) and ALWAYS post the error status - with
         // LogToFile off the drop was previously completely invisible to the operator.
         WriteLog("DROP queue full - message discarded (total dropped=%u)", nDropped);
+        FeedStatus_SetDetail(FEED_PUSHOVER, "queue full - message dropped (total %u)", nDropped);   // FIX [FeedLastError]
         PostStatus(PUS_ERROR, 0);
     }
 }

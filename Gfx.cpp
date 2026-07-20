@@ -29,6 +29,7 @@
 #include "headers\initapp.h"
 #include "headers\misc.h"
 #include "headers\acars.h"
+#include "HealthPanel.h"	// FIX [HealthPanel]
 
 int PL1_SCount=0;		// pane1 label scroll position
 int PL2_SCount=0;		// pane2 label scroll position
@@ -109,7 +110,7 @@ HPEN SysPEN[16]; // This holds general purpose system pens
 void DrawTitleBarGfx(HWND hwnd)
 {
 	SetMessageItemPositionsWidth();
-	DrawPaneLabels(hwnd, PANE1 | PANE2 | PANERXQUAL);
+	DrawPaneLabels(hwnd, PANE1 | PANE2 | PANERXQUAL | PANEHEALTH);	// FIX [HealthPanel]
 }
 
 void DrawPaneLabels(HWND hwnd, int pane)
@@ -238,8 +239,19 @@ void DrawPaneLabels(HWND hwnd, int pane)
 
 				case 7 :	// Message box
 
-				w = r.right-left_edge - Scale(46);	// FIX [DpiScale]: 46px smaller for RX-Quality
-				Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
+				// FIX [HealthPanelCorner]: with the Health panel active the RX-Q corner box is
+				// not drawn, so the header runs to the window edge (like PANE2's message box);
+				// classic mode keeps the 46px reservation for the RX-Quality box.
+				if (HealthPanel_Active())
+				{
+					w = r.right-left_edge;
+					Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), -1);	// -1: no grey line at the right
+				}
+				else
+				{
+					w = r.right-left_edge - Scale(46);	// FIX [DpiScale]: 46px smaller for RX-Quality
+					Draw3D_Box(hdc,left_edge,top_edge,w,Scale(TITLE_BAR_SIZE), i);
+				}
 				TextOut(hdc,left_edge+Scale(10),top_edge+Scale(2),"Monitored Messages",18);	// FIX [DpiScale]
 
 				break;
@@ -371,7 +383,7 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		LineTo(hdc,r.right, top_edge+Scale(TITLE_BAR_SIZE));
 	}
 
-	if (pane & PANERXQUAL)	// DRAW RX-Quality
+	if ((pane & PANERXQUAL) && !HealthPanel_Active())	// DRAW RX-Quality — FIX [HealthPanelCorner]: replaced by the Health panel while active
 	{
 		// FIX [RxqSquareBandClamp]: the RX-Q indicator square/icon sat at a FIXED
 		// r.top+Scale(5)..r.top+Scale(28) offset (fill rows 10..54 at 200% DPI), tuned for
@@ -481,6 +493,10 @@ void DrawPaneLabels(HWND hwnd, int pane)
 		LineTo(hdc, r.right, g_cyToolbar);
 	}
 	ReleaseDC(hwnd, hdc);
+
+	// FIX [HealthPanel]: the Health panel manages its own DC/back-buffer; draw it after
+	// releasing this DC so the two paint paths never interleave GDI object selections.
+	if (pane & PANEHEALTH) HealthPanel_Draw(hwnd);
 }
 
 
