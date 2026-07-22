@@ -9,6 +9,19 @@ and misconfigured or corrupt `pdw.ini` / `filters.ini` files - so day-to-day beh
 No decoder output or configuration format changes; existing `pdw.ini` and `filters.ini` files work
 unchanged.
 
+## Health trend: 4- and 8-hour windows + worst-dip band (FIX [HealthSparkLong])
+The Health panel's trend sparkline can now look back over a full night: the window menu adds
+"4 hours" and "8 hours" alongside the existing 1/5/15/60-minute options (the trend history buffer
+was grown from 1 hour to 8 hours to match). Over such a long window each pixel spans several minutes,
+and a plain per-pixel average would smooth short reception drops away entirely - exactly the events
+you want to catch when reviewing the past night. The sparkline now draws the average as the trend
+line (as before) and adds a bold, colour-coded band that hangs down from the line to the *worst*
+value in each pixel's slice, so a brief RX collapse shows up as a red spike stabbing downward even
+while the averaged line stays high. The hover tooltip reports the window's lowest value and when it
+happened, e.g. "lowest 40% at 03:15", so you can pinpoint an overnight problem without reading the
+graph pixel by pixel. Purely a display/history change; no decoder, feed or configuration format is
+affected, and short windows look the same as before (the band only appears where there is a real dip).
+
 ## Antivirus false-positive: version-resource metadata (FIX [AvMetadata])
 Some antivirus products (notably Windows Defender, as `Trojan:Win32/Wacatac.C!ml`) flagged the
 unsigned binary on a heuristic/reputation basis - not on any actual behaviour. A source audit found

@@ -12269,8 +12269,8 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->nHealthThreshLine   = (INT) GetPrivateProfileInt("HealthPanel", "ThresholdLine", 0, lpszIniPathName);	// FIX [HealthSparkThreshold]
 	pProfile->nHealthShowNeedle   = (INT) GetPrivateProfileInt("HealthPanel", "ShowNeedle",   0, lpszIniPathName);	// FIX [HealthNeedleCombo]
 	if (pProfile->nHealthSource != HEALTH_SRC_TELNET) pProfile->nHealthSource = HEALTH_SRC_NEEDLE;
-	if (pProfile->nHealthSparkMin < 1)  pProfile->nHealthSparkMin = 1;
-	if (pProfile->nHealthSparkMin > 60) pProfile->nHealthSparkMin = 60;
+	if (pProfile->nHealthSparkMin < 1)   pProfile->nHealthSparkMin = 1;
+	if (pProfile->nHealthSparkMin > 480) pProfile->nHealthSparkMin = 480;	// FIX [HealthSparkLong]: up to an 8-hour window
 
 	pProfile->bDebugLog           = (INT) GetPrivateProfileInt("Logging", TEXT("DebugLog"),        0,    lpszIniPathName);
 	pProfile->logBufferEnabled    = (INT) GetPrivateProfileInt("Logging", TEXT("BufferEnabled"),    0,    lpszIniPathName);

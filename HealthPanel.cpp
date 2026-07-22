@@ -28,9 +28,13 @@ extern PROFILE Profile;
 /* ---------------------------------------------------------------------------
 ** Trend history: one sample per second, sampled by HealthPanel_OnSecond()
 ** (SECOND_TIMER, GUI thread - single-threaded access only). Ring sized for
-** the maximum trend window (60 min). Negative = "no measurement" gap.
+** the maximum trend window. Negative = "no measurement" gap.
+** FIX [HealthSparkLong]: ring grown from 3600 (1 h) to 28800 (8 h) so the trend
+** can look back over a full night. Static float[] = 28800*4 = 112 KB, GUI-thread
+** only. Overnight dips are preserved by the min/max band in DrawSparkline (a plain
+** per-column average washed short drops out; the band keeps the worst case visible).
 ** ---------------------------------------------------------------------------*/
-#define HP_HIST_MAX   3600
+#define HP_HIST_MAX   28800
 #define HP_SPARK_GAP  -1.0f
 
 static float s_hist[HP_HIST_MAX];
@@ -117,6 +121,8 @@ static BOOL s_fitsValid = FALSE;
 #define HPM_SPARK_60     6
 #define HPM_TOGGLE_SHOW  7
 #define HPM_TOGGLE_NEEDLE 8	// FIX [HealthNeedleCombo]: panel + classic needle in its old corner slot
+#define HPM_SPARK_240    9	// FIX [HealthSparkLong]: 4-hour trend window
+#define HPM_SPARK_480    10	// FIX [HealthSparkLong]: 8-hour trend window (see the night)
 
 /* FIX [HealthStatusTriad]: one coherent status triad, tuned for a status panel
 ** that sits permanently on the light-gray (COLOR_3DFACE) toolbar band and where
@@ -907,6 +913,12 @@ static void DrawStatusDot(HDC hdc, int x, int cy, int d, int sev)
 	StretchBlt(hdc, x, top, d, d, s_hdcDot, 0, 0, S, S, SRCCOPY);
 }
 
+/* FIX [HealthSparkLong]: worst dip in the drawn window, published for the tooltip.
+** s_lastSparkMinPct = -1 means "no measurement in the window". s_lastSparkMinAgo is
+** how many seconds back it occurred (for the "at HH:MM" annotation). GUI thread only. */
+static int s_lastSparkMinPct = -1;
+static int s_lastSparkMinAgo = 0;
+
 static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
 {
 	int windowSec = Profile.nHealthSparkMin * 60;
@@ -931,42 +943,62 @@ static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
 	if (red < 1)  red = 1;
 	if (red > 95) red = 95;
 
-	/* One column = windowSec/iw seconds, averaged; gaps (no measurement) break
-	** the polyline. Newest sample at the right edge. Computed once into small
-	** stack arrays so the three draw passes below (soft fill, threshold marker,
-	** then the bold status line on top) render in the right order. */
+	/* One column = windowSec/iw seconds. Newest sample at the right edge. For each
+	** column we keep BOTH the average (the trend line + its colour) AND the minimum
+	** (the worst RX in that slice). Gaps (no measurement) break the polyline.
+	** FIX [HealthSparkLong]: a plain per-column average hides short RX drops once one
+	** pixel spans minutes (e.g. an 8-hour window). The minimum is drawn as a band that
+	** hangs down from the average line to the worst value, so a night-time dip stays
+	** visible as a coloured spike even when the averaged line stays high. Computed once
+	** into small stack arrays so the draw passes below render in the right order. */
 #define HP_SPARK_MAXCOLS 512
 	if (iw > HP_SPARK_MAXCOLS) iw = HP_SPARK_MAXCOLS;
-	static int  cPy [HP_SPARK_MAXCOLS];	/* GUI thread only - safe as static */
-	static char cIdx[HP_SPARK_MAXCOLS];	/* 0 green, 1 orange, 2 red        */
-	static char cOn [HP_SPARK_MAXCOLS];	/* 1 = has a measurement           */
+	static int  cPy   [HP_SPARK_MAXCOLS];	/* GUI thread only - safe as static */
+	static int  cPyMin[HP_SPARK_MAXCOLS];	/* y of the column minimum (the band foot) */
+	static char cIdx  [HP_SPARK_MAXCOLS];	/* avg status: 0 green, 1 orange, 2 red    */
+	static char cIdxMn[HP_SPARK_MAXCOLS];	/* min status: colours the band            */
+	static char cOn   [HP_SPARK_MAXCOLS];	/* 1 = has a measurement                   */
 	int col;
+	double gMin = 101.0; int gMinAgo = 0;	/* worst dip across the whole window, for the tooltip */
 	for (col = 0; col < iw; col++)
 	{
 		int aFrom = (int)(( (double)(iw - 1 - col)     * windowSec) / iw);
 		int aTo   = (int)(( (double)(iw - col)         * windowSec) / iw);
 		if (aTo <= aFrom) aTo = aFrom + 1;
 
-		double sum = 0.0; int n = 0, a;
+		double sum = 0.0, mn = 101.0; int n = 0, a;
 		for (a = aFrom; a < aTo; a++)
 		{
 			float v = HistAt(a);
-			if (v >= 0.0f) { sum += v; n++; }
+			if (v >= 0.0f)
+			{
+				sum += v; n++;
+				if (v < mn) mn = v;
+				if (v < gMin) { gMin = v; gMinAgo = a; }	/* track the window's worst + when */
+			}
 		}
 		if (!n) { cOn[col] = 0; continue; }
 
 		double avg = sum / n;
 		if (avg < 0.0)   avg = 0.0;
 		if (avg > 100.0) avg = 100.0;
+		if (mn  < 0.0)   mn  = 0.0;
+		if (mn  > 100.0) mn  = 100.0;
 
-		cIdx[col] = (char)((avg < (double)red) ? 2 : (avg >= 96.0) ? 0 : 1);
-		cPy [col] = iy + (int)(((100.0 - avg) * (ih - 1)) / 100.0 + 0.5);
-		cOn [col] = 1;
+		cIdx  [col] = (char)((avg < (double)red) ? 2 : (avg >= 96.0) ? 0 : 1);
+		cIdxMn[col] = (char)((mn  < (double)red) ? 2 : (mn  >= 96.0) ? 0 : 1);
+		cPy   [col] = iy + (int)(((100.0 - avg) * (ih - 1)) / 100.0 + 0.5);
+		cPyMin[col] = iy + (int)(((100.0 - mn ) * (ih - 1)) / 100.0 + 0.5);
+		cOn   [col] = 1;
 	}
 
-	// FIX [HealthSparkFill]: soft area fill under the line first, in the light
-	// tint of each column's status, so trend direction reads at a glance. Painted
-	// before the threshold + data line so both stay crisp on top.
+	/* Publish the window's worst dip for the tooltip. */
+	s_lastSparkMinPct = (gMin <= 100.0) ? (int)(gMin + 0.5) : -1;
+	s_lastSparkMinAgo = gMinAgo;
+
+	// FIX [HealthSparkFill]: soft area fill under the line first, in the light tint of
+	// each column's AVERAGE status - painted down to the column MINIMUM so the whole
+	// worst-case envelope carries the area-chart look. Threshold + line stay crisp on top.
 	{
 		HPEN fillPens[3] = { s_penFillG, s_penFillO, s_penFillR };
 		HPEN curFill = NULL;
@@ -976,8 +1008,28 @@ static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
 			HPEN fp = fillPens[(int)cIdx[col]];
 			if (fp != curFill) { SelectObject(hdc, fp); curFill = fp; }
 			int px = ix + col;
-			MoveToEx(hdc, px, cPy[col] + 1, NULL);
+			MoveToEx(hdc, px, cPyMin[col] + 1, NULL);
 			LineTo(hdc, px, iy + ih);
+		}
+	}
+
+	// FIX [HealthSparkLong]: the min band - a bold, saturated column from the average
+	// line down to the worst value in that slice, coloured by the MIN status. Drawn only
+	// where the dip is at least ~2px deep so steady periods stay a clean line. This is
+	// what makes an overnight RX crash visible: a green averaged line with a red spike
+	// stabbing downward exactly where reception collapsed.
+	{
+		HPEN bandPens[3] = { s_penSparkG, s_penSparkO, s_penSparkR };
+		HPEN curBand = NULL;
+		for (col = 0; col < iw; col++)
+		{
+			if (!cOn[col]) continue;
+			if (cPyMin[col] - cPy[col] < 2) continue;	/* no meaningful excursion */
+			HPEN bp = bandPens[(int)cIdxMn[col]];
+			if (bp != curBand) { SelectObject(hdc, bp); curBand = bp; }
+			int px = ix + col;
+			MoveToEx(hdc, px, cPy[col], NULL);
+			LineTo(hdc, px, cPyMin[col] + 1);
 		}
 	}
 
@@ -1018,6 +1070,25 @@ static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
 		}
 	}
 #undef HP_SPARK_MAXCOLS
+}
+
+/* FIX [HealthSparkLong]: format the wall-clock time "ago" seconds before now as HH:MM
+** (local time), for the trend tooltip's "lowest X% at HH:MM" annotation. Uses FILETIME
+** arithmetic so it stays correct across midnight without pulling in <time.h>. */
+static void HP_FormatAgoClock(int ago, char *buf, size_t n)
+{
+	SYSTEMTIME stNow;  GetLocalTime(&stNow);
+	FILETIME   ft;     SystemTimeToFileTime(&stNow, &ft);
+	ULARGE_INTEGER u;  u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
+	ULONGLONG back = (ULONGLONG)(ago > 0 ? ago : 0) * 10000000ULL;	/* 100 ns units */
+	u.QuadPart = (u.QuadPart > back) ? (u.QuadPart - back) : 0;
+	ft.dwLowDateTime = u.LowPart; ft.dwHighDateTime = u.HighPart;
+	SYSTEMTIME stThen;
+	if (FileTimeToSystemTime(&ft, &stThen))
+		_snprintf(buf, n - 1, "%02d:%02d", stThen.wHour, stThen.wMinute);
+	else
+		_snprintf(buf, n - 1, "??:??");
+	buf[n - 1] = '\0';
 }
 
 void HealthPanel_Draw(HWND hwnd)
@@ -1177,12 +1248,34 @@ void HealthPanel_Draw(HWND hwnd)
 		int sy = Scale(3);
 		DrawSparkline(mem, x, sy, lo.sparkW, h - 2 * sy);
 
-		if (Profile.nHealthThreshLine)
-			_snprintf(szTip, sizeof(szTip) - 1, "Health trend - last %d minute%s (dotted line = alert level %d%%)",
-			          Profile.nHealthSparkMin, Profile.nHealthSparkMin == 1 ? "" : "s", Profile.nRxQualThreshold);
+		// FIX [HealthSparkLong]: window label reads in hours for the long windows, and
+		// the worst dip in the window is appended so the tooltip answers "when did RX
+		// crash?" without having to read the tiny graph pixel-by-pixel.
+		char szWin[32];
+		int wm = Profile.nHealthSparkMin;
+		if (wm >= 60 && (wm % 60) == 0)
+			_snprintf(szWin, sizeof(szWin) - 1, "%d hour%s", wm / 60, (wm / 60) == 1 ? "" : "s");
 		else
-			_snprintf(szTip, sizeof(szTip) - 1, "Health trend - last %d minute%s (green = healthy, orange = degraded, red = alert level)",
-			          Profile.nHealthSparkMin, Profile.nHealthSparkMin == 1 ? "" : "s");
+			_snprintf(szWin, sizeof(szWin) - 1, "%d minute%s", wm, wm == 1 ? "" : "s");
+		szWin[sizeof(szWin) - 1] = '\0';
+
+		char szMin[64];
+		if (s_lastSparkMinPct >= 0 && s_lastSparkMinPct < 100)
+		{
+			char szClk[8];
+			HP_FormatAgoClock(s_lastSparkMinAgo, szClk, sizeof(szClk));
+			_snprintf(szMin, sizeof(szMin) - 1, " - lowest %d%% at %s", s_lastSparkMinPct, szClk);
+			szMin[sizeof(szMin) - 1] = '\0';
+		}
+		else
+			szMin[0] = '\0';
+
+		if (Profile.nHealthThreshLine)
+			_snprintf(szTip, sizeof(szTip) - 1, "Health trend - last %s (line = average, band = worst dip; dotted = alert level %d%%)%s",
+			          szWin, Profile.nRxQualThreshold, szMin);
+		else
+			_snprintf(szTip, sizeof(szTip) - 1, "Health trend - last %s (line = average, band = worst dip)%s",
+			          szWin, szMin);
 		szTip[sizeof(szTip) - 1] = '\0';
 		HP_TIPRECT(x, x + lo.sparkW);
 		TipSet(hwnd, 1, &rcTip, szTip, 0);
@@ -1345,10 +1438,14 @@ BOOL HealthPanel_OnToolbarRClick(HWND hMain, POINT ptMainClient)
 	AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
 
 	int mins = Profile.nHealthSparkMin;
-	AppendMenu(hSpark, MF_STRING | (mins == 1  ? MF_CHECKED : 0), HPM_SPARK_1,  "1 minute");
-	AppendMenu(hSpark, MF_STRING | (mins == 5  ? MF_CHECKED : 0), HPM_SPARK_5,  "5 minutes");
-	AppendMenu(hSpark, MF_STRING | (mins == 15 ? MF_CHECKED : 0), HPM_SPARK_15, "15 minutes");
-	AppendMenu(hSpark, MF_STRING | (mins == 60 ? MF_CHECKED : 0), HPM_SPARK_60, "60 minutes");
+	AppendMenu(hSpark, MF_STRING | (mins == 1   ? MF_CHECKED : 0), HPM_SPARK_1,   "1 minute");
+	AppendMenu(hSpark, MF_STRING | (mins == 5   ? MF_CHECKED : 0), HPM_SPARK_5,   "5 minutes");
+	AppendMenu(hSpark, MF_STRING | (mins == 15  ? MF_CHECKED : 0), HPM_SPARK_15,  "15 minutes");
+	AppendMenu(hSpark, MF_STRING | (mins == 60  ? MF_CHECKED : 0), HPM_SPARK_60,  "60 minutes");
+	// FIX [HealthSparkLong]: long windows to review the past night; the min/max band
+	// keeps short RX dips visible even when one pixel spans several minutes.
+	AppendMenu(hSpark, MF_STRING | (mins == 240 ? MF_CHECKED : 0), HPM_SPARK_240, "4 hours");
+	AppendMenu(hSpark, MF_STRING | (mins == 480 ? MF_CHECKED : 0), HPM_SPARK_480, "8 hours");
 	AppendMenu(hMenu, MF_POPUP | MF_STRING, (UINT_PTR)hSpark, "Trend window");
 	AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
 	AppendMenu(hMenu, MF_STRING, HPM_TOGGLE_SHOW, Profile.nHealthPanelVisible ? "Hide health panel" : "Show health panel");
@@ -1384,10 +1481,12 @@ BOOL HealthPanel_OnToolbarRClick(HWND hMain, POINT ptMainClient)
 			break;
 		}
 
-		case HPM_SPARK_1:  Profile.nHealthSparkMin = 1;  bChanged = TRUE; break;
-		case HPM_SPARK_5:  Profile.nHealthSparkMin = 5;  bChanged = TRUE; break;
-		case HPM_SPARK_15: Profile.nHealthSparkMin = 15; bChanged = TRUE; break;
-		case HPM_SPARK_60: Profile.nHealthSparkMin = 60; bChanged = TRUE; break;
+		case HPM_SPARK_1:   Profile.nHealthSparkMin = 1;   bChanged = TRUE; break;
+		case HPM_SPARK_5:   Profile.nHealthSparkMin = 5;   bChanged = TRUE; break;
+		case HPM_SPARK_15:  Profile.nHealthSparkMin = 15;  bChanged = TRUE; break;
+		case HPM_SPARK_60:  Profile.nHealthSparkMin = 60;  bChanged = TRUE; break;
+		case HPM_SPARK_240: Profile.nHealthSparkMin = 240; bChanged = TRUE; break;	// FIX [HealthSparkLong]
+		case HPM_SPARK_480: Profile.nHealthSparkMin = 480; bChanged = TRUE; break;	// FIX [HealthSparkLong]
 
 		case HPM_TOGGLE_SHOW:
 		Profile.nHealthPanelVisible = !Profile.nHealthPanelVisible;
