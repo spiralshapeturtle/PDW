@@ -229,6 +229,7 @@ typedef struct
 	int  nHealthSource;				// HEALTH_SRC_NEEDLE (0, classic) or HEALTH_SRC_TELNET (1)
 	int  nHealthSparkMin;			// sparkline trend window in minutes (1/5/15/60, default 5)
 	int  nHealthThreshLine;			// FIX [HealthSparkThreshold]: 1 = dotted alert-level line in the sparkline (default 0)
+	int  nHealthShowNeedle;			// FIX [HealthNeedleCombo]: 1 = also show the classic RX needle in its old far-right corner slot alongside the panel (default 0)
 
 	COLORREF color_background;
 	COLORREF color_address;

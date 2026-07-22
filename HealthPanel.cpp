@@ -42,18 +42,26 @@ static HDC     s_hdcMem   = NULL;
 static HBITMAP s_hbmMem   = NULL;
 static HBITMAP s_hbmMemOld= NULL;
 static int     s_memW = 0, s_memH = 0;
-static HPEN    s_penGreen = NULL, s_penOrange = NULL, s_penRed = NULL, s_penGray = NULL;
 /* FIX [HealthSparkColor]: the trend line is drawn in status colours (green/orange/red
 ** per segment) with a bolder stroke so a healthy period clearly reads as a green line
 ** (was a thin neutral gray that disappeared against the band). */
 static HPEN    s_penSparkG = NULL, s_penSparkO = NULL, s_penSparkR = NULL;
-/* FIX [HealthSparkThreshold]: dotted marker at the mail-alert level in the sparkline.
-** FIX [HealthDotShapes]: ring pen (retry) + white bar pen (error) for the status dots. */
-static HPEN    s_penThresh = NULL, s_penRingO = NULL, s_penWhiteBar = NULL;
+/* FIX [HealthSparkThreshold]: dotted marker at the mail-alert level in the sparkline. */
+static HPEN    s_penThresh = NULL;
 /* FIX [HealthSparkFill]: light-tint pens for the area fill under the trend line. */
 static HPEN    s_penFillG = NULL, s_penFillO = NULL, s_penFillR = NULL;
-static HBRUSH  s_brGreen  = NULL, s_brOrange = NULL, s_brRed = NULL, s_brGray = NULL;
+/* Status-colour brushes: still used by the rollup accent bar (ComputeRollup path).
+** FIX [HealthDotAA]: the dot pens/brushes are gone - the dots now build their own
+** oversampled figure (DrawDotFigure) with locally created GDI objects. */
+static HBRUSH  s_brGreen  = NULL, s_brOrange = NULL, s_brRed = NULL;
 static UINT    s_gdiDpi   = 0;     /* DPI the pens were created for */
+
+/* FIX [HealthDotAA]: oversample scratch buffer for antialiased status dots (see
+** DrawStatusDot). Sized d*HP_DOT_SS square; rebuilt only when that edge changes. */
+#define HP_DOT_SS 4
+static HDC     s_hdcDot    = NULL;
+static HBITMAP s_hbmDot    = NULL, s_hbmDotOld = NULL;
+static int     s_dotSS     = 0;    /* current oversampled buffer edge, 0 = none */
 
 /* FIX [HealthPanelTips3]: hover tooltips over the panel entries, third design.
 ** Take 1 ([HealthPanelTipsDisabled]) put a second TTF_SUBCLASS hook on the
@@ -108,6 +116,7 @@ static BOOL s_fitsValid = FALSE;
 #define HPM_SPARK_15     5
 #define HPM_SPARK_60     6
 #define HPM_TOGGLE_SHOW  7
+#define HPM_TOGGLE_NEEDLE 8	// FIX [HealthNeedleCombo]: panel + classic needle in its old corner slot
 
 /* FIX [HealthStatusTriad]: one coherent status triad, tuned for a status panel
 ** that sits permanently on the light-gray (COLOR_3DFACE) toolbar band and where
@@ -155,19 +164,12 @@ static void EnsureGdiObjects(void)
 	if (s_penSparkO) { DeleteObject(s_penSparkO); s_penSparkO = NULL; }
 	if (s_penSparkR) { DeleteObject(s_penSparkR); s_penSparkR = NULL; }
 	if (s_penThresh) { DeleteObject(s_penThresh); s_penThresh = NULL; }
-	if (s_penRingO)  { DeleteObject(s_penRingO);  s_penRingO  = NULL; }
-	if (s_penWhiteBar) { DeleteObject(s_penWhiteBar); s_penWhiteBar = NULL; }
 	if (s_penFillG)  { DeleteObject(s_penFillG);  s_penFillG  = NULL; }	// FIX [HealthSparkFill]
 	if (s_penFillO)  { DeleteObject(s_penFillO);  s_penFillO  = NULL; }
 	if (s_penFillR)  { DeleteObject(s_penFillR);  s_penFillR  = NULL; }
-	if (s_penGreen)  { DeleteObject(s_penGreen);  s_penGreen  = NULL; }
-	if (s_penOrange) { DeleteObject(s_penOrange); s_penOrange = NULL; }
-	if (s_penRed)    { DeleteObject(s_penRed);    s_penRed    = NULL; }
-	if (s_penGray)   { DeleteObject(s_penGray);   s_penGray   = NULL; }
 	if (s_brGreen)   { DeleteObject(s_brGreen);   s_brGreen   = NULL; }
 	if (s_brOrange)  { DeleteObject(s_brOrange);  s_brOrange  = NULL; }
 	if (s_brRed)     { DeleteObject(s_brRed);     s_brRed     = NULL; }
-	if (s_brGray)    { DeleteObject(s_brGray);    s_brGray    = NULL; }
 
 	int pw = Scale(1);
 	if (pw < 1) pw = 1;
@@ -186,18 +188,12 @@ static void EnsureGdiObjects(void)
 	s_penFillG  = CreatePen(PS_SOLID, pw, HP_RGB_FILLG);
 	s_penFillO  = CreatePen(PS_SOLID, pw, HP_RGB_FILLO);
 	s_penFillR  = CreatePen(PS_SOLID, pw, HP_RGB_FILLR);
-	// FIX [HealthDotShapes]: ring stroke matches the spark stroke; the white bar
-	// stays thin so the red disc keeps reading as red
-	s_penRingO   = CreatePen(PS_SOLID, pwSpark, HP_RGB_ORANGE);
-	s_penWhiteBar = CreatePen(PS_SOLID, pw, RGB(255, 255, 255));
-	s_penGreen  = CreatePen(PS_SOLID, pw, HP_RGB_GREEN);
-	s_penOrange = CreatePen(PS_SOLID, pw, HP_RGB_ORANGE);
-	s_penRed    = CreatePen(PS_SOLID, pw, HP_RGB_RED);
-	s_penGray   = CreatePen(PS_SOLID, pw, HP_RGB_GRAY);
+	// FIX [HealthDotAA]: status-dot pens are no longer cached here - the dots build
+	// their own oversampled figure with locally created GDI objects (DrawDotFigure).
+	// Only the rollup accent bar still needs the solid status brushes.
 	s_brGreen   = CreateSolidBrush(HP_RGB_GREEN);
 	s_brOrange  = CreateSolidBrush(HP_RGB_ORANGE);
 	s_brRed     = CreateSolidBrush(HP_RGB_RED);
-	s_brGray    = CreateSolidBrush(HP_RGB_GRAY);
 	s_gdiDpi    = g_dpi;
 }
 
@@ -212,6 +208,17 @@ static void FreeMemDC(void)
 	if (s_hbmMem) { DeleteObject(s_hbmMem); s_hbmMem = NULL; }
 	s_hbmMemOld = NULL;
 	s_memW = s_memH = 0;
+
+	/* FIX [HealthDotAA]: tear down the dot oversample buffer alongside the back-buffer. */
+	if (s_hdcDot)
+	{
+		if (s_hbmDotOld) SelectObject(s_hdcDot, s_hbmDotOld);
+		DeleteDC(s_hdcDot);
+		s_hdcDot = NULL;
+	}
+	if (s_hbmDot) { DeleteObject(s_hbmDot); s_hbmDot = NULL; }
+	s_hbmDotOld = NULL;
+	s_dotSS = 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -398,6 +405,13 @@ static void TipParkAll(HWND hMain)
 		s_slotCmd[slot] = 0;	// FIX [HealthClickConfig]
 	}
 	TipHide();
+
+	// FIX [HealthTipTimerHide]: stop the hover poll timer while the panel is hidden
+	// or does not fit. TipEnsure() recreates it on the next draw when the panel is
+	// active again. Previously the 150 ms timer, once created, kept firing (a
+	// GetCursorPos every tick) until shutdown even with the panel hidden - harmless
+	// but a needless steady-state wakeup on an otherwise idle machine.
+	if (s_tipTimer) { if (ghWnd) KillTimer(ghWnd, HP_TIP_TIMER_ID); s_tipTimer = 0; }
 }
 
 /* "since 14:02" / "since 18-07 14:02" helper for the feed tooltips. */
@@ -579,13 +593,19 @@ static void ComputeLayout(HWND hwnd, HPLAYOUT *lo)
 	// FIX [HealthPanelCorner]: the panel REPLACES the classic corner (needle + RX-Q box +
 	// warning square) while active, so it may run to the same right margin the needle used.
 	int right = r.right - Scale(5);
+	// FIX [HealthNeedleCombo]: in the combined layout the classic RX needle keeps its old
+	// far-right slot; pull the panel's right edge in so the two never overlap. The reserve
+	// mirrors sigind.cpp's gauge footprint (SIGIND_LOGW=32 + its Scale(5) right margin) plus
+	// a small gap before the panel frame - same "local mirror of another file's fixed corner
+	// geometry" pattern as Gfx.cpp's Scale(46) RX-Q box.
+	if (Profile.nHealthShowNeedle) right -= Scale(32) + Scale(5) + Scale(8);
 	int avail = right - left;
 
 	/* Measure content (against the main-window DC with the shared fonts). */
 	HDC hdc = GetDC(hwnd);
 	int wScore = TextW(hdc, pdw_font[FONT_RXQUAL], "100%");
 	int pad    = Scale(4);
-	int dot    = Scale(8);	// FIX [HealthDotSize]: was Scale(7, too small), then Scale(10, too big) - 8 is the sweet spot (Rob)
+	int dot    = Scale(9);	// FIX [HealthDotSize]: 7=too small, 10=too big WITH inner icons; after [HealthDotNoBar] bumped 8->9 (Rob wanted 1-2px larger). Keep in sync with the draw pass.
 	int gapDot = Scale(3);
 	int gapEnt = Scale(6);
 	// FIX [HealthScoreLabel]: small "RX" caption so the bare percentage is
@@ -658,6 +678,44 @@ BOOL HealthPanel_Active(void)
 	return s_lastFits;
 }
 
+// FIX [HealthNeedleCombo]: see HealthPanel.h. The needle is suppressed only when the
+// panel owns the corner alone; in the combined layout (nHealthShowNeedle) the panel
+// makes room on its right (ComputeLayout) and the needle keeps its old slot.
+BOOL HealthPanel_SuppressNeedle(void)
+{
+	return (HealthPanel_Active() && !Profile.nHealthShowNeedle) ? TRUE : FALSE;
+}
+
+// FIX [HealthComboRxqLeak]: force a FRESH fit evaluation for the current client
+// width. HealthPanel_Active() otherwise returns the fit cached by the last panel
+// Draw (ComputeLayout). Within a single DrawPaneLabels pass the classic PANE1
+// header width and the PANERXQUAL "100%"-box gate read that cache BEFORE PANEHEALTH's
+// own Draw refreshes it, so a FALSE->TRUE fit transition (e.g. maximizing from a
+// narrower size where the combined-layout panel did not fit, or startup before the
+// toolbar is laid out) made those classic pieces use the STALE "does not fit" value:
+// PANERXQUAL then painted the green RX-Q "100%" box under the combined-layout needle
+// for one frame, and it lingered until the next full repaint. Calling this at the top
+// of DrawPaneLabels makes every HealthPanel_Active() read in that pass current and
+// consistent, so the stray "100%" is never drawn while the panel actually fits.
+void HealthPanel_RefreshActive(void)
+{
+	if (!Profile.nHealthPanelVisible) return;
+	HPLAYOUT lo;
+	ComputeLayout(ghWnd, &lo);
+}
+
+// FIX [HealthFitSizeInvalidate]: drop the cached fit decision on a window-size change
+// so the next HealthPanel_Active() re-evaluates for the NEW client width instead of
+// trusting the value cached at the previous size. Pairs with [HealthComboRxqLeak]:
+// keeps a pre-maximize "does not fit" (classic-corner) verdict from carrying into the
+// post-maximize layout and briefly drawing the classic RX-Q "100%" under the needle.
+// Covers every HealthPanel_Active() reader, including the ones that run before the
+// first DrawPaneLabels of the new size (e.g. DrawSigInd's SuppressNeedle gate).
+void HealthPanel_OnSize(void)
+{
+	s_fitsValid = FALSE;
+}
+
 /* ---------------------------------------------------------------------------
 ** Trend sampling (1 Hz, GUI thread)
 ** ---------------------------------------------------------------------------*/
@@ -724,12 +782,60 @@ static COLORREF StatusColor(int hstat)
 	return RGB(0, 0, 0);
 }
 
-/* One solid status dot. */
-static void DrawDot(HDC hdc, int x, int cy, int d, HPEN pen, HBRUSH fill)
+/* FIX [HealthDotAA]: draw one status-dot figure at diameter d into the top-left
+** of `dc`, with stroke widths multiplied by `scale`. Factored out so the exact
+** same geometry serves both the oversampled AA path (scale = HP_DOT_SS, into the
+** scratch buffer) and the non-AA fallback (scale = 1, straight onto the panel).
+** sev: 0 = ok (solid green), 1 = retry (orange ring), 2 = error (solid red disc). */
+static void DrawDotFigure(HDC dc, int ox, int oy, int d, int sev, int scale)
 {
-	SelectObject(hdc, pen);
-	SelectObject(hdc, fill);
-	Ellipse(hdc, x, cy - d / 2, x + d, cy - d / 2 + d);
+	int pwR = Scale(2) * scale; if (pwR < 2) pwR = 2;   /* retry ring stroke   */
+
+	switch (sev)
+	{
+		case 1:  /* retry: orange ring, background shows through the centre */
+		{
+			HPEN   pen = CreatePen(PS_SOLID, pwR, HP_RGB_ORANGE);
+			HGDIOBJ op = SelectObject(dc, pen);
+			HGDIOBJ ob = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+			int in = pwR / 2;   /* inset so the whole stroke stays inside the box */
+			Ellipse(dc, ox + in, oy + in, ox + d - in, oy + d - in);
+			SelectObject(dc, ob);
+			SelectObject(dc, op);
+			DeleteObject(pen);
+			break;
+		}
+
+		case 2:  /* error: solid red disc (no inner mark) */
+		{
+			/* FIX [HealthDotNoBar]: dropped the white "minus" bar. A red disc with a
+			** horizontal white bar reads as the universal "no-entry / disabled / off"
+			** glyph, so an errored feed looked switched-off rather than faulty (Rob).
+			** Colour-blind separation is preserved by shape on the OTHER state: retry
+			** is a hollow ring (see case 1), ok/error are solid discs of distinct hue,
+			** and the hover tooltip spells the state out. `pw` is now unused here. */
+			HBRUSH br = CreateSolidBrush(HP_RGB_RED);
+			HGDIOBJ op = SelectObject(dc, null_pen);
+			HGDIOBJ ob = SelectObject(dc, br);
+			Ellipse(dc, ox, oy, ox + d, oy + d);
+			SelectObject(dc, ob);
+			SelectObject(dc, op);
+			DeleteObject(br);
+			break;
+		}
+
+		default: /* ok / unknown: solid green */
+		{
+			HBRUSH br = CreateSolidBrush(HP_RGB_GREEN);
+			HGDIOBJ op = SelectObject(dc, null_pen);
+			HGDIOBJ ob = SelectObject(dc, br);
+			Ellipse(dc, ox, oy, ox + d, oy + d);
+			SelectObject(dc, ob);
+			SelectObject(dc, op);
+			DeleteObject(br);
+			break;
+		}
+	}
 }
 
 /* FIX [HealthDotShapes]: status dots are no longer colour-only - RETRY draws as
@@ -740,31 +846,65 @@ static void DrawDot(HDC hdc, int x, int cy, int d, HPEN pen, HBRUSH fill)
 ** shown SOLID green - "configured and no known problem" should read healthy from
 ** the first second, because the per-message feeds (Telegram, Pushover, webhook,
 ** SMTP) can legitimately go days before their first delivery. A problem changes
-** the dot within seconds of the first failing attempt anyway. */
+** the dot within seconds of the first failing attempt anyway.
+** FIX [HealthDotAA]: GDI Ellipse() is not antialiased; at ~8px a filled circle
+** rasterizes to an angular "cog/torx" outline, and the white bar on the red error
+** disc amplified the notched look (the white centre "fell away"). Render the dot
+** 4x oversampled into a scratch buffer pre-filled with the panel background, then
+** HALFTONE-downscale - the same supersample trick the sigind gauge and toolbar
+** icons already use. The edge pixels blend the dot colour into COLOR_3DFACE,
+** giving a clean round dot at any DPI. Falls back to the direct (non-AA) path if
+** the scratch buffer can't be built (GDI-handle pressure). */
 static void DrawStatusDot(HDC hdc, int x, int cy, int d, int sev)
 {
-	switch (sev)
+	int S  = d * HP_DOT_SS;
+	/* FIX [HealthDotVAlign]: nudge the dot down ~1px. Geometrically it is centred on
+	** cy (same as the label text), but the label glyphs carry their visual mass above
+	** the cell centre, so a dot on cy reads as sitting slightly high next to the tag.
+	** Scale(1) so it tracks DPI; tune the multiplier if a future font shifts this. */
+	int top = cy - d / 2 + Scale(1);
+
+	/* (Re)build the oversample buffer only when its edge changes (DPI/size). */
+	if (!s_hdcDot || s_dotSS != S)
 	{
-		case 1:  /* retry: orange ring, band background shows through the centre */
-		SelectObject(hdc, s_penRingO);
-		SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
-		Ellipse(hdc, x, cy - d / 2, x + d, cy - d / 2 + d);
-		break;
-
-		case 2:  /* error: solid red disc with a white "minus" bar */
-		DrawDot(hdc, x, cy, d, s_penRed, s_brRed);
+		if (s_hdcDot)
 		{
-			int inset = d / 3;
-			SelectObject(hdc, s_penWhiteBar);
-			MoveToEx(hdc, x + inset, cy, NULL);
-			LineTo(hdc, x + d - inset, cy);
+			if (s_hbmDotOld) SelectObject(s_hdcDot, s_hbmDotOld);
+			DeleteDC(s_hdcDot); s_hdcDot = NULL;
 		}
-		break;
+		if (s_hbmDot) { DeleteObject(s_hbmDot); s_hbmDot = NULL; }
+		s_hbmDotOld = NULL; s_dotSS = 0;
 
-		default: /* ok / unknown: solid green */
-		DrawDot(hdc, x, cy, d, s_penGreen, s_brGreen);
-		break;
+		s_hdcDot = CreateCompatibleDC(hdc);
+		if (s_hdcDot)
+		{
+			s_hbmDot = CreateCompatibleBitmap(hdc, S, S);
+			if (!s_hbmDot) { DeleteDC(s_hdcDot); s_hdcDot = NULL; }
+			else { s_hbmDotOld = (HBITMAP)SelectObject(s_hdcDot, s_hbmDot); s_dotSS = S; }
+		}
 	}
+
+	if (!s_hdcDot || s_dotSS != S)
+	{
+		/* Fallback: direct (jaggy) draw so a GDI failure still shows a dot. */
+		DrawDotFigure(hdc, x, top, d, sev, 1);
+		return;
+	}
+
+	/* Prime the scratch buffer with the panel background so the AA edge blends
+	** to exactly the colour the dot sits on. */
+	{
+		HBRUSH bg = CreateSolidBrush(GetSysColor(COLOR_3DFACE));
+		RECT   rc = { 0, 0, S, S };
+		FillRect(s_hdcDot, &rc, bg);
+		DeleteObject(bg);
+	}
+
+	DrawDotFigure(s_hdcDot, 0, 0, S, sev, HP_DOT_SS);
+
+	SetStretchBltMode(hdc, HALFTONE);
+	SetBrushOrgEx(hdc, 0, 0, NULL);
+	StretchBlt(hdc, x, top, d, d, s_hdcDot, 0, 0, S, S, SRCCOPY);
 }
 
 static void DrawSparkline(HDC hdc, int x, int y, int w, int h)
@@ -946,7 +1086,7 @@ void HealthPanel_Draw(HWND hwnd)
 	LineTo(mem, w - 1, h - 1); LineTo(mem, w - 1, -1);
 
 	int pad    = Scale(4);
-	int dot    = Scale(8);	// FIX [HealthDotSize]: was Scale(7, too small), then Scale(10, too big) - 8 is the sweet spot (Rob)
+	int dot    = Scale(9);	// FIX [HealthDotSize]: 7=too small, 10=too big WITH inner icons; after [HealthDotNoBar] bumped 8->9 (Rob wanted 1-2px larger). Keep in sync with the measure pass.
 	int gapDot = Scale(3);
 	int gapEnt = Scale(6);
 	int cy     = h / 2;
@@ -1139,7 +1279,16 @@ void HealthPanel_Draw(HWND hwnd)
 	** line; hover and per-second repaints never do). */
 	SelectObject(hdc, SysPEN[DARKGRAY]);
 	MoveToEx(hdc, lo.rc.left, g_cyToolbar, NULL);
-	LineTo(hdc, lo.rc.right + 1, g_cyToolbar);
+	if (Profile.nHealthShowNeedle)
+	{
+		// FIX [HealthNeedleCombo]: combined layout leaves a gap between the panel's right
+		// edge and the needle's far-right slot. Carry the divider across it to the window
+		// edge so no sub-gap survives between this span and DrawSigInd's own segment redraw.
+		RECT rcCl; GetClientRect(hwnd, &rcCl);
+		LineTo(hdc, rcCl.right, g_cyToolbar);
+	}
+	else
+		LineTo(hdc, lo.rc.right + 1, g_cyToolbar);
 
 	ReleaseDC(hwnd, hdc);
 
@@ -1203,6 +1352,11 @@ BOOL HealthPanel_OnToolbarRClick(HWND hMain, POINT ptMainClient)
 	AppendMenu(hMenu, MF_POPUP | MF_STRING, (UINT_PTR)hSpark, "Trend window");
 	AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
 	AppendMenu(hMenu, MF_STRING, HPM_TOGGLE_SHOW, Profile.nHealthPanelVisible ? "Hide health panel" : "Show health panel");
+	// FIX [HealthNeedleCombo]: third layout - the panel PLUS the classic RX needle back in
+	// its old far-right corner slot (the RX % number stays on the panel, the needle sits to
+	// its right). Checkable; picking it while the panel is hidden also shows the panel, since
+	// the needle companion has no meaning on its own.
+	AppendMenu(hMenu, MF_STRING | (Profile.nHealthShowNeedle ? MF_CHECKED : 0), HPM_TOGGLE_NEEDLE, "Show RX needle alongside");
 
 	POINT ptScreen;
 	GetCursorPos(&ptScreen);
@@ -1239,12 +1393,23 @@ BOOL HealthPanel_OnToolbarRClick(HWND hMain, POINT ptMainClient)
 		Profile.nHealthPanelVisible = !Profile.nHealthPanelVisible;
 		bChanged = TRUE;
 		break;
+
+		case HPM_TOGGLE_NEEDLE:
+		// FIX [HealthNeedleCombo]: flip the combined layout. Turning it on while the panel
+		// is hidden also shows the panel - the needle companion is meaningless on its own.
+		Profile.nHealthShowNeedle = !Profile.nHealthShowNeedle;
+		if (Profile.nHealthShowNeedle && !Profile.nHealthPanelVisible)
+			Profile.nHealthPanelVisible = 1;
+		bChanged = TRUE;
+		break;
 	}
 
 	if (bChanged)
 	{
 		WriteSettings();
-		if (cmd == HPM_TOGGLE_SHOW)
+		// FIX [HealthNeedleCombo]: HPM_TOGGLE_NEEDLE also changes which corner pieces draw
+		// (needle in/out) and the panel width, so it needs the same full corner swap.
+		if (cmd == HPM_TOGGLE_SHOW || cmd == HPM_TOGGLE_NEEDLE)
 		{
 			// FIX [HealthPanelCorner]: full corner swap. Synchronously repaint the toolbar
 			// band first (erases leftovers of whichever layout just went away - needle box,
@@ -1290,18 +1455,11 @@ void HealthPanel_Free(void)
 	if (s_penSparkO) { DeleteObject(s_penSparkO); s_penSparkO = NULL; }
 	if (s_penSparkR) { DeleteObject(s_penSparkR); s_penSparkR = NULL; }
 	if (s_penThresh) { DeleteObject(s_penThresh); s_penThresh = NULL; }
-	if (s_penRingO)  { DeleteObject(s_penRingO);  s_penRingO  = NULL; }
-	if (s_penWhiteBar) { DeleteObject(s_penWhiteBar); s_penWhiteBar = NULL; }
 	if (s_penFillG)  { DeleteObject(s_penFillG);  s_penFillG  = NULL; }	// FIX [HealthSparkFill]
 	if (s_penFillO)  { DeleteObject(s_penFillO);  s_penFillO  = NULL; }
 	if (s_penFillR)  { DeleteObject(s_penFillR);  s_penFillR  = NULL; }
-	if (s_penGreen)  { DeleteObject(s_penGreen);  s_penGreen  = NULL; }
-	if (s_penOrange) { DeleteObject(s_penOrange); s_penOrange = NULL; }
-	if (s_penRed)    { DeleteObject(s_penRed);    s_penRed    = NULL; }
-	if (s_penGray)   { DeleteObject(s_penGray);   s_penGray   = NULL; }
 	if (s_brGreen)   { DeleteObject(s_brGreen);   s_brGreen   = NULL; }
 	if (s_brOrange)  { DeleteObject(s_brOrange);  s_brOrange  = NULL; }
 	if (s_brRed)     { DeleteObject(s_brRed);     s_brRed     = NULL; }
-	if (s_brGray)    { DeleteObject(s_brGray);    s_brGray    = NULL; }
 	s_gdiDpi = 0;
 }

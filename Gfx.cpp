@@ -125,6 +125,14 @@ void DrawPaneLabels(HWND hwnd, int pane)
 
 	GetClientRect(hwnd, &r);
 
+	// FIX [HealthComboRxqLeak]: refresh the Health-panel fit ONCE up front, so the PANE1
+	// header width (case 7) and the PANERXQUAL "100%"-box gate below read the SAME current
+	// fit as PANEHEALTH (which recomputes it later in this pass). Without this the classic
+	// pieces used the fit cached by the previous panel Draw; a FALSE->TRUE transition (e.g.
+	// maximizing from a narrower size where the combined-layout panel did not fit) briefly
+	// drew the green RX-Q "100%" box under the combined-layout needle.
+	if (pane & (PANE1 | PANERXQUAL)) HealthPanel_RefreshActive();
+
 	/* Set new font/pen */
 	SelectObject(hdc,pdw_font[FONT_LABELS]);
 	SetAPEN_SYS(hdc,BLACK);

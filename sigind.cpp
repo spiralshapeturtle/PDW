@@ -171,7 +171,9 @@ void PaintGauge(int pos)
 
 	// FIX [HealthPanelCorner]: the Health panel replaces the meter while active; this is
 	// the high-frequency needle path (decode/audio), so the gate is two static reads.
-	if (HealthPanel_Active()) return;
+	// FIX [HealthNeedleCombo]: in the combined layout the panel keeps the needle in its
+	// old corner slot, so gate on SuppressNeedle() (FALSE there) instead of Active().
+	if (HealthPanel_SuppressNeedle()) return;
 	if (!got_sigind) return;
 	if (pos < 0) pos = 0; else if (pos > MAX_SI_POS) pos = MAX_SI_POS;
 	if (!(hdc = GetDC(ghWnd))) return;
@@ -264,7 +266,8 @@ void DrawSigInd(HWND hwnd)
 	RECT r;
 	// FIX [HealthPanelCorner]: while the Health panel is active it replaces this meter
 	// (the panel paints over the same right-corner span). Skip so the two never fight.
-	if (HealthPanel_Active()) return;
+	// FIX [HealthNeedleCombo]: combined layout keeps the needle - gate on SuppressNeedle().
+	if (HealthPanel_SuppressNeedle()) return;
 	// FIX [SigindFlatGauge]: the drawn footprint is the FIXED logical size (SIGIND_LOGW x
 	// SIGIND_LOGH), not the face bitmap's pixel size - the bitmap is now a 4x hi-res source
 	// that gets downscaled into this box, so the toolbar layout stays exactly as before.

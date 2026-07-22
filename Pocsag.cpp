@@ -120,7 +120,15 @@ void POCSAG::frame(int bit)
 			// mirrors p2kflexDecoder Pocsag.cpp:105 (updateRxQualityFromEcd). Without
 			// this the denominator (totalBits) only grows on message words, so each
 			// penalty weighs far heavier than in p2kflexDecoder. err = nh*dataBits.
-			Rxq_OnEcd(nh * RXQ_POCSAG.dataBits, &RXQ_POCSAG, 0);
+			// FIX [RxqSyncThreshold]: only score it if nh<3 - p2kflexDecoder's OWN
+			// sync-acceptance threshold (Pocsag.cpp:96 there). PDW's decode-side
+			// tolerance (nh<5, unchanged above) is a long-standing, unrelated PDW
+			// characteristic (2013 "First release") that got reused here when the
+			// telnet-RXQ parity feature was added later. A borderline nh==3/4 sync
+			// is still accepted for decoding (nothing about reception changes), but
+			// p2kflexDecoder would have rejected that same alignment outright and
+			// never generated a penalty for it - so we no longer score it either.
+			if (nh < 3) Rxq_OnEcd(nh * RXQ_POCSAG.dataBits, &RXQ_POCSAG, 0);
 		}
 		else if (nh == 32)	// 32 errors, so must be inverted
 		{
@@ -163,7 +171,10 @@ void POCSAG::frame(int bit)
 				// mirrors p2kflexDecoder Pocsag.cpp:129. Idle words are frequent on a
 				// POCSAG channel; crediting them keeps quality() stable/high between
 				// messages exactly like p2kflexDecoder. err = nh*dataBits.
-				Rxq_OnEcd(nh * RXQ_POCSAG.dataBits, &RXQ_POCSAG, 0);
+				// FIX [RxqSyncThreshold]: see sync-branch note above - only score if
+				// nh<3, matching p2kflexDecoder's own idle-acceptance threshold
+				// (Pocsag.cpp:117 there). Decode-side tolerance (nh<5) is unchanged.
+				if (nh < 3) Rxq_OnEcd(nh * RXQ_POCSAG.dataBits, &RXQ_POCSAG, 0);
 			}
 			else	// dump one block through with word position relative to sync word
 			{		// (determines frame number which is the 3 lsb bits of POCSAG capcode).
@@ -345,8 +356,13 @@ void POCSAG::show_addr(bool bAlpha)
 	}
 
 	/* Show Capcode */
-	
-	messageitems_colors[1] = COLOR_ADDRESS;
+
+	// FIX [PocsagCapcodeColor]: color the "???????" placeholder the same red used for
+	// corrupted message text (COLOR_BITERRORS), matching the convention mobitex.cpp
+	// already uses for its bad-address case (mobitex.cpp ~895). Text content is
+	// unchanged, so filter matching / output feeds (which read this same string) are
+	// unaffected -- display-only.
+	messageitems_colors[1] = bBadCapcode ? COLOR_BITERRORS : COLOR_ADDRESS;
 
 	/* Show Time / Date */
 

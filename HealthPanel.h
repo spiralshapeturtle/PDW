@@ -30,6 +30,24 @@ void HealthPanel_OnSecond(void);         /* 1 Hz: sample active score into trend
 ** renders exactly as before. Cheap (two static reads), safe to call from the
 ** high-frequency needle path. */
 BOOL HealthPanel_Active(void);
+
+/* FIX [HealthNeedleCombo]: TRUE when the classic RX needle must stay hidden
+** because the panel owns the corner alone. In the combined "Health + needle"
+** layout (Profile.nHealthShowNeedle) the panel makes room on its right and the
+** needle keeps its old far-right corner slot, so this returns FALSE and the
+** needle draws normally. The RX-Q % box + warning square stay suppressed by
+** HealthPanel_Active() either way. Called from the high-frequency needle path. */
+BOOL HealthPanel_SuppressNeedle(void);
+
+/* FIX [HealthComboRxqLeak]: recompute the panel fit-state NOW for the current client
+** width, so every HealthPanel_Active() read in the same repaint pass is consistent
+** (call at the top of DrawPaneLabels before the classic corner pieces read it). */
+void HealthPanel_RefreshActive(void);
+
+/* FIX [HealthFitSizeInvalidate]: invalidate the cached fit decision on a window-size
+** change (call from WM_SIZE) so the next HealthPanel_Active() re-evaluates. */
+void HealthPanel_OnSize(void);
+
 BOOL HealthPanel_OnToolbarRClick(HWND hMain, POINT ptMainClient); /* context menu     */
 BOOL HealthPanel_OnToolbarLClick(HWND hMain, POINT ptMainClient); /* FIX [HealthClickConfig]: open feed config */
 void HealthPanel_OnDisplayChange(void);  /* drop cached DDB/pens after display/DPI change */

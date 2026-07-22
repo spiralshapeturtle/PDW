@@ -1283,13 +1283,21 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
+            // FIX [AvMetadata]: neutralize version-resource strings that raise
+            // Defender's ML/reputation score (Trojan:Win32/Wacatac.C!ml false
+            // positive). "WitWarez" contained the substring "warez"; the old
+            // OriginalFilename "PDW3_6.exe" did not match the shipped exe name
+            // (name/OriginalFilename mismatch is a self-renaming-dropper heuristic).
+            // Added LegalCopyright + descriptive strings for reputation confidence.
+            // Pure ASCII per project rule. No version bump.
             VALUE "Comments", "Supports Windows XP - WIN11"
-            VALUE "CompanyName", "WitWarez"
-            VALUE "FileDescription", "PDW"
+            VALUE "CompanyName", "PDW Project"
+            VALUE "FileDescription", "PDW - POCSAG/FLEX paging decoder"
             VALUE "FileVersion", "4.0.4"
             VALUE "InternalName", "PDW"
-            VALUE "OriginalFilename", "PDW3_6.exe"
-            VALUE "ProductName", "PDW"
+            VALUE "LegalCopyright", "GPL-3.0. (c) Jason Petty, Peter Hunt and contributors"
+            VALUE "OriginalFilename", "PDW.exe"
+            VALUE "ProductName", "PDW Paging Decoder"
             VALUE "ProductVersion", "4.0.4"
         END
     END

@@ -9,13 +9,60 @@ and misconfigured or corrupt `pdw.ini` / `filters.ini` files - so day-to-day beh
 No decoder output or configuration format changes; existing `pdw.ini` and `filters.ini` files work
 unchanged.
 
+## Antivirus false-positive: version-resource metadata (FIX [AvMetadata])
+Some antivirus products (notably Windows Defender, as `Trojan:Win32/Wacatac.C!ml`) flagged the
+unsigned binary on a heuristic/reputation basis - not on any actual behaviour. A source audit found
+no networking, obfuscation, reconnaissance or persistence code behind the detection. Two things in
+the executable's version resource were needlessly feeding the heuristic and have been corrected: the
+`CompanyName` no longer contains a substring that reputation systems associate with piracy, and the
+`OriginalFilename` now matches the shipped executable name (a mismatch there mimics self-renaming
+malware). A `LegalCopyright` line and more descriptive product strings were added. No behaviour, no
+decoder output and no configuration changed. The most effective remaining step is Authenticode code
+signing of the released binaries (see the build workflow).
+
+## Telnet Penalty-system RX score over-strict on POCSAG (FIX [RxqSyncThreshold])
+The Health panel's "Penalty system" score (and the telnet wire-format RXQ it shares) could degrade
+faster on POCSAG than intended, even while messages decoded and displayed perfectly. PDW's POCSAG
+sync/idle-word detector is deliberately more tolerant of noise than the reference algorithm this
+score was ported from (a long-standing, unrelated PDW characteristic, unchanged here); a borderline
+sync/idle match was still scored as a full error by the RX-quality tracker, something the reference
+algorithm never does because it would have rejected that same match outright. The score now skips
+that credit on a borderline match, exactly like the reference algorithm does, while decoding itself -
+what you see on screen - is completely unaffected. Only the "Penalty system" health source is
+affected; the classic RX-Q needle score never looked at this and needs no change. FLEX was audited
+alongside this and found to already match its reference algorithm.
+
+## Unreadable POCSAG capcode now shown in red (FIX [PocsagCapcodeColor])
+When a POCSAG address word can't be corrected, PDW already replaced the capcode with `???????`
+instead of showing a wrong-but-plausible number (FIX [PocsagCapcodeGuard]). That placeholder is now
+colored red, the same color already used for corrupted characters in message text, making it
+immediately clear at a glance that a capcode is unreliable rather than just unusual-looking. Purely
+a screen color change - the underlying value, filter matching, logging and output feeds are all
+unaffected.
+
+## Stray RX-Q "100%" under the combined-layout needle (FIX [HealthComboRxqLeak], [HealthFitSizeInvalidate])
+With the Health panel's third layout - "Show RX needle alongside", which keeps the classic RX needle
+in its old top-right slot next to the panel - the old green RX-Q "100%" box could flash under the
+needle right after maximizing the window and then quickly disappear. The panel decides whether it
+fits the available toolbar width and caches that verdict; `HealthPanel_Active()` returns the cached
+value, and the cache was only refreshed when the panel itself repainted. Within one title-bar repaint
+the classic pieces (the PANE1 header width and the RX-Q "100%"-box suppression) read that cache
+*before* the panel's own paint refreshed it, so a "did not fit" -> "fits" transition on a resize
+(e.g. maximizing from a narrower window where the combined layout did not fit) made them draw one
+frame using the stale "did not fit" verdict - painting the classic RX-Q box under the needle until
+the next full repaint erased it. The fit is now re-evaluated once up front on every title-bar repaint
+(so all readers in that pass agree) and the cache is invalidated on any window-size change (so a
+pre-resize verdict can never leak into the new layout). Only the combined "panel + needle" layout was
+affected; the classic corner, the panel-only layout, decoding and the on-screen RX-quality all behave
+exactly as before.
+
 ## Default message font (FIX [DefaultFontConsolas])
 The built-in default message-display font changed from Courier New (8pt) to **Consolas 12pt**. This
 only affects a fresh install or a `pdw.ini` with no `Font.*` keys yet - anyone with an existing
 `pdw.ini` keeps whatever font they already have configured. The shipped release `pdw.ini`
 (`release-template/pdw.ini`) was updated to match (`Font.FaceName=Consolas`, `Font.Height=-16`).
 
-## Toolbar Health panel (FIX [HealthPanel]/[HealthSource]/[FeedStatus]/[FeedStatusConn]/[HealthPanelCorner]/[HealthSparkColor]/[HealthDotGreenStart]/[HealthPanelTips2]/[FeedDotLatch]/[FeedLastError]/[FeedTransitionLog]/[HealthSparkThreshold]/[HealthDotShapes])
+## Toolbar Health panel (FIX [HealthPanel]/[HealthSource]/[FeedStatus]/[FeedStatusConn]/[HealthPanelCorner]/[HealthSparkColor]/[HealthDotGreenStart]/[HealthPanelTips2]/[FeedDotLatch]/[FeedLastError]/[FeedTransitionLog]/[HealthSparkThreshold]/[HealthDotShapes]/[HealthNeedleCombo])
 A new, compact status strip on the right side of the toolbar band. It is a true switchover with the
 classic corner: while the panel is shown it **replaces** the needle meter and the RX-Q percentage box
 (so nothing is displayed twice); hide the panel (right-click menu) and the classic needle + RX-Q corner
@@ -91,13 +138,29 @@ come back exactly as before. On windows too narrow for the panel the classic cor
   read too faint on the "100%" score text; the red is a strong, deep red so a fault reads instantly;
   orange stays clearly distinct from both. The message-text colour palette (used for on-screen paging
   text) is untouched - these are panel-local colours only.
-- **Colour-blind-friendly dot shapes (FIX [HealthDotShapes]).** Status is no longer colour-only:
-  a retrying feed draws as a *ring* (hollow), a failed feed as a solid disc with a small "minus"
-  bar, healthy stays a solid disc. The COM dot uses the same coding (ring = open but no data,
-  disc + bar = not open).
+- **Colour-blind-friendly dot shapes (FIX [HealthDotShapes]/[HealthDotNoBar]).** Status is not
+  colour-only: a retrying feed draws as a *ring* (hollow), while healthy and failed are both solid
+  discs (green and red). The COM dot uses the same coding (ring = open but no data, solid red = not
+  open). The earlier white "minus" bar on the failed dot was dropped: a red disc with a horizontal
+  white bar reads as the universal "no-entry / disabled / off" glyph, so an errored feed looked
+  switched-off rather than faulty. Colour + shape (ring vs disc) + the hover tooltip carry the state.
+- **Smooth, round status dots (FIX [HealthDotAA]).** The small dots were drawn with the plain GDI
+  circle primitive, which does no antialiasing - at ~8px the outline came out angular ("cog"-like).
+  Each dot is now rendered at 4x and smoothly downscaled (the same technique the signal meter and
+  toolbar icons already use), so the dots read as clean, round discs at any DPI.
+- **Dot size and alignment polish (FIX [HealthDotSize]/[HealthDotVAlign]).** The dots are one pixel
+  larger and nudged down slightly so they sit optically centred against their tag text instead of
+  riding high.
 - The panel adapts to the free space (labels drop first, then the sparkline) and hides itself on very
   narrow windows. Right-click the panel area to hide it; right-click the same spot to show it again
   (`[HealthPanel] Visible`). Fully DPI-aware, drawn with the same GDI style as the rest of the toolbar.
+- **Optional "panel + needle" layout (FIX [HealthNeedleCombo]).** A third right-click option, *Show RX
+  needle alongside*, brings the classic RX signal-strength needle back into its old far-right corner
+  slot while keeping the Health panel. The panel shrinks just enough to make room, so the RX-health
+  percentage stays where it is and the needle sits to its right. The old RX-Q percentage box and
+  warning square stay hidden (the panel's own score replaces them). Saved to `pdw.ini`
+  (`[HealthPanel] ShowNeedle`, default off); turning it on while the panel is hidden also shows the
+  panel.
 - **Dead-receiver detection for the Penalty-system source (FIX [HealthRxqStale]).** The penalty score
   is only recomputed when frames are actually decoded, so on dead air it froze at its last (typically
   healthy) value: a receiver that died after a healthy period kept showing a green ~100% and the

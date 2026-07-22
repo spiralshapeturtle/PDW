@@ -625,6 +625,7 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.nHealthSource       = HEALTH_SRC_NEEDLE;	// classic score = backward compatible
 	Profile.nHealthSparkMin     = 5;
 	Profile.nHealthThreshLine   = 0;	// FIX [HealthSparkThreshold]: opt-in via System Alerts dialog
+	Profile.nHealthShowNeedle   = 0;	// FIX [HealthNeedleCombo]: panel replaces the needle by default
 
 	Profile.FlexTIME			= 0;	// Flag for FlexTIME as systemtime
 	Profile.FlexGroupMode		= 0;
@@ -2240,6 +2241,8 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			sizeSet = 1;
 
 				PdwUpdateToolbarMetrics();	// FIX [DpiScale]: hermeet echte toolbar-hoogte voor de pane-layout
+
+			HealthPanel_OnSize();	// FIX [HealthFitSizeInvalidate]: re-evaluate panel fit for the new client width
 
 			GetClientRect(hWnd, &g_rect);
 			g_xNew = g_rect.right - g_rect.left;   // Width of client area
@@ -12264,6 +12267,7 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->nHealthSource       = (INT) GetPrivateProfileInt("HealthPanel", "Source",       0, lpszIniPathName);
 	pProfile->nHealthSparkMin     = (INT) GetPrivateProfileInt("HealthPanel", "SparkMinutes", 5, lpszIniPathName);
 	pProfile->nHealthThreshLine   = (INT) GetPrivateProfileInt("HealthPanel", "ThresholdLine", 0, lpszIniPathName);	// FIX [HealthSparkThreshold]
+	pProfile->nHealthShowNeedle   = (INT) GetPrivateProfileInt("HealthPanel", "ShowNeedle",   0, lpszIniPathName);	// FIX [HealthNeedleCombo]
 	if (pProfile->nHealthSource != HEALTH_SRC_TELNET) pProfile->nHealthSource = HEALTH_SRC_NEEDLE;
 	if (pProfile->nHealthSparkMin < 1)  pProfile->nHealthSparkMin = 1;
 	if (pProfile->nHealthSparkMin > 60) pProfile->nHealthSparkMin = 60;
@@ -12949,6 +12953,7 @@ void WriteSettings()
 		fprintf(pFile, "Source=%i\n",       Profile.nHealthSource);
 		fprintf(pFile, "SparkMinutes=%i\n", Profile.nHealthSparkMin);
 		fprintf(pFile, "ThresholdLine=%i\n", Profile.nHealthThreshLine);	// FIX [HealthSparkThreshold]
+		fprintf(pFile, "ShowNeedle=%i\n",   Profile.nHealthShowNeedle);	// FIX [HealthNeedleCombo]
 
 		fprintf(pFile, "\n[Logging]\n");
 		fprintf(pFile, "DebugLog=%i\n",          Profile.bDebugLog);
