@@ -41,7 +41,7 @@
     - 10.8 [Logbestanden en schrijfbuffering](#108-logbestanden-en-schrijfbuffering)
     - 10.9 [Programmaopties](#109-programmaopties)
 11. [Weergavemenu](#11-weergavemenu)
-    - 11.1 [Eigen filterlabelkleuren](#111-eigen-filterlabelkleuren)
+    - 11.1 [Eigen filterlabelkleuren](#111-eigen-filterlabelkleuren-pdwini)
 12. [Gedecodeerde protocollen](#12-gedecodeerde-protocollen)
     - 12.1 [POCSAG](#121-pocsag)
     - 12.2 [FLEX en ReFLEX](#122-flex-en-reflex)
@@ -147,9 +147,9 @@ De balk rechts in de werkbalk toont de huidige ontvangstqualiteit als percentage
 Rechts op de werkbalkband kan een compacte statusstrip staan. Dit is een echte omschakeling met de klassieke hoek: zolang het health-paneel zichtbaar is **vervangt** het de signaalmeter en het RX-Q-percentagevak, zodat niets dubbel wordt getoond; verberg het paneel (rechtsklikmenu) en de klassieke naald + RX-Q-hoek komen exact terug zoals voorheen. Van links naar rechts:
 
 - **Health-score** — de actieve ontvangstqualiteitsscore (0-100 %) in groen (>= 96 %), oranje of rood (onder de drempel van de e-mailmelding). `--%` betekent nog geen meting.
-- **Trendgrafiekje** — de score over de laatste 1, 5, 15 of 60 minuten, getekend in statuskleuren: een gezonde periode is een dikke groene lijn, verslechtering toont oranje en tijd onder de meldingsdrempel toont rood. Een dun gestippeld lijntje markeert de meldingsdrempel zelf, zodat je ziet hoeveel marge de score nog heeft voordat de melding zou afgaan. De grafiek vult van rechts (nieuwste seconde rechts), dus kort na de start staat er alleen rechts al een lijn.
-- **COM-stip** — alleen als seriële invoer aanstaat: groen = poort open en data komt binnen, oranje ring = open maar geen data, rode schijf met streepje = poort niet open.
-- **Feed-stippen** — een stip + tag per **ingeschakelde** uitvoerfeed (`SM` SMTP, `WH` webhook, `TG` Telegram, `PO` Pushover, `MQ` MQTT, `MY` MySQL, `SQ` SQLite, `TS` telnetserver). Groen = geen bekend probleem — dat geldt ook voor "ingeschakeld maar nog niets afgeleverd", dus de per-bericht-feeds (webhook, Telegram, Pushover, SMTP) zijn vanaf de start groen, ook als hun eerste push dagen op zich laat wachten. Oranje = bezig met opnieuw proberen na een tijdelijk probleem, rood = laatste aflevering of verbinding mislukt. Voor kleurenblind-leesbaarheid verschillen de statussen ook in vorm: opnieuw proberen tekent als een holle **ring**, mislukt als een gevulde schijf met een klein **"min"-streepje**, gezond als een gewone gevulde schijf. Uitgeschakelde feeds worden niet getoond. De verbindingsgerichte feeds (MQTT, MySQL, telnetserver) volgen de verbinding live: rood zolang de broker/server onbereikbaar is, weer groen zodra de verbinding hersteld is.
+- **Trendgrafiekje** — de score over de laatste 1, 5, 15 of 60 minuten, of over de laatste 4 of 8 uur om de afgelopen nacht te overzien, getekend in statuskleuren: een gezonde periode is een dikke groene lijn, verslechtering toont oranje en tijd onder de meldingsdrempel toont rood. Een dun gestippeld lijntje markeert de meldingsdrempel zelf, zodat je ziet hoeveel marge de score nog heeft voordat de melding zou afgaan. De grafiek vult van rechts (nieuwste seconde rechts), dus kort na de start staat er alleen rechts al een lijn. Bij de lange (4/8-uurs) vensters beslaat één pixel meerdere minuten; naast de gemiddelde trendlijn tekent het grafiekje dan ook een dikke gekleurde band naar de *slechtste* waarde per pixel, zodat een korte ontvangstdip toch als een neerwaartse piek zichtbaar blijft in plaats van weggemiddeld te worden. Beweeg de muis over het grafiekje voor de laagste waarde in het venster en het tijdstip ervan, bijv. `lowest 40% at 03:15`.
+- **COM-stip** — alleen als seriële invoer aanstaat: groen = poort open en data komt binnen, oranje ring = open maar geen data, rood = poort niet open.
+- **Feed-stippen** — een stip + tag per **ingeschakelde** uitvoerfeed (`SM` SMTP, `WH` webhook, `TG` Telegram, `PO` Pushover, `MQ` MQTT, `MY` MySQL, `SQ` SQLite, `TS` telnetserver). Groen = geen bekend probleem — dat geldt ook voor "ingeschakeld maar nog niets afgeleverd", dus de per-bericht-feeds (webhook, Telegram, Pushover, SMTP) zijn vanaf de start groen, ook als hun eerste push dagen op zich laat wachten. Oranje = bezig met opnieuw proberen na een tijdelijk probleem, rood = laatste aflevering of verbinding mislukt. Voor kleurenblind-leesbaarheid verschillen de statussen ook in vorm: opnieuw proberen tekent als een holle **ring**, terwijl gezond en mislukt beide een gewone **gevulde schijf** zijn (groen en rood). Uitgeschakelde feeds worden niet getoond. De verbindingsgerichte feeds (MQTT, MySQL, telnetserver) volgen de verbinding live: rood zolang de broker/server onbereikbaar is, weer groen zodra de verbinding hersteld is.
 
 De feed-stip toont de laatste **uitkomst**, vastgehouden: een verzending die alleen maar bezig is verandert de stip nooit (een kapotte feed knippert dus niet groen aan het begin van elke poging), en een retry verlaagt een rode stip nooit terug naar oranje — alleen een echte geslaagde aflevering of verbinding maakt de stip weer groen.
 
@@ -163,10 +163,11 @@ Elke status**wissel** — feed-stippen en COM-link — wordt bovendien weggeschr
 |------|--------------|
 | Health source: RX needle (classic) | Dezelfde score als het RX-Q-vak rechtsboven (standaard) |
 | Health source: Penalty system | Strengere score die direct daalt bij fouten en langzaam herstelt |
-| Trend window | Venster van het trendgrafiekje: 1 / 5 / 15 / 60 minuten |
+| Trend window | Venster van het trendgrafiekje: 1 / 5 / 15 / 60 minuten, of 4 / 8 uur |
 | Hide/Show health panel | Paneel verbergen of tonen (rechtsklik op dezelfde plek om het terug te halen) |
+| Show RX needle alongside | Houd het paneel, maar breng ook de klassieke RX-signaalsterkte-naald terug in zijn oude vak helemaal rechts |
 
-De gekozen health-bron voedt ook de **RX Kwaliteitsmelding** per e-mail (zie paragraaf 10.7): wissel je de bron, dan wisselt ook waar de melding op reageert. Met de Penalty-system-bron zakt de score naar 0 % als er ongeveer twee minuten niets decodeerbaars is ontvangen (dode ether), zodat een ontvanger die stilvalt rood toont in plaats van zijn laatste gezonde waarde vast te houden; op netwerken met legitieme pauzes van meerdere minuten tussen uitzendingen dipt deze bron dus tussen de uitzendingen door, en is de klassieke naald-bron daar de betere keuze. Bij een smal venster laat het paneel eerst de labels vallen, dan het grafiekje; past zelfs dat niet, dan verschijnt de klassieke hoek tot er weer ruimte is. Instellingen staan in `pdw.ini` onder `[HealthPanel]`.
+De gekozen health-bron voedt ook de **RX Kwaliteitsmelding** per e-mail (zie paragraaf 10.7): wissel je de bron, dan wisselt ook waar de melding op reageert. Met de Penalty-system-bron zakt de score naar 0 % als er ongeveer twee minuten niets decodeerbaars is ontvangen (dode ether), zodat een ontvanger die stilvalt rood toont in plaats van zijn laatste gezonde waarde vast te houden; op netwerken met legitieme pauzes van meerdere minuten tussen uitzendingen dipt deze bron dus tussen de uitzendingen door, en is de klassieke naald-bron daar de betere keuze. De optie **Show RX needle alongside** is een derde indeling tussen "alleen paneel" en "alleen klassieke hoek": het health-paneel blijft staan, maar de klassieke RX-signaalsterkte-naald wordt er weer bij getekend in zijn oude vak helemaal rechts. Het paneel krimpt net genoeg om plaats te maken, zodat het RX-health-percentage op zijn plek blijft en de naald ernaast komt te staan; het oude RX-Q-percentagevak en waarschuwingsvierkantje blijven verborgen, want de score van het paneel vervangt ze al. Inschakelen terwijl het paneel verborgen is, toont het paneel er ook meteen bij. Bij een smal venster laat het paneel eerst de labels vallen, dan het grafiekje; past zelfs dat niet, dan verschijnt de klassieke hoek tot er weer ruimte is. Instellingen staan in `pdw.ini` onder `[HealthPanel]`.
 
 ### 5.3 Berichtkolommen
 
@@ -277,7 +278,7 @@ De vlag heeft **geen effect buiten een groepsoproep**: wanneer dezelfde capcode 
 
 **Negeer in groepsoproep** en **Monitor only** sluiten elkaar wederzijds uit: ze vragen om tegengesteld gedrag (monitor-only *toont* een bericht op het scherm en *onderdrukt* de feeds; negeer *verbergt* het op het scherm en *behoudt* de feeds). Het aanvinken van een van de twee wist automatisch de andere, zodat een filter nooit in beide modi tegelijk kan staan.
 
-**Filter overzichtskolommen.** Met *Extra informatie tonen* ingeschakeld (Filters-dialoog), toont elke rij in het Ctrl+F overzicht een compacte set per-filtermarkeringen zodat u een grote filterset in één oogopslag kunt scannen. Elke markering is **HOOFDLETTERS wanneer aan, kleine letters wanneer uit**: `CMD`/`cmd` (commandobestand), `LAB`/`lab` (label tonen), `SEP`/`sep` (afzonderlijk filterbestand), `TG`/`tg` (Telegram verzenden), `PO`/`po` (Pushover verzenden), de geluidsaam, en `IGN-GRP` wanneer *Negeer in groepsoproep* is ingesteld. De `TG`/`PO`-vlaggen weerspiegelen de per-filter *Telegram verzenden* / *Pushover verzenden*-selectievakjes, die die feeds in de modus "Alleen geselecteerde filters" verzenden - handig voor het zien welke van duizenden capcodes zijn gekoppeld aan elke meldingsservice.
+**Filter overzichtskolommen.** Met *Extra informatie tonen* ingeschakeld (Filters-dialoog), toont elke rij in het Ctrl+F overzicht een compacte set per-filtermarkeringen zodat u een grote filterset in één oogopslag kunt scannen. Elke markering is **HOOFDLETTERS wanneer aan, kleine letters wanneer uit**: `CMD`/`cmd` (commandobestand), `LAB`/`lab` (label tonen), `SEP`/`sep` (afzonderlijk filterbestand), `TG`/`tg` (Telegram verzenden), `PO`/`po` (Pushover verzenden), de geluidsnaam, en `IGN-GRP` wanneer *Negeer in groepsoproep* is ingesteld. De `TG`/`PO`-vlaggen weerspiegelen de per-filter *Telegram verzenden* / *Pushover verzenden*-selectievakjes, die deze feeds aansturen in de modus "Alleen geselecteerde filters" - handig voor het zien welke van duizenden capcodes zijn gekoppeld aan elke meldingsservice.
 
 Een reject-filter kan worden beperkt tot een specifiek bericht door de capcode te combineren met een **Tekst**-waarde: het bericht wordt alleen verworpen wanneer **zowel** de capcode **als** de tekst matcht. Dit laat u bijvoorbeeld alleen de berichten van een capcode verwerpen die een bepaald woord bevatten, terwijl alle andere berichten van diezelfde capcode normaal worden doorgelaten.
 
@@ -285,7 +286,7 @@ Wanneer **Reject** is aangevinkt, worden de actie-instellingen die geen effect h
 
 Een verworpen bericht wordt normaal uit elke uitvoer gehouden, inclusief het logbestand op schijf. De globale optie **"Verworpen berichten ook loggen"** in het Logbestand-dialoogvenster (zie sectie 10.8) overschrijft alleen het log-gedeelte: indien ingeschakeld worden verworpen berichten alsnog naar het monitorlogbestand geschreven, terwijl ze onderdrukt blijven op het scherm, in het filterlog en in alle feeds.
 
-Filterlabels kunnen maximaal **256 tekens** lang zijn.
+Filterlabels en filtertekstpatronen kunnen elk maximaal **256 tekens** lang zijn.
 
 ### 9.3 Berichttekst-matching
 
@@ -295,13 +296,13 @@ Wanneer een filter een **Tekst**-waarde heeft, moet het bericht die tekst bevatt
 |----------|-----------|-----------|-----------|
 | (gewoon)  | Substring-match | `alpha` | het bericht bevat `alpha` ergens |
 | `&`      | AND - alle delen moeten aanwezig zijn, in volgorde | `alpha&bravo` | het bericht bevat `alpha` **en**, daarna, `bravo` |
-| `\|`      | OR - een term mag overeenkomst (laagste prioriteit) | `alpha&bravo\|alpha&charlie` | het bericht overeenkomt `alpha` EN `bravo`, **of** `alpha` EN `charlie` |
+| `\|`      | OR - een van de termen mag overeenkomen (laagste prioriteit) | `alpha&bravo\|alpha&charlie` | het bericht komt overeen met `alpha` EN `bravo`, **of** met `alpha` EN `charlie` |
 | `^`      | Anker - bericht moet *beginnen* met de tekst | `^ALARM` | het bericht begint met `ALARM` |
 | `=`      | Geheel woord - de term overeenkomt alleen als een compleet woord, niet in een langer woord | `alpha&=cat` | `cat` overeenkomt alleen als zelfstandig woord, **niet** in `category` |
 
 `&` bindt strakker dan `|`, dus `A&B|C&D` leest als `(A EN B) OF (C EN D)`, net als normale rekenregels. Een OR-lijst zoals `alpha|bravo|charlie` overeenkomt als **een** van de drie termen verschijnt. Lege termen worden genegeerd, dus `|alpha` en `alpha|` beide gedragen als gewoon `alpha`.
 
-Plaats `=` direct voor een enkel woord of term om een **geheel-woord**-overeenkomst te vereisen. Een woordgrens is elk niet-alfanumeriek teken (spatie, leesteken, koppelteken) of het begin/einde van het bericht. Dit is de manier om korte codes niet in langere woorden te laten overeenkomst: `=cat` overeenkomt `cat` en `the cat-1` maar niet `category`. De `=` geldt per term, dus u kunt het vrij mixen - bijv. `alpha&=cat` houdt `alpha` als normale substring terwijl u `cat` als geheel woord vereist. Geheel-woord-matching blijft niet hoofdlettergevoelig.
+Plaats `=` direct voor een enkel woord of term om een **geheel-woord**-overeenkomst te vereisen. Een woordgrens is elk niet-alfanumeriek teken (spatie, leesteken, koppelteken) of het begin/einde van het bericht. Dit is de manier om te voorkomen dat korte codes ook binnen langere woorden overeenkomen: `=cat` komt overeen met `cat` en `the cat-1` maar niet met `category`. De `=` geldt per term, dus u kunt het vrij mixen - bijv. `alpha&=cat` houdt `alpha` als normale substring terwijl u `cat` als geheel woord vereist. Geheel-woord-matching blijft niet hoofdlettergevoelig.
 
 **Werkende voorbeelden** (alle operatoren samen):
 
@@ -459,8 +460,6 @@ De aanbevolen indeling voor een drukke groepsoproep is **Titel leeg + Belichamin
 
 Voor een FLEX-groepsoproep breiden `{label}` en `{capcode}` uit tot de volledige lijst van overeenkomende abonnees. Labels worden **een per regel** geplaatst, dus `Belichaming = {label}` geeft elke gepagineerde dienst op zijn eigen regel. De lijst wordt verzameld tot 32 KB (dezelfde capaciteit als de MQTT/webhook-feeds), zodat zelfs een 122-capcode-testmelding past. Om een dergelijke grote groepsoproep **volledig** te bezorgen, zet **Berichten splitsen over 4096 tekens AAN** - PDW verstuurt het dan als meerdere berichten. Met Splitsen **uit** gaan alleen de eerste 4096 tekens eruit en de rest wordt afgekapt met `...`.
 
-**Test** verstuurt een eenmalig bericht weergegeven via de **huidige Titel/Belichamingsvelden** met voorbeeldwaarden (een nep-paginatekst en drie voorbeeldlabels), zodat u de exacte opmaak - vet, regelafbrekingen en labelstapeling - in Telegram ziet voor het opslaan. De standaardindeling is titelloos met Belichaming `<b>{message}</b>\n{label}`.
-
 **Verzendfilter-modi** zijn exact hetzelfde als de SMTP-modi:
 
 - *Alle berichten* - elke gedecodeerde pagina.
@@ -530,7 +529,7 @@ Configureer via **Opties → Telnetserver**.
 
 PDW bevat een ingebouwde Telnetserver (standaard poort **8024**) die elk gedecodeerd bericht streamt via een gewone TCP-verbinding met behulp van een intern wire-formaat. Tot 25 gelijktijdige clients worden ondersteund. Een herverbindende client ontvangt een configureerbaar achterstallig venster (standaard 60 s) zodat het berichten kan inhalen die het miste tijdens de verbreking.
 
-TCP-keepalive is ingeschakeld op elke verbinding, zodat een half-open client (na een router/NAT-rebind, crash of netwerkblip) en zijn slot bevrijden worden vrijgesteld binnen ongeveer een minuut, in plaats van als fantoomclient "verbonden" te blijven. Meerdere gelijktijdige verbindingen van hetzelfde adres (verschillende clients achter één NAT, of test-setups) worden volledig ondersteund - elke TCP-verbinding wordt als zijn eigen sessie behandeld.
+TCP-keepalive is ingeschakeld op elke verbinding, zodat een half-open client (na een router/NAT-rebind, crash of netwerkblip) wordt gedetecteerd en zijn slot binnen ongeveer een minuut wordt vrijgegeven, in plaats van als fantoom-"verbonden" client te blijven hangen. Meerdere gelijktijdige verbindingen van hetzelfde adres (verschillende clients achter een NAT, of test-setups) worden volledig ondersteund - elke TCP-verbinding wordt als zijn eigen sessie behandeld.
 
 | Instelling | Beschrijving |
 |------------|--------------|
@@ -875,7 +874,7 @@ FLEX is een hogesnelheid pagingprotocol ontwikkeld door Motorola.
 
 PDW decodeert alle drie snelheden gelijktijdig. Berichttypen: **Alpha**, **Numeriek**, **Toon**, **Korte instructie**, **Frame-info**, **Groepsoproepen**.
 
-**Meervoudig frameherstel:** lange FLEX-alpha-berichten die meerdere frames beslaan, worden verzameld en weergegeven als een volledige string. Een succesvol hersteld bericht wordt op het scherm gemarkeerd met een asterisk (`*`) direct achter de capcode. Een fragment dat (nog) niet kon worden voltooid, krijgt in plaats daarvan een tekstmarkering naast het bericht - `[fragmented]`, of `[<type> fragment - incomplete]` voor een los fragment zonder voorafgaande reeks - zodat u een volledig herstel kunt onderscheiden van een gedeeltelijk.
+**Meervoudig frameherstel:** lange FLEX-alpha-berichten die meerdere frames beslaan, worden verzameld en weergegeven als een volledige string. Een succesvol hersteld bericht kan optioneel op het scherm gemarkeerd worden met een asterisk (`*`) direct achter de capcode. Deze markering staat **standaard uit**; schakel hem in met **Mark reassembled fragmented messages with '*' after the capcode** in **Weergave -> Schermopties** als u in een oogopslag wilt zien welke berichten uit fragmenten zijn samengesteld. Het in- of uitschakelen van de markering verandert alleen de weergave - de fragmentherstel-logica zelf draait altijd. Een fragment dat (nog) niet kon worden voltooid, krijgt in plaats daarvan een tekstmarkering naast het bericht - `[fragmented]`, of `[<type> fragment - incomplete]` voor een los fragment zonder voorafgaande reeks - zodat u een volledig herstel kunt onderscheiden van een gedeeltelijk.
 
 **Groepsoproepen:** een groepscapcode (bereik 2029568-2029583) richt zich tegelijkertijd op meerdere individuele pagers. Het netwerk stuurt eerst Short Instructions ("luister naar groep X, het bericht volgt in frame N"), die PDW vertellen welke abonnee-capcodes tot de groep behoren en in welk frame het bericht moet worden verwacht; PDW toont dan alle abonnee-capcodes en hun labels samen met het groepsbericht. Omdat een lang bericht in fragmenten kan worden gesplitst die in latere frames worden verzonden - en een drukke frame kan het ook vertragen - kan het groepsbericht rechtmatig een frame of meer later aankomen dan aangekondig. PDW verdraagt dit binnen een kleine uitstelvenster, zodat de abonneelijst altijd bij het juiste bericht blijft en wordt weergegeven zodra het bericht is voltooid.
 
