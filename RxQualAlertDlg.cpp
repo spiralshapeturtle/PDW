@@ -168,7 +168,22 @@ BOOL FAR PASCAL RxQualAlertDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 				return TRUE;
 			}
 
-			Profile.bRxQualAlertEnabled = bRxEn;
+			// FIX [AlertEnableKeepNoSmtp]: with no SMTP host configured, WM_INITDIALOG
+			// unchecks AND disables both alert checkboxes (neither alert can work without
+			// a server), so IsDlgButtonChecked reads FALSE here no matter what the user
+			// configured earlier. Writing that back silently DISABLED an already-enabled
+			// alert just by opening this dialog and pressing OK - e.g. to toggle the
+			// trend-line display option, which is deliberately NOT gated on SMTP. Keep the
+			// stored flags when there is no host: a disabled checkbox cannot carry a user
+			// intent, so there is nothing legitimate to save from it.
+			// Deliberately NOT solved by leaving the boxes checked instead: the "recipient
+			// required" check above would then block OK for anyone with no host and no
+			// recipient, trading a silent config loss for a dead-end dialog.
+			if (Profile.szMailHost[0] != '\0')
+			{
+				Profile.bRxQualAlertEnabled  = bRxEn;
+				Profile.bComLinkAlertEnabled = bComEn;	// FIX [ComLinkAlert]
+			}
 			strncpy(Profile.szRxQualMailTo, szMailTo, sizeof(Profile.szRxQualMailTo) - 1);
 			Profile.szRxQualMailTo[sizeof(Profile.szRxQualMailTo) - 1] = '\0';
 			Profile.nRxQualThreshold = thr;
@@ -180,7 +195,7 @@ BOOL FAR PASCAL RxQualAlertDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			Profile.nHealthThreshLine = (IsDlgButtonChecked(hDlg, IDC_RXQA_THRLINE) == BST_CHECKED) ? 1 : 0;
 
 			// FIX [ComLinkAlert]: save COM link-lost alert settings
-			Profile.bComLinkAlertEnabled = bComEn;
+			// (its enable flag is written with the RX one above - FIX [AlertEnableKeepNoSmtp])
 			Profile.nComLinkMinutes      = comMin;
 			Profile.nComLinkCooldown     = comCool;
 

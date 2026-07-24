@@ -346,6 +346,13 @@ static void CALLBACK TipTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD 
 		int   tx  = ptScr.x - tw - Scale(8);
 		MONITORINFO mi;
 		mi.cbSize = sizeof(mi);
+		// FIX [HealthTipMonInfoUninit]: workR must come from a branch that really filled
+		// mi. The diagnostic below used to read mi.rcWork.right whenever hMon was non-NULL,
+		// but mi is only populated when GetMonitorInfo ALSO succeeds - only cbSize is
+		// initialized here. A non-NULL hMon with a failing GetMonitorInfo (display being
+		// swapped out under RDP / monitor detached between the two calls) therefore read an
+		// uninitialized stack int into the log line. Capture it inside the success branch.
+		int workR = -1;
 		HMONITOR hMon = MonitorFromPoint(ptScr, MONITOR_DEFAULTTONEAREST);
 		if (hMon && GetMonitorInfo(hMon, &mi))
 		{
@@ -353,12 +360,12 @@ static void CALLBACK TipTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD 
 			if (tx < mi.rcWork.left)          tx = mi.rcWork.left;
 			if (ty + th > mi.rcWork.bottom)   ty = ptScr.y - th - Scale(8);
 			if (ty < mi.rcWork.top)           ty = mi.rcWork.top;
+			workR = (int)mi.rcWork.right;
 		}
 		// Diagnostic (silent unless the debug channel is enabled): confirms the
 		// measured width now tracks the current entry, not the previous one.
 		PDW_DLOG("HealthTip slot=%d pt=%d,%d tw=%d th=%d tx=%d ty=%d workR=%d",
-		         slot, ptScr.x, ptScr.y, tw, th, tx, ty,
-		         (hMon ? (int)mi.rcWork.right : -1));
+		         slot, ptScr.x, ptScr.y, tw, th, tx, ty, workR);
 		SendMessage(s_hTip, TTM_TRACKPOSITION, 0, MAKELPARAM(tx, ty));
 	}
 	s_tipSlot = slot;

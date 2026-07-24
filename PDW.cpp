@@ -12252,6 +12252,22 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	pProfile->nRxQualRecover   = (INT) GetPrivateProfileInt("RxQualAlert", "Recover",   90,  lpszIniPathName);
 	pProfile->nRxQualMinutes   = (INT) GetPrivateProfileInt("RxQualAlert", "Minutes",   15,  lpszIniPathName);
 	pProfile->nRxQualCooldown  = (INT) GetPrivateProfileInt("RxQualAlert", "Cooldown",  120, lpszIniPathName);
+	// FIX [RxQualIniClamp]: clamp these to the SAME ranges the System Alerts dialog enforces
+	// (RxQualAlertDlg.cpp IDOK), which a hand-edited pdw.ini bypassed entirely - unlike the
+	// sibling [ComLinkAlert] block below, which already clamped. The dangerous ones are
+	// Minutes=0 (s_belowCount++ immediately satisfies >= 0, so the first sub-threshold minute
+	// mails at once) and Cooldown=0 (no suppression, so a receiver that stays low mails EVERY
+	// minute - a mail storm from a single typo). Recover <= Threshold left the hysteresis
+	// reset arm unreachable, so the below-counter could never be cleared by a recovery.
+	if (pProfile->nRxQualThreshold < 1)  pProfile->nRxQualThreshold = 1;
+	if (pProfile->nRxQualThreshold > 99) pProfile->nRxQualThreshold = 99;
+	if (pProfile->nRxQualRecover > 99)   pProfile->nRxQualRecover   = 99;
+	if (pProfile->nRxQualRecover <= pProfile->nRxQualThreshold)
+		pProfile->nRxQualRecover = (pProfile->nRxQualThreshold < 99) ? pProfile->nRxQualThreshold + 1 : 99;
+	if (pProfile->nRxQualMinutes  < 1)    pProfile->nRxQualMinutes  = 1;
+	if (pProfile->nRxQualMinutes  > 120)  pProfile->nRxQualMinutes  = 120;
+	if (pProfile->nRxQualCooldown < 1)    pProfile->nRxQualCooldown = 1;
+	if (pProfile->nRxQualCooldown > 1440) pProfile->nRxQualCooldown = 1440;
 	RxQualMonitor_Reset();
 
 	// FIX [ComLinkAlert]: COM link-lost e-mail alert settings (reuses [RxQualAlert] MailTo + SMTP host)

@@ -99,18 +99,43 @@ void FeedStatus_Set(int feed, int rawStatus)
 	//  - BUSY is a send in progress, not an outcome: keep showing the last
 	//    outcome instead of flashing a broken feed green on every attempt.
 	//  - RETRY never downgrades ERROR: once red, only a real OK clears it.
-	int cur = (int)InterlockedCompareExchange(&g_feedState[feed], 0, 0);
-	int newState = cur;
-	switch (fs)
+	//
+	// FIX [FeedStatusCas]: apply that latch as one atomic compare-and-swap instead of
+	// a plain read (InterlockedCompareExchange-with-itself) followed by an unconditional
+	// InterlockedExchange. Most feeds have a single worker, but three of them also report
+	// from the GUI thread via the queue-full drop path (MqttFlushGroup / WebhookFlushGroup /
+	// the Telegram+Pushover EnqueueJob drops), so two threads CAN write the same feed. The
+	// split read/write let one clobber the other's decision and break exactly the invariant
+	// this latch exists for: worker reports RETRY and GUI reports ERROR, both read cur=OK,
+	// ERROR is written first, RETRY overwrites it - a red dot downgraded to orange. The two
+	// writers are correlated, not independent: the GUI only hits the drop path when the
+	// worker is already failing to drain the queue, i.e. precisely during the outage the
+	// dot has to report honestly. The CAS loop re-reads and re-applies the latch rules
+	// against the state it actually lost to, so no report can erase another's outcome.
+	int cur, newState;
+	for (;;)
 	{
-		case FS_BUSY:  break;                                            // keep last outcome
-		case FS_RETRY: newState = (cur == FS_ERROR) ? FS_ERROR : FS_RETRY; break;
-		default:       newState = fs; break;                             // OK / ERROR / UNKNOWN
+		cur      = (int)InterlockedCompareExchange(&g_feedState[feed], 0, 0);
+		newState = cur;
+		switch (fs)
+		{
+			case FS_BUSY:  break;                                            // keep last outcome
+			case FS_RETRY: newState = (cur == FS_ERROR) ? FS_ERROR : FS_RETRY; break;
+			default:       newState = fs; break;                             // OK / ERROR / UNKNOWN
+		}
+		if (newState == cur) return;                                         // nothing to change
+		if ((int)InterlockedCompareExchange(&g_feedState[feed], (LONG)newState, (LONG)cur) == cur)
+			break;                          // won the swap: cur is the state we really replaced
+		/* lost it - another thread moved the state; re-latch against the new value */
 	}
-	if (newState == cur) return;
 
 	// FIX [FeedTransitionLog]: snapshot the detail + stamp the since-time
 	// under the CS, log OUTSIDE it (LogManager direct mode does disk I/O).
+	// FIX [FeedStatusCas]: this now runs AFTER the state is committed rather than before.
+	// Either order leaves a one-tick window where a GUI reader pairs a state with the other
+	// field's previous value; committing first is the better half of that trade, because the
+	// state is what the latch protects and the log line below can then only describe a
+	// transition that definitely happened (it reports the value the CAS truly replaced).
 	char det[128];
 	EnterCriticalSection(&g_det.cs);
 	GetLocalTime(&g_det.stSince[feed]);
@@ -119,8 +144,6 @@ void FeedStatus_Set(int feed, int rawStatus)
 		g_det.szDetail[feed][0] = '\0';                                  // problem resolved/reset
 	strcpy(det, g_det.szDetail[feed]);
 	LeaveCriticalSection(&g_det.cs);
-
-	InterlockedExchange(&g_feedState[feed], (LONG)newState);
 
 	// FIX [HealthLogNoIdleOk]: "idle -> OK" (unproven feed's first successful
 	// contact) is not a failure and not a recovery - it clutters the health
