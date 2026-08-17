@@ -40,6 +40,7 @@
     - 10.7 [System Alerts](#107-system-alerts)
     - 10.8 [Log files and write buffering](#108-log-files-and-write-buffering)
     - 10.9 [Program options](#109-program-options)
+    - 10.10 [Lifecycle command hooks (pdw.ini)](#1010-lifecycle-command-hooks-pdwini)
 11. [Display menu](#11-display-menu)
 12. [Protocols decoded](#12-protocols-decoded)
     - 12.1 [POCSAG](#121-pocsag)
@@ -152,7 +153,7 @@ The right side of the toolbar band can show a compact health strip. It is a swit
 
 The feed dot shows the last **outcome**, latched: a send that is merely in progress never changes the dot (so a broken feed does not blink green at the start of every attempt), and a retry never downgrades a red dot back to orange — only a real successful delivery or connection turns the dot green again.
 
-**Hover the mouse** over any entry for an explanation: the score names its active source, the sparkline its window and alert level, the COM dot its link state, and each feed dot its full status including the **last problem** and the time the state changed, e.g. `Telegram: FAILED since 14:02 - API rejected message (HTTP 401)`.
+**Hover the mouse** over any entry for an explanation: the score names its active source, the sparkline its window and alert level, the COM dot its link state, and each feed dot its full status including the **last problem** and the time the state changed, e.g. `Telegram: FAILED since 14:02 - API rejected message (HTTP 401)`. Hovering the overall-status area adds a second line reporting how long PDW has been running, e.g. `Up 3d 04:12 - since 15-08 09:03` - the same uptime shown in the F12 Debug Information dialog and the tray tooltip.
 
 Every status **change** — feed dots and COM link alike — is also written to a daily log file `{date}_health.log` in the configured log directory (one line per transition, e.g. `TG (Telegram): OK -> FAILED - API rejected message (HTTP 401)`). Steady states write nothing, so the file stays tiny; use it to diagnose a problem that resolved itself while you were away. A feed's very first successful contact after startup (`idle -> OK`) is not a problem and is not logged; every transition that involves an actual issue — going into retrying/failed, and the later recovery back to OK — still logs.
 
@@ -902,6 +903,39 @@ Recommended for busy POCSAG/FLEX networks where many messages per second can cau
 | Beep on message | Audible beep for every decoded message |
 | Start minimized | Start PDW in the system tray |
 | Save position | Restore window position on next start |
+
+### 10.10 Lifecycle command hooks (pdw.ini)
+
+PDW can run an external command automatically when it starts and when it shuts down - useful for a
+watchdog script, a status file for another system, or notifying a dashboard that the decoder is (or
+is not) running. This is a `pdw.ini`-only feature, configured under its own `[Lifecycle]` section
+(there is no menu for it):
+
+```
+[Lifecycle]
+LifecycleCmdEnabled=1
+LifecycleCmd=C:\Scripts\pdw-lifecycle.bat
+LifecycleCmdArgs="%S" "%V" "%P" "%U"
+```
+
+- `LifecycleCmd` is the full path to the program or script to run.
+- `LifecycleCmdArgs` is an optional argument template using placeholders:
+
+  | Placeholder | Meaning |
+  |---|---|
+  | `%S` | `START` or `STOP` |
+  | `%V` | PDW's version string |
+  | `%P` | PDW's process ID |
+  | `%U` | Uptime in seconds since PDW started (STOP only; empty on START) |
+
+- The command runs once at startup (right after the main window is created, `%S` = `START`) and once
+  at shutdown (right at the beginning of shutdown, before PDW closes its feeds and logs, `%S` =
+  `STOP`), fire-and-forget - PDW does not wait for it to finish.
+- The working directory is set to the folder `LifecycleCmd` lives in, so a script that reads files
+  next to itself finds them regardless of PDW's own working directory.
+
+Leave `LifecycleCmdEnabled=0` (or the section out entirely) and nothing changes - the feature is off
+by default.
 
 ---
 

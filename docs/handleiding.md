@@ -40,6 +40,7 @@
     - 10.7 [Systeemmeldingen](#107-systeemmeldingen)
     - 10.8 [Logbestanden en schrijfbuffering](#108-logbestanden-en-schrijfbuffering)
     - 10.9 [Programmaopties](#109-programmaopties)
+    - 10.10 [Lifecycle-commandohaken (pdw.ini)](#1010-lifecycle-commandohaken-pdwini)
 11. [Weergavemenu](#11-weergavemenu)
     - 11.1 [Eigen filterlabelkleuren](#111-eigen-filterlabelkleuren-pdwini)
 12. [Gedecodeerde protocollen](#12-gedecodeerde-protocollen)
@@ -153,7 +154,7 @@ Rechts op de werkbalkband kan een compacte statusstrip staan. Dit is een echte o
 
 De feed-stip toont de laatste **uitkomst**, vastgehouden: een verzending die alleen maar bezig is verandert de stip nooit (een kapotte feed knippert dus niet groen aan het begin van elke poging), en een retry verlaagt een rode stip nooit terug naar oranje — alleen een echte geslaagde aflevering of verbinding maakt de stip weer groen.
 
-**Beweeg de muis** over een onderdeel voor uitleg: de score noemt zijn actieve bron, het grafiekje zijn venster en meldingsniveau, de COM-stip de linkstatus, en elke feed-stip zijn volledige status inclusief het **laatste probleem** en het tijdstip van de statuswissel, bijv. `Telegram: FAILED since 14:02 - API rejected message (HTTP 401)`.
+**Beweeg de muis** over een onderdeel voor uitleg: de score noemt zijn actieve bron, het grafiekje zijn venster en meldingsniveau, de COM-stip de linkstatus, en elke feed-stip zijn volledige status inclusief het **laatste probleem** en het tijdstip van de statuswissel, bijv. `Telegram: FAILED since 14:02 - API rejected message (HTTP 401)`. Beweeg de muis over het algemene statusgebied voor een tweede regel die toont hoe lang PDW al draait, bijv. `Up 3d 04:12 - since 15-08 09:03` - dezelfde uptime als in het F12-Debug Information-venster en het systeemvak-tooltip.
 
 Elke status**wissel** — feed-stippen en COM-link — wordt bovendien weggeschreven naar een dagelijks logbestand `{datum}_health.log` in de ingestelde logmap (één regel per overgang, bijv. `TG (Telegram): OK -> FAILED - API rejected message (HTTP 401)`). Stabiele statussen schrijven niets, dus het bestand blijft klein; gebruik het om een probleem te onderzoeken dat zichzelf oploste terwijl je weg was. De allereerste succesvolle poging van een feed na opstarten (`idle -> OK`) is geen probleem en wordt niet gelogd; elke overgang die wél een echt probleem betreft (naar retrying/failed, en het herstel terug naar OK) blijft gewoon loggen.
 
@@ -787,6 +788,39 @@ Aanbevolen voor drukke POCSAG/FLEX-netwerken waar veel berichten per seconde hog
 | Piep bij bericht | Hoorbare piep voor elk gedecodeerd bericht |
 | Geminimaliseerd starten | Start PDW in het systeemvak |
 | Positie opslaan | Herstel vensterpositie bij volgende start |
+
+### 10.10 Lifecycle-commandohaken (pdw.ini)
+
+PDW kan automatisch een extern commando uitvoeren bij het starten en bij het afsluiten - handig voor
+een watchdog-script, een statusbestand voor een ander systeem, of om een dashboard te laten weten dat
+de decoder wel/niet actief is. Dit is een functie die uitsluitend via `pdw.ini` wordt ingesteld, onder
+een eigen `[Lifecycle]`-sectie (er is geen menu voor):
+
+```
+[Lifecycle]
+LifecycleCmdEnabled=1
+LifecycleCmd=C:\Scripts\pdw-lifecycle.bat
+LifecycleCmdArgs="%S" "%V" "%P" "%U"
+```
+
+- `LifecycleCmd` is het volledige pad naar het programma of script dat uitgevoerd moet worden.
+- `LifecycleCmdArgs` is een optionele argumentensjabloon met plaatshouders:
+
+  | Plaatshouder | Betekenis |
+  |---|---|
+  | `%S` | `START` of `STOP` |
+  | `%V` | Versiestring van PDW |
+  | `%P` | Proces-ID van PDW |
+  | `%U` | Uptime in seconden sinds PDW startte (alleen bij STOP; leeg bij START) |
+
+- Het commando wordt eenmaal uitgevoerd bij opstarten (direct na het aanmaken van het hoofdvenster,
+  `%S` = `START`) en eenmaal bij afsluiten (helemaal aan het begin van het afsluitproces, vóórdat PDW
+  zijn feeds en logs sluit, `%S` = `STOP`), fire-and-forget - PDW wacht niet tot het commando klaar is.
+- De werkmap wordt ingesteld op de map waarin `LifecycleCmd` zich bevindt, zodat een script dat
+  bestanden naast zichzelf leest deze altijd vindt, ongeacht de werkmap van PDW zelf.
+
+Laat `LifecycleCmdEnabled=0` (of laat de hele sectie weg) en er verandert niets - de functie staat
+standaard uit.
 
 ---
 

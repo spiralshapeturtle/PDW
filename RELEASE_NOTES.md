@@ -1,3 +1,86 @@
+# PDW 4.0.5 - Release Notes
+
+PDW 4.0.5 adds one new feature - external start/stop lifecycle hooks for integrating PDW into a
+larger monitoring or automation setup - plus a command-line buffer hardening pass (which fixed one
+real crash and one truncation bug along the way), a corrected uptime readout shared across every
+place PDW reports it, and a redesigned Debug Information dialog. No decoder output or configuration
+format changes; existing `pdw.ini` and `filters.ini` files work unchanged (the new `[Lifecycle]`
+section is optional and defaults to off).
+
+## External start/stop lifecycle hooks (FIX [LifecycleCmd])
+PDW can now run an external command automatically when it starts and when it shuts down - useful
+for a watchdog script, a status file for another system, or notifying a dashboard that the decoder
+is (or is not) running. Configured entirely in `pdw.ini` under a new `[Lifecycle]` section
+(`LifecycleCmdEnabled`, `LifecycleCmd`, `LifecycleCmdArgs`) - there is no menu for it, matching the
+handful of other pdw.ini-only options (e.g. the custom filter label colours). The argument template
+supports four placeholders: `%S` (`START`/`STOP`), `%V` (PDW's version string), `%P` (process ID),
+and `%U` (uptime in seconds, `STOP` only - empty on `START`). The command is launched fire-and-forget
+(PDW does not wait for it to finish) with its working directory set to the folder the command itself
+lives in, mirroring the existing filter command-file behaviour (FIX [CmdWorkDir]).
+
+## Command-line buffer hardening (FIX [CmdLineBufSize], [FileLenSplit], [CmdArgsTemplateCap], [LogFileNameBound])
+Building the lifecycle hook above reused and widened the existing filter command-file machinery,
+which surfaced a related set of buffer-size issues:
+- **Crash fix** - `LogFileHandling()` copied `Profile.logfile`/`filterfile` into a fixed
+  `char[MAX_PATH]` stack buffer with a bare `strcpy`. That was only safe by coincidence while the
+  source fields were themselves capped below `MAX_PATH`; it now uses bounded
+  `_snprintf_s(_TRUNCATE)` copies regardless of source field size.
+- **Truncation fix** - the Filter Command Arguments template was silently cut off after 254
+  characters even though the edit field itself accepted more; the two caps now agree.
+- Command-line fields (the filter command file's path/arguments, and the new lifecycle command's
+  path/arguments) get their own 2048-character limit (`MAX_CMD_LEN`), separate from the
+  256-character limit that file-path fields (log file, filter file, etc.) keep (`MAX_FILE_LEN`) - a
+  long installation path plus a full argument template genuinely needs the extra room that a
+  `fopen()`-bound log filename never could use. `ActivateCommandFile()`'s internal command-line
+  buffer is now a dynamically-sized 32 KB buffer (Windows' own `CreateProcess` limit) instead of
+  sharing a fixed 5 KB buffer with the rest of the message text.
+
+## Uptime shown consistently everywhere (FIX [UptimeDisplay], [UptimeClamp])
+PDW's three "how long have I been running" readouts - the F12 Debug Information dialog, the system
+tray tooltip, and (new this release) the Health panel tooltip below - could each show a different
+number, and the F12 dialog froze completely while decoding was paused. All three now share one
+wall-clock uptime source: it counts from process start regardless of pause state, and a backwards
+clock step (NTP correction, manual change, VM snapshot restore) is clamped to zero instead of
+producing an astronomical value. The F12 dialog also keeps refreshing (uptime included) while
+paused, instead of only while decoding is active.
+
+## Health panel: uptime in the overall status tooltip (FIX [HealthUptimeTip])
+Hovering the Health panel's overall-status area now adds a second line reporting how long PDW has
+been running, e.g. `Up 3d 04:12 - since 15-08 09:03` - the same 24/7 decoder you're already glancing
+at for RX/feed health is usually also the one you want the uptime of, without opening the F12
+dialog.
+
+## Debug Information dialog rebuilt (FIX [DebugDlgLayout], [DebugDlgScratch], [DebugInputNone])
+The F12 dialog is now laid out on a proper grid - two captioned "System"/"Messages" group boxes,
+aligned label/value columns, a real Close button - instead of one unlabelled box with hand-placed
+dots as placeholders. Two related bugs turned up while rebuilding it: the dialog wrote its "Input"
+line through the same shared scratch buffer used by unrelated code elsewhere in PDW, so it could
+occasionally show a leftover string from something else entirely instead of the actual input
+source; and with neither sound card nor serial input enabled it showed that same stale leftover
+instead of "None". Both now use their own buffer and display the correct value.
+
+## Post-4.0.4 health-stack audit: 4 robustness fixes
+A follow-up audit of everything added for the Health panel since 4.0.4 (score/feed dots, RX-quality
+and COM-link alerts, the per-feed status hooks) found no crash-class defect; four real issues were
+fixed:
+- **FIX [FeedStatusCas]** - the feed-dot latch could have its state overwritten by two threads
+  reporting at once (a worker retry and a GUI-thread queue-full drop landing back-to-back), silently
+  downgrading a red "failed" dot to orange. Now a single compare-and-swap retry loop.
+- **FIX [RxQualIniClamp]** - the RX-quality alert's `pdw.ini` values were loaded unclamped (its
+  sibling COM-link alert already clamped): `Minutes=0` could mail on the very first sub-threshold
+  minute, `Cooldown=0` removed suppression entirely, and a `Recover <= Threshold` value made the
+  hysteresis reset unreachable. Now clamped to the same ranges the System Alerts dialog itself
+  enforces.
+- **FIX [AlertEnableKeepNoSmtp]** - opening the System Alerts dialog with no SMTP host configured
+  (which greys out both alert checkboxes) and clicking OK just to change the trend-line display
+  option silently disabled an already-configured alert. The enable flags are now only written back
+  when a host is configured.
+- **FIX [HealthTipMonInfoUninit]** - a tooltip diagnostic could read an uninitialized stack value
+  when a monitor handle was valid but `GetMonitorInfo` failed (e.g. a display swapped under RDP
+  between the two calls). Caught by MSVC static analysis; fixed.
+
+---
+
 # PDW 4.0.4 - Release Notes
 
 PDW 4.0.4 is a combined stability and hardening release: a full source-code audit (memory safety,

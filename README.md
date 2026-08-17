@@ -4,7 +4,7 @@
 
 ---
 
-**Version 4.0.4** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
+**Version 4.0.5** | Windows 7-11 | Win32 + x64 | Visual Studio 2017+
 
 PDW is a software paging decoder that turns a sound card or serial port into a full FLEX/ReFLEX/POCSAG receiver. It decodes, filters, and distributes paging messages to a wide range of output channels — from simple on-screen display and e-mail alerts to MQTT brokers, webhooks, Telnet clients, and MySQL databases.
 
@@ -594,6 +594,40 @@ PDW requires the **Microsoft Visual C++ Redistributable for Visual Studio 2017 o
 ---
 
 ## Changelog highlights
+
+### v4.0.5 (August 2026)
+Adds one new feature - external start/stop lifecycle hooks - plus a command-line buffer hardening
+pass, a corrected uptime readout shared everywhere PDW reports it, and a redesigned Debug
+Information dialog. No decoder-output or configuration-format changes; existing `pdw.ini` and
+`filters.ini` files work unchanged (the new `[Lifecycle]` section is optional, off by default). See
+`RELEASE_NOTES.md` for the full list.
+- **External start/stop lifecycle hooks (FIX [LifecycleCmd])** — PDW can run an external command
+  automatically on startup and shutdown (a watchdog script, a status file, a dashboard notification),
+  configured entirely in `pdw.ini` under a new `[Lifecycle]` section - no menu, matching the handful
+  of other pdw.ini-only options. The argument template supports `%S` (START/STOP), `%V` (version),
+  `%P` (process ID) and `%U` (uptime in seconds, STOP only); the command runs fire-and-forget from
+  its own folder.
+- **Command-line buffer hardening (FIX [CmdLineBufSize], [FileLenSplit], [CmdArgsTemplateCap],
+  [LogFileNameBound])** — building the lifecycle hook surfaced a related buffer-size crash
+  (`LogFileHandling()`'s fixed `MAX_PATH` stack buffer with an unbounded `strcpy`, now bounded) and a
+  truncation bug (the Filter Command Arguments template was silently cut off after 254 characters).
+  Command-line fields (filter/lifecycle command path + arguments) now get their own 2048-character
+  limit, separate from the 256-character limit file-path fields keep.
+- **Uptime shown consistently everywhere (FIX [UptimeDisplay], [UptimeClamp])** — the F12 Debug
+  Information dialog, the tray tooltip, and the Health panel tooltip now share one wall-clock uptime
+  source instead of each computing (and disagreeing on) its own; the F12 dialog no longer freezes
+  while decoding is paused, and a backwards clock step no longer produces an absurd uptime value.
+- **Health panel shows uptime (FIX [HealthUptimeTip])** — hovering the panel's overall-status area
+  now adds a second line, e.g. `Up 3d 04:12 - since 15-08 09:03`.
+- **Debug Information dialog rebuilt (FIX [DebugDlgLayout], [DebugDlgScratch], [DebugInputNone])** —
+  a proper grid layout with a real Close button, plus two bugs fixed: the "Input" line could show a
+  leftover string from an unrelated part of PDW, and showed nothing sensible when no input at all was
+  enabled (now "None").
+- **Post-4.0.4 health-stack audit: 4 robustness fixes (FIX [FeedStatusCas], [RxQualIniClamp],
+  [AlertEnableKeepNoSmtp], [HealthTipMonInfoUninit])** — a feed-dot status race that could downgrade a
+  red dot to orange, unclamped RX-quality alert `pdw.ini` values, an alert silently disabled when
+  opening System Alerts with no SMTP host configured, and an uninitialized-read tooltip diagnostic.
+  No crash-class defect found in the audit.
 
 ### v4.0.4 (July 2026)
 Combined stability and hardening release: a full source-code audit (memory safety, buffer handling, and rare corner cases across the decoders, output feeds, input paths, and the screen/GUI code), the new high-resolution toolbar, a title-bar/corner display-glitch fix, a window-position safety fix, and one small new option (a menu-bar toggle). No decoder-output or configuration-format changes; existing `pdw.ini` and `filters.ini` files work unchanged. See `RELEASE_NOTES.md` for the full list; highlights:
