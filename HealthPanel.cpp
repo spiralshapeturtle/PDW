@@ -427,6 +427,20 @@ static void TipParkAll(HWND hMain)
 	if (s_tipTimer) { if (ghWnd) KillTimer(ghWnd, HP_TIP_TIMER_ID); s_tipTimer = 0; }
 }
 
+/* FIX [HealthUptimeTip]: local time of "ago" seconds ago, as a SYSTEMTIME. FILETIME
+** arithmetic so it stays correct across midnight/month ends without pulling in <time.h>
+** (same approach as HP_FormatAgoClock further down, which formats rather than returns). */
+static BOOL HP_SystemTimeAgo(unsigned long long ago, SYSTEMTIME *out)
+{
+	SYSTEMTIME stNow;  GetLocalTime(&stNow);
+	FILETIME   ft;     if (!SystemTimeToFileTime(&stNow, &ft)) return FALSE;
+	ULARGE_INTEGER u;  u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
+	ULONGLONG back = (ULONGLONG)ago * 10000000ULL;	/* 100 ns units */
+	u.QuadPart = (u.QuadPart > back) ? (u.QuadPart - back) : 0;
+	ft.dwLowDateTime = u.LowPart; ft.dwHighDateTime = u.HighPart;
+	return FileTimeToSystemTime(&ft, out);
+}
+
 /* "since 14:02" / "since 18-07 14:02" helper for the feed tooltips. */
 static void FmtSince(const SYSTEMTIME *st, char *out, int cb)
 {
@@ -541,11 +555,25 @@ static int ComputeRollup(const HPLAYOUT *lo, char *why, int cbWhy)
 
 	if (why && cbWhy > 0)
 	{
+		/* FIX [HealthUptimeTip]: PDW is a 24/7 decoder, so "how long has it been up"
+		** belongs with the one status light you hover anyway. Second line of the rollup
+		** bubble = "Up 3d 04:12 - since 15-08 09:03", no F12 dialog needed. The start
+		** stamp is reconstructed from the uptime (FmtSince drops the date when PDW was
+		** started today, exactly like the feed tooltips). */
+		unsigned long long up = PdwUptimeSeconds();
+		char szUp[40] = "", szSince[40] = "";
+		SYSTEMTIME stStart;
+
+		PdwFormatUptime(up, 0, szUp, sizeof(szUp));
+		if (HP_SystemTimeAgo(up, &stStart)) FmtSince(&stStart, szSince, sizeof(szSince));
+
 		if (worst == 0)
-			_snprintf(why, cbWhy - 1, "Overall status: all OK (RX, input and every enabled feed healthy)");
+			_snprintf(why, cbWhy - 1, "Overall status: all OK (RX, input and every enabled feed healthy)\r\nUp %s%s%s",
+			          szUp, szSince[0] ? " - since " : "", szSince);
 		else
-			_snprintf(why, cbWhy - 1, "Overall status: %d fault%s, %d warning%s - see the score and dots",
-			          nErr, nErr == 1 ? "" : "s", nWarn, nWarn == 1 ? "" : "s");
+			_snprintf(why, cbWhy - 1, "Overall status: %d fault%s, %d warning%s - see the score and dots\r\nUp %s%s%s",
+			          nErr, nErr == 1 ? "" : "s", nWarn, nWarn == 1 ? "" : "s",
+			          szUp, szSince[0] ? " - since " : "", szSince);
 		why[cbWhy - 1] = '\0';
 	}
 	return worst;

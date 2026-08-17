@@ -50,7 +50,21 @@ typedef struct
 	char		 lasthit_time[10];
 } FILTER;
 
+// File-path fields only: logfile, filterfile, stat_file, edit_save_file.
+// FIX [CmdLineBufSize] had widened this to 2048 to support long installation paths.
+// FIX [FileLenSplit]: back to the historical 256. The widening only ever helped the two
+// CreateProcess command paths; for the log/stat/edit fields it bought nothing, because
+// LogFileHandling() hands its result to the caller's szFilename[MAX_PATH] and the ANSI CRT
+// fopen() cannot exceed MAX_PATH without a long-path manifest. A >MAX_PATH log name therefore
+// only truncated (FIX [LogFileNameBound]) instead of working, while the widening silently
+// grew eight PROFILE fields. Command lines get MAX_CMD_LEN below instead.
 #define MAX_FILE_LEN  256
+
+// FIX [FileLenSplit]: command-line fields only (filter_cmd/_args, lifecycle_cmd/_args). These
+// are passed to CreateProcess(), which accepts up to 32K, so a long installation path plus an
+// argument template genuinely needs the extra room. Kept well under the 32K CMD_BUF_SIZE that
+// ActivateCommandFile()/ActivateLifecycleCommand() expand into.
+#define MAX_CMD_LEN   2048
 
 #define MAIL_TEXT_LEN  100
 
@@ -188,10 +202,15 @@ typedef struct
 	char filterfile[MAX_FILE_LEN+1];
 	int  filterfile_use_date;
 	int  filter_cmd_file_enabled;
-	char filter_cmd[MAX_FILE_LEN+1];
-	char filter_cmd_args[MAX_FILE_LEN+1];
+	char filter_cmd[MAX_CMD_LEN+1];			// FIX [FileLenSplit]: CreateProcess path, not a log path
+	char filter_cmd_args[MAX_CMD_LEN+1];	// FIX [FileLenSplit]
 	int  filter_default_type;
 	int  filter_searchwhiletyping;
+
+	// FIX [LifecycleCmd]: lifecycle hooks (start/stop) for external tools
+	int  lifecycle_cmd_enabled;
+	char lifecycle_cmd[MAX_CMD_LEN+1];		// FIX [FileLenSplit]: CreateProcess path, not a log path
+	char lifecycle_cmd_args[MAX_CMD_LEN+1];	// FIX [FileLenSplit]
 
 	FILTERLIST filters;
 
@@ -585,6 +604,9 @@ void CreateDateFilename(char *ext, SYSTEMTIME *yesterday);
 void GetFileName(const char*, char*, int);
 void SetWindowPaneSize(int param);
 void SetNewWindowText(char* text);
+// FIX [UptimeDisplay]: shared uptime source + formatting (F12 dialog and Health panel tooltip)
+unsigned long long PdwUptimeSeconds(void);
+void PdwFormatUptime(unsigned long long secs, int bWithSeconds, char *out, int cb);
 void SystemTrayWindow(bool bHideWindow);
 void SystemTrayIcon(bool bRemoveIcon);
 

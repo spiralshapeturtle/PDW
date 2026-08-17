@@ -702,6 +702,11 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLi
 	Profile.filter_cmd_args[0]		= '\0';
 	Profile.filter_default_type		= 0;
 
+	// FIX [LifecycleCmd]: initialize lifecycle command fields
+	Profile.lifecycle_cmd_enabled	= 0;
+	Profile.lifecycle_cmd[0]		= '\0';
+	Profile.lifecycle_cmd_args[0]	= '\0';
+
 	Profile.filters.clear();
 
 	// COLORS.
@@ -1006,6 +1011,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			break;
 		}
 
+		// FIX [UptimeDisplay]: refresh the F12 dialog on every second tick, INCLUDING while
+		// decoding is paused. The refresh used to sit inside the !bPauseFlag branch below, so
+		// pausing froze the entire Debug Information window (uptime included) until resume.
+		if (wParam == SECOND_TIMER && hDebugDlg) SendMessage(hDebugDlg, WM_WININICHANGE, 0, 0L);
+
 		if (!bPauseFlag)
 		{
 			SafeDecodeTick(hWnd);							// FIX [DecodeGuard]: SEH-wrapped decode tick
@@ -1031,7 +1041,12 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 				lTime = time(NULL);		// Get current systemtime
 				// FIX [F3]: (unsigned long) overloopt na ~49 dagen; gebruik unsigned long long
-				iSecondsElapsed = (unsigned long long)difftime(lTime, tStarted);
+				// FIX [UptimeClamp]: difftime() goes NEGATIVE after a backwards clock step (NTP
+				// correction, manual change, VM restore). Casting that to an unsigned type produced
+				// an astronomical value, which flushed the whole duplicate-block buffer in one go
+				// and then kept duplicate blocking disabled until the clock caught up (and made the
+				// F12 "uptime" read absurd). Clamp to 0: entries simply linger a little longer.
+				iSecondsElapsed = (lTime > tStarted) ? (unsigned long long)difftime(lTime, tStarted) : 0ULL;
 
 				if (BlockTimer)
 				{
@@ -1046,7 +1061,6 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 						nCount_BlockBuffer[0]--;
 					}
 				}
-				if (hDebugDlg) SendMessage(hDebugDlg, WM_WININICHANGE, 0, 0L);
 
 				break;
 
@@ -1386,6 +1400,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		high_audio = Profile.invert ? DEFAULT_LO_AUDIO : DEFAULT_HI_AUDIO;
 
 		pd_reset_all();		// see decode.cpp.
+
+		// FIX [LifecycleCmd]: initialize start time and invoke START lifecycle hook
+		g_TickCountStart = GetTickCount64();
+		if (Profile.lifecycle_cmd_enabled && Profile.lifecycle_cmd[0])
+			ActivateLifecycleCommand("START");
 
 		break;
 
@@ -2301,6 +2320,11 @@ LRESULT FAR PASCAL PDWWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 		break;
 
 		case WM_DESTROY:
+
+		// FIX [LifecycleCmd]: invoke STOP lifecycle hook at the very beginning of shutdown,
+		// before any feed/log teardown, so the external tool's flush overlaps with PDW's cleanup.
+		if (Profile.lifecycle_cmd_enabled && Profile.lifecycle_cmd[0])
+			ActivateLifecycleCommand("STOP");
 
 		// FIX [TsShutdownRs232]: markeer graceful shutdown vóór UnloadDriver/rs232_disconnect,
 		// zodat het telnet-pad geen <RS232:0> emit (anders gaat de remote slave in backoff).
@@ -3552,15 +3576,58 @@ BOOL FAR PASCAL AboutDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 } // end of AboutDlgProc
 
 
+// FIX [UptimeDisplay]: single source of truth for "how long has PDW been running".
+// Derived straight from tStarted (wall clock) instead of the accumulated iSecondsElapsed
+// counter: that counter only advances while decoding is NOT paused (see the bPauseFlag
+// gate in the SECOND_TIMER handler), so every pause permanently shortened the reported
+// uptime. A backwards clock step yields a negative difference and is clamped to 0 here -
+// casting that to an unsigned type used to produce an astronomical uptime.
+unsigned long long PdwUptimeSeconds(void)
+{
+	time_t tNow = time(NULL);
+
+	if (tNow <= tStarted) return 0ULL;
+
+	return (unsigned long long)difftime(tNow, tStarted);
+}
+
+
+// FIX [UptimeDisplay]: shared "3d 04:12" / "3d 04:12:09" formatting, so the F12 dialog
+// and the Health panel tooltip can never drift apart. The day part is omitted below 24 h.
+void PdwFormatUptime(unsigned long long secs, int bWithSeconds, char *out, int cb)
+{
+	unsigned long long d, h, m, s;
+
+	if (!out || cb <= 0) return;
+
+	d = secs / 86400;
+	h = (secs / 3600) % 24;
+	m = (secs / 60) % 60;
+	s = secs % 60;
+
+	if (d)
+	{
+		if (bWithSeconds) _snprintf(out, cb - 1, "%llud %02llu:%02llu:%02llu", d, h, m, s);
+		else              _snprintf(out, cb - 1, "%llud %02llu:%02llu", d, h, m);
+	}
+	else
+	{
+		if (bWithSeconds) _snprintf(out, cb - 1, "%02llu:%02llu:%02llu", h, m, s);
+		else              _snprintf(out, cb - 1, "%02llu:%02llu", h, m);
+	}
+	out[cb - 1] = '\0';
+}
+
+
 // PH: PDW Debug information
 BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	extern bool bFlexTIME_detected;
 
-	char rxqual[10]="- %";
-	char temp[32];
-
-	int days, hours, minutes, seconds;
+	// FIX [DebugDlgScratch]: local scratch buffer. This dialog used the SHARED global
+	// szTEMP, which is written by unrelated code paths all over PDW - see the Input
+	// field below, where that leaked a foreign string into the dialog.
+	char buf[64];
 
 	switch (uMsg)
 	{
@@ -3573,19 +3640,28 @@ BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemText(hDlg, IDC_DEBUG_OS,      szOSType);
 		SetDlgItemText(hDlg, IDC_DEBUG_STARTED, szDebugStarted);
 
+		// FIX [DebugInputNone]: with neither input enabled, nothing was written to the
+		// buffer and whatever the global szTEMP happened to hold (a rejected-message
+		// line, a filename, ...) was displayed as the input source. Say "None" instead.
 		if (Profile.audioEnabled)
 		{
-			strcpy(szTEMP, "Soundcard");
+			strcpy(buf, "Soundcard");
 		}
 		else if (Profile.comPortEnabled)
 		{
-			sprintf(szTEMP, "%s/COM%i", Profile.comPortRS232 ? "RS232" : "Slicer", Profile.comPort);
+			sprintf(buf, "%s/COM%i", Profile.comPortRS232 ? "RS232" : "Slicer", Profile.comPort);
 		}
-		SetDlgItemText(hDlg, IDC_DEBUG_INPUT, szTEMP);
+		else
+		{
+			strcpy(buf, "None");
+		}
+		SetDlgItemText(hDlg, IDC_DEBUG_INPUT, buf);
 		SetDlgItemText(hDlg, IDC_DEBUG_FLEXTIME, bFlexTIME_detected ? "Detected" : "Not detected");
+		// FIX [DebugDlgLayout]: no fake space padding before the colons - the dialog font is
+		// proportional, so the padded columns never lined up anyway.
 		SetDlgItemText(hDlg, IDC_DEBUG_RESET,
-			"Shift+F12     : reset missed / buffer / fragmented\r\n"
-			"Alt+Shift+F12 : full reset (incl. messages + groupcalls)");
+			"Shift+F12: reset missed / buffer / fragmented\r\n"
+			"Alt+Shift+F12: full reset (incl. messages + groupcalls)");
 
 		SendMessage(hDlg, WM_WININICHANGE, 0, 0L);
 
@@ -3593,24 +3669,18 @@ BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 		case WM_WININICHANGE:
 
-		days	= iSecondsElapsed/86400;
-//		hours	= (iSecondsElapsed-(days*86400))/3600;
-//		minutes	= (iSecondsElapsed-(days*86400)-(hours*3600))/60;
-//		seconds = (iSecondsElapsed-(days*86400)-(hours*3600)-(minutes*60));
-		hours	= (iSecondsElapsed/3600) % 24;
-		minutes	= (iSecondsElapsed/60) % 60;
-		seconds = iSecondsElapsed % 60;
+		// FIX [UptimeDisplay]: real uptime (wall clock since start), not the pause-gated
+		// iSecondsElapsed counter, which lost every paused second for good.
+		PdwFormatUptime(PdwUptimeSeconds(), 1, buf, sizeof(buf));
+		SetDlgItemText(hDlg, IDC_DEBUG_RUNNING, buf);
 
-		sprintf(temp, "%id%ih%im%is", days, hours, minutes, seconds);
-
-		SetDlgItemText(hDlg, IDC_DEBUG_RUNNING, temp);
 		SetDlgItemInt(hDlg, IDC_DEBUG_MSG, nCount_Messages, false);
 
 		if (Profile.monitor_paging)
 		{
 			SetDlgItemInt (hDlg, IDC_DEBUG_GROUPMSG,nCount_Groupcalls, false);
-			sprintf(szTEMP, "%i / %i", nCount_Missed[0], nCount_Missed[1]);
-			SetDlgItemText(hDlg, IDC_DEBUG_MISSED, szTEMP);
+			sprintf(buf, "%i / %i", nCount_Missed[0], nCount_Missed[1]);
+			SetDlgItemText(hDlg, IDC_DEBUG_MISSED, buf);
 		}
 		else
 		{
@@ -3621,8 +3691,8 @@ BOOL FAR PASCAL DebugDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SetDlgItemInt(hDlg, IDC_DEBUG_BLOCKED, nCount_Blocked,  false);
 
 //		SetDlgItemInt(hDlg, IDC_DEBUG_TEST, iDebug_Test, false);
-		sprintf(szTEMP, "%i / %i", nCount_BlockBuffer[0], nCount_BlockBuffer[1]);
-		SetDlgItemText(hDlg, IDC_DEBUG_BLOCKBUFFER, szTEMP);
+		sprintf(buf, "%i / %i", nCount_BlockBuffer[0], nCount_BlockBuffer[1]);
+		SetDlgItemText(hDlg, IDC_DEBUG_BLOCKBUFFER, buf);
 		SetDlgItemInt(hDlg, IDC_DEBUG_FRAGMSG, nCount_Fragments, false);
 
 		return (TRUE);
@@ -8020,10 +8090,12 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 							  "ACARS Reg.no", "Mobitex MAN" };
 	OPENFILENAME ofn = {0};
 	char szFileFilter[FILTER_FILE_LEN+1], szFileTitle[256], szFileFilterExt[5]="flt";
-	char szFileCmd[MAX_FILE_LEN+1], szCmdArgs[MAX_FILE_LEN+1];
+	// FIX [FileLenSplit]: these three mirror Profile.filter_cmd/filter_cmd_args, which are
+	// MAX_CMD_LEN now that MAX_FILE_LEN is back at its MAX_PATH-compatible size.
+	char szFileCmd[MAX_CMD_LEN+1], szCmdArgs[MAX_CMD_LEN+1];
 	char tmp_message[256];			// PH: Buffer for error messages
 	char temp_filename[MAX_PATH]="";
-	char temp[MAX_FILE_LEN+1];
+	char temp[MAX_CMD_LEN+1];
 	int  i, state, date_state, cmd_state, index;
 
 	FILE *pFileFilter = NULL;
@@ -8094,7 +8166,7 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 			EnableWindow(GetDlgItem(hDlg, IDC_FILTERCMDFILE),   true);
 		}
 
-		SendDlgItemMessage(hDlg, IDC_FILTERCMDARGS, EM_LIMITTEXT, MAX_FILE_LEN, 0L);
+		SendDlgItemMessage(hDlg, IDC_FILTERCMDARGS, EM_LIMITTEXT, MAX_CMD_LEN, 0L);	// FIX [FileLenSplit]
 
 		if (Profile.filter_cmd[0])
 		{
@@ -8274,7 +8346,7 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 
 			case IDC_FILTERCMDFILE:
 
-				GetDlgItemText(hDlg, IDC_FILTERCMDFILE, temp, MAX_FILE_LEN+1);
+				GetDlgItemText(hDlg, IDC_FILTERCMDFILE, temp, MAX_CMD_LEN+1);	// FIX [FileLenSplit]
 
 				EnableWindow(GetDlgItem(hDlg, IDC_FILTERCMDARGS), strlen(temp));
 
@@ -8358,7 +8430,7 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 			Profile.FilterWindowExtra  = IsDlgButtonChecked(hDlg, IDC_FILTERSEXTRA);	// Show CMD/DESC/SEP/etc in filterwindow
 
 			// Command file stuff
-			GetDlgItemText(hDlg, IDC_FILTERCMDFILE, szFileCmd, MAX_FILE_LEN+1);
+			GetDlgItemText(hDlg, IDC_FILTERCMDFILE, szFileCmd, MAX_CMD_LEN+1);	// FIX [FileLenSplit]
 
 			cmd_state = IsDlgButtonChecked(hDlg, IDC_FILTERCMDEN);
 
@@ -8374,7 +8446,7 @@ BOOL FAR PASCAL FilterOptionsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
 			strcpy(Profile.filter_cmd, szFileCmd);
 
 			// Get filter Command args
-			GetDlgItemText(hDlg, IDC_FILTERCMDARGS, szCmdArgs, MAX_FILE_LEN+1);
+			GetDlgItemText(hDlg, IDC_FILTERCMDARGS, szCmdArgs, MAX_CMD_LEN+1);	// FIX [FileLenSplit]
 
 			strcpy(Profile.filter_cmd_args, szCmdArgs);
 
@@ -12302,14 +12374,21 @@ BOOL GetPrivateProfileSettings(LPCTSTR lpszAppTitle, LPCTSTR lpszIniPathName, PP
 	g_betterContrast    = (BOOL) pProfile->betterContrast;
 	g_lighterBackground = (BOOL) pProfile->lighterBackground;
 
+	// FIX [LifecycleSection]: moved out of [Filter] into its own [Lifecycle] section. These are
+	// process start/stop hooks, not filter settings; [Filter] only ever held them because the
+	// filter command file lives there. No migration code is needed - the keys never shipped.
+	pProfile->lifecycle_cmd_enabled = (INT) GetPrivateProfileInt("Lifecycle", TEXT("LifecycleCmdEnabled"), pProfile->lifecycle_cmd_enabled, lpszIniPathName);
+	GetPrivateProfileString("Lifecycle", TEXT("LifecycleCmd"), "", pProfile->lifecycle_cmd, MAX_CMD_LEN, lpszIniPathName);
+	GetPrivateProfileString("Lifecycle", TEXT("LifecycleCmdArgs"), "", pProfile->lifecycle_cmd_args, MAX_CMD_LEN, lpszIniPathName);
+
 	/***** Get Filter settings *****/
 
 	pProfile->filterfile_enabled = (INT) GetPrivateProfileInt("Filter", TEXT("FilterFileEnabled"), pProfile->filterfile_enabled, lpszIniPathName);
 	GetPrivateProfileString("Filter", TEXT("FilterFile"), "", pProfile->filterfile, FILTER_FILE_LEN, lpszIniPathName);
 	pProfile->filterfile_use_date = (INT) GetPrivateProfileInt("Filter", TEXT("FilterFileUseDate"), pProfile->filterfile_use_date, lpszIniPathName);
 	pProfile->filter_cmd_file_enabled = (INT) GetPrivateProfileInt("Filter", TEXT("FilterCmdFileEnabled"), pProfile->filter_cmd_file_enabled, lpszIniPathName);
-	GetPrivateProfileString("Filter", TEXT("FilterCmdFile"), "", pProfile->filter_cmd, MAX_FILE_LEN, lpszIniPathName);
-	GetPrivateProfileString("Filter", TEXT("FilterCmdArgs"), "", pProfile->filter_cmd_args, MAX_FILE_LEN, lpszIniPathName);
+	GetPrivateProfileString("Filter", TEXT("FilterCmdFile"), "", pProfile->filter_cmd, MAX_CMD_LEN, lpszIniPathName);		// FIX [FileLenSplit]
+	GetPrivateProfileString("Filter", TEXT("FilterCmdArgs"), "", pProfile->filter_cmd_args, MAX_CMD_LEN, lpszIniPathName);	// FIX [FileLenSplit]
 	pProfile->filter_default_type = (INT) GetPrivateProfileInt("Filter", TEXT("FilterDefaultType"), pProfile->filter_default_type, lpszIniPathName);
 	// FIX [FilterTypeClamp]: filter.type = default+1 indexes capcode_len[7], so the
 	// stored default must stay 0..5; a hand-edited/corrupt INI value drove an
@@ -12991,6 +13070,15 @@ void WriteSettings()
 		sprintf(szTEMP,"FilterCmdArgs=\"%s\"\n",		Profile.filter_cmd_args);
 		fwrite(szTEMP, strlen(szTEMP), 1, pFile);
 		fprintf(pFile, "FilterDefaultType=%i\n",		Profile.filter_default_type);
+
+		// FIX [LifecycleCmd]: save lifecycle command configuration
+		// FIX [LifecycleSection]: own section instead of [Filter] - see the read side in
+		// GetPrivateProfileSettings(). Written last, as a complete block of its own.
+		fprintf(pFile, "\n[Lifecycle]\n");
+		fprintf(pFile, "LifecycleCmdEnabled=%i\n",		Profile.lifecycle_cmd_enabled);
+		fprintf(pFile, "LifecycleCmd=%s\n",				Profile.lifecycle_cmd);
+		sprintf(szTEMP,"LifecycleCmdArgs=\"%s\"\n",		Profile.lifecycle_cmd_args);
+		fwrite(szTEMP, strlen(szTEMP), 1, pFile);
 
 		fclose(pFile);
 		pFile=NULL;
@@ -14091,11 +14179,15 @@ static void SystemTrayUpdateTooltip()
 	nid.uID    = 110;
 	nid.uFlags = NIF_TIP;
 
-	unsigned long long h = iSecondsElapsed / 3600;
-	unsigned long long m = (iSecondsElapsed % 3600) / 60;
+	// FIX [UptimeDisplay]: the tray tooltip was the one uptime readout still driven by
+	// iSecondsElapsed, so it disagreed with the F12 dialog and the Health rollup tooltip:
+	// that counter only advances while decoding is NOT paused, and since FIX [UptimeClamp]
+	// it also restarts from 0 after a backwards clock step. Use the shared wall-clock helper.
+	char szUp[40];
+	PdwFormatUptime(PdwUptimeSeconds(), 0, szUp, sizeof(szUp));
 	_snprintf(nid.szTip, sizeof(nid.szTip) - 1,
-	          "%s%s  msgs: %d  up: %02llu:%02llu",
-	          pdw_version, g_szModeLabel, nCount_Messages, h, m);
+	          "%s%s  msgs: %d  up: %s",
+	          pdw_version, g_szModeLabel, nCount_Messages, szUp);
 
 	Shell_NotifyIcon(NIM_MODIFY, &nid);
 }

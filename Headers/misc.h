@@ -15,6 +15,7 @@
 #define FLEXGROUPMODE_HIDEGROUPCODES	0x08
 
 extern unsigned long long iSecondsElapsed;  // FIX [F3]: unsigned long overloopt na ~49 dagen
+extern ULONGLONG g_TickCountStart;			// FIX [LifecycleCmd]: process start time for uptime
 
 extern char Current_MSG[9][MAX_STR_LEN];	// PH: Buffer for all message items
 extern unsigned char message_buffer[MAX_STR_LEN+1];
@@ -45,6 +46,7 @@ char LogFileHandling(int file, char *szFileName, int action);
 
 bool PlayWaveFile(bool bMONITOR_ONLY, bool bFILTERED, bool bPlay);
 void CollectLogfileLine(char *string, bool bFilterfile);
+void ActivateLifecycleCommand(const char *state);	// FIX [LifecycleCmd]: invoke START/STOP hooks
 void ActivateCommandFile();
 int  Check_4_Filtermatch();
 int  CompareMessage(int item, int mon_or_filt);

@@ -226,39 +226,45 @@ BEGIN
     CONTROL         "Filter Window",IDC_CLEAR_PANE2,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,25,26,58,8
 END
 
-DEBUGDLGBOX DIALOGEX 10, 10, 231, 116
+// FIX [DebugDlgLayout]: rebuilt on a single grid - two captioned group boxes ("System" /
+// "Messages") instead of one empty box, one label column + one value column per half so
+// the values line up, even vertical rhythm (13 dlu rows), and a real Close button. The
+// hidden TEST pair is kept for the commented-out iDebug_Test readout in DebugDlgProc.
+DEBUGDLGBOX DIALOGEX 10, 10, 302, 152
 STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 CAPTION "PDW Debug Information"
 FONT 8, "Verdana", 0, 0, 0x0
 BEGIN
-    GROUPBOX        "",IDC_STATIC,2,0,227,114
-    LTEXT           "OS :",IDC_STATIC,8,10,16,8
-    LTEXT           ".....",IDC_DEBUG_OS,46,10,174,8
-    LTEXT           "Started :",IDC_STATIC,8,20,30,8
-    LTEXT           ".....",IDC_DEBUG_STARTED,46,20,65,8
-    LTEXT           "Running :",IDC_STATIC,8,30,32,8
-    LTEXT           ".....",IDC_DEBUG_RUNNING,46,30,57,8
-    LTEXT           "Input :",IDC_STATIC,8,40,23,8
-    LTEXT           ".....",IDC_DEBUG_INPUT,46,40,48,8
-    LTEXT           "FlexTIME :",IDC_STATIC,8,50,38,8
-    LTEXT           ".....",IDC_DEBUG_FLEXTIME,46,50,48,8
-    LTEXT           "Messages :",IDC_STATIC,116,20,38,8
-    LTEXT           ".....",IDC_DEBUG_MSG,193,20,34,8
-    LTEXT           "> Rejected :",IDC_STATIC,120,30,42,8
-    LTEXT           ".....",IDC_DEBUG_REJECTED,193,30,34,8
-    LTEXT           "> Blocked :",IDC_STATIC,120,40,38,8
-    LTEXT           ".....",IDC_DEBUG_BLOCKED,193,40,34,8
-    LTEXT           "> Buffer (timer) :",IDC_STATIC,120,50,60,8
-    LTEXT           ".....",IDC_DEBUG_BLOCKBUFFER,193,50,34,8
-    LTEXT           "> Groupcalls :",IDC_STATIC,120,60,46,8
-    LTEXT           ".....",IDC_DEBUG_GROUPMSG,193,59,34,8
-    LTEXT           "> Missed groupcalls :",IDC_STATIC,120,69,71,8
-    LTEXT           ".....",IDC_DEBUG_MISSED,193,69,34,8
-    LTEXT           ".....",IDC_DEBUG_FRAGMSG,193,80,34,8
-    LTEXT           "TEST :",IDC_STATIC,8,69,23,8,NOT WS_VISIBLE
-    LTEXT           ".....",IDC_DEBUG_TEST,38,69,67,8,NOT WS_VISIBLE
-    LTEXT           "",IDC_DEBUG_RESET,8,92,220,16
-    LTEXT           "> Fragmented :",IDC_STATIC,120,79,53,8
+    GROUPBOX        "System",IDC_STATIC,6,2,290,54
+    LTEXT           "OS :",IDC_STATIC,14,14,36,8
+    LTEXT           "-",IDC_DEBUG_OS,54,14,234,8
+    LTEXT           "Started :",IDC_STATIC,14,27,36,8
+    LTEXT           "-",IDC_DEBUG_STARTED,54,27,104,8
+    LTEXT           "Uptime :",IDC_STATIC,14,40,36,8
+    LTEXT           "-",IDC_DEBUG_RUNNING,54,40,104,8
+    LTEXT           "Input :",IDC_STATIC,170,27,38,8
+    LTEXT           "-",IDC_DEBUG_INPUT,212,27,76,8
+    LTEXT           "FlexTIME :",IDC_STATIC,170,40,38,8
+    LTEXT           "-",IDC_DEBUG_FLEXTIME,212,40,76,8
+    GROUPBOX        "Messages",IDC_STATIC,6,60,290,64
+    LTEXT           "Messages :",IDC_STATIC,14,72,76,8
+    LTEXT           "-",IDC_DEBUG_MSG,94,72,54,8
+    LTEXT           "> Rejected :",IDC_STATIC,14,85,76,8
+    LTEXT           "-",IDC_DEBUG_REJECTED,94,85,54,8
+    LTEXT           "> Blocked :",IDC_STATIC,14,98,76,8
+    LTEXT           "-",IDC_DEBUG_BLOCKED,94,98,54,8
+    LTEXT           "> Buffer (timer) :",IDC_STATIC,14,111,76,8
+    LTEXT           "-",IDC_DEBUG_BLOCKBUFFER,94,111,54,8
+    LTEXT           "> Groupcalls :",IDC_STATIC,158,72,90,8
+    LTEXT           "-",IDC_DEBUG_GROUPMSG,252,72,38,8
+    LTEXT           "> Missed groupcalls :",IDC_STATIC,158,85,90,8
+    LTEXT           "-",IDC_DEBUG_MISSED,252,85,38,8
+    LTEXT           "> Fragmented :",IDC_STATIC,158,98,90,8
+    LTEXT           "-",IDC_DEBUG_FRAGMSG,252,98,38,8
+    LTEXT           "TEST :",IDC_STATIC,158,111,36,8,NOT WS_VISIBLE
+    LTEXT           "-",IDC_DEBUG_TEST,196,111,60,8,NOT WS_VISIBLE
+    LTEXT           "",IDC_DEBUG_RESET,10,130,226,18
+    DEFPUSHBUTTON   "Close",IDCANCEL,248,132,48,14
 END
 
 PRCANCEL DIALOG 10, 10, 100, 40
@@ -1267,8 +1273,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 4,0,4,0
- PRODUCTVERSION 4,0,4,0
+ FILEVERSION 4,0,5,0
+ PRODUCTVERSION 4,0,5,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x21L
@@ -1293,12 +1299,12 @@ BEGIN
             VALUE "Comments", "Supports Windows XP - WIN11"
             VALUE "CompanyName", "PDW Project"
             VALUE "FileDescription", "PDW - POCSAG/FLEX paging decoder"
-            VALUE "FileVersion", "4.0.4"
+            VALUE "FileVersion", "4.0.5"
             VALUE "InternalName", "PDW"
             VALUE "LegalCopyright", "GPL-3.0. (c) Jason Petty, Peter Hunt and contributors"
             VALUE "OriginalFilename", "PDW.exe"
             VALUE "ProductName", "PDW Paging Decoder"
-            VALUE "ProductVersion", "4.0.4"
+            VALUE "ProductVersion", "4.0.5"
         END
     END
     BLOCK "VarFileInfo"

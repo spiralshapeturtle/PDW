@@ -119,6 +119,8 @@ BYTE messageitems_colors[7];				// buffer for message items colors
 unsigned char message_buffer[MAX_STR_LEN+1];// buffer for message characters
 unsigned char mobitex_buffer[MAX_STR_LEN+1];// buffer for mobitex characters
 unsigned char rev_msg_buffer[MAX_STR_LEN+1];// required for logfile output
+// FIX [LifecycleCmd]: track process start time for uptime calculation
+ULONGLONG g_TickCountStart = 0;
 
 int iMessageIndex=0;
 
@@ -2518,7 +2520,13 @@ void ResetBools()
 char LogFileHandling(int file, char *szFileName, int action)
 {
 	int  i=1, UseDate=0;
-	char filename[MAX_PATH];		// Temp buffer for setting filenames
+	// FIX [LogFileNameBound]: was char[MAX_PATH] (260) with unbounded strcpy's below, so a
+	// Profile.logfile/filterfile longer than the buffer smashed this stack frame on every log
+	// open. Size the buffer to the source fields and copy bounded.
+	// FIX [FileLenSplit]: MAX_FILE_LEN is back at 256, so the buffer is once again smaller than
+	// MAX_PATH; the bounded copies stay, since IDC_LOGFILE still has no EM_LIMITTEXT and the
+	// field can also be hand-edited into pdw.ini.
+	char filename[MAX_FILE_LEN+1];	// Temp buffer for setting filenames
 	char ext[5];					// Temp buffer for file extension
 
 	// FIX [LogFileInit]: filename/ext bleven ongeïnitialiseerd in de default-case van de
@@ -2532,26 +2540,27 @@ char LogFileHandling(int file, char *szFileName, int action)
 	{
 		switch (file)
 		{
+			// FIX [LogFileNameBound]: bounded copies - see buffer comment above.
 			case MONITOR:
-			strcpy(filename, Profile.logfile);
+			_snprintf_s(filename, sizeof(filename), _TRUNCATE, "%s", Profile.logfile);
 			strcpy(ext, ".log");
 			UseDate = Profile.logfile_use_date;
 			break;
 
 			case FILTER:
-			strcpy(filename, Profile.filterfile);
+			_snprintf_s(filename, sizeof(filename), _TRUNCATE, "%s", Profile.filterfile);
 			strcpy(ext, ".flt");
 			UseDate = Profile.filterfile_use_date;
 			break;
 
 			case SEPARATE:
-			strcpy(filename, Profile.filters[iMatch].sep_filterfile[0]);
+			_snprintf_s(filename, sizeof(filename), _TRUNCATE, "%s", Profile.filters[iMatch].sep_filterfile[0]);
 			break;
 			case SEPARATE+1:
-			strcpy(filename, Profile.filters[iMatch].sep_filterfile[1]);
+			_snprintf_s(filename, sizeof(filename), _TRUNCATE, "%s", Profile.filters[iMatch].sep_filterfile[1]);
 			break;
 			case SEPARATE+2:
-			strcpy(filename, Profile.filters[iMatch].sep_filterfile[2]);
+			_snprintf_s(filename, sizeof(filename), _TRUNCATE, "%s", Profile.filters[iMatch].sep_filterfile[2]);
 			break;
 
 			default:
@@ -3159,22 +3168,173 @@ int Check_4_Filtermatch()
 }
 
 
+// FIX [LifecycleCmd]: invoke lifecycle command (START/STOP) with placeholder substitution.
+// Placeholders: %S (START/STOP), %V (version), %P (PID), %U (uptime in seconds, STOP only)
+void ActivateLifecycleCommand(const char *state)
+{
+	if (!Profile.lifecycle_cmd_enabled || !Profile.lifecycle_cmd[0])
+		return;
+
+	const int CMD_BUF_SIZE = 32768;
+	char *args_expanded = (char *)malloc(CMD_BUF_SIZE);
+	if (!args_expanded)
+	{
+		PDW_DLOG("ActivateLifecycleCommand: malloc failed");
+		return;
+	}
+
+	// Simple placeholder substitution: %S, %V, %P, %U
+	int arg_pos = 0;
+	char tmp[128];
+
+	for (int i = 0; Profile.lifecycle_cmd_args[i] != 0 && arg_pos < CMD_BUF_SIZE - 1; i++)
+	{
+		if (Profile.lifecycle_cmd_args[i] == '%' && Profile.lifecycle_cmd_args[i + 1] != 0)
+		{
+			if (Profile.lifecycle_cmd_args[i + 1] == 'S')	// state: START / STOP
+			{
+				int slen = strlen(state);
+				if (arg_pos + slen < CMD_BUF_SIZE - 1)
+				{
+					strcpy(args_expanded + arg_pos, state);
+					arg_pos += slen;
+				}
+				i++;
+			}
+			else if (Profile.lifecycle_cmd_args[i + 1] == 'V')	// version
+			{
+				int vlen = strlen(PDW_VERSION_STR);
+				if (arg_pos + vlen < CMD_BUF_SIZE - 1)
+				{
+					strcpy(args_expanded + arg_pos, PDW_VERSION_STR);
+					arg_pos += vlen;
+				}
+				i++;
+			}
+			else if (Profile.lifecycle_cmd_args[i + 1] == 'P')	// PID
+			{
+				sprintf(tmp, "%lu", GetCurrentProcessId());
+				int plen = strlen(tmp);
+				if (arg_pos + plen < CMD_BUF_SIZE - 1)
+				{
+					strcpy(args_expanded + arg_pos, tmp);
+					arg_pos += plen;
+				}
+				i++;
+			}
+			else if (Profile.lifecycle_cmd_args[i + 1] == 'U')	// uptime (STOP only)
+			{
+				if (state[0] == 'S' && state[1] == 'T' && state[2] == 'O')	// "STOP"
+				{
+					// FIX [LifecycleCmd]: guard against g_TickCountStart == 0 (WM_CREATE never fired)
+					// (g_TickCountStart is defined at file scope above and declared in misc.h)
+					if (g_TickCountStart > 0)
+					{
+						ULONGLONG elapsed_ms = GetTickCount64() - g_TickCountStart;
+						sprintf(tmp, "%llu", elapsed_ms / 1000);	// seconds
+						int ulen = strlen(tmp);
+						if (arg_pos + ulen < CMD_BUF_SIZE - 1)
+						{
+							strcpy(args_expanded + arg_pos, tmp);
+							arg_pos += ulen;
+						}
+					}
+				}
+				i++;
+			}
+			else
+			{
+				args_expanded[arg_pos++] = Profile.lifecycle_cmd_args[i];
+			}
+		}
+		else
+		{
+			args_expanded[arg_pos++] = Profile.lifecycle_cmd_args[i];
+		}
+	}
+	args_expanded[arg_pos] = 0;
+
+	// Build command line
+	char *szCommandLine = (char *)malloc(CMD_BUF_SIZE);
+	if (!szCommandLine)
+	{
+		PDW_DLOG("ActivateLifecycleCommand: malloc failed for command line");
+		free(args_expanded);
+		return;
+	}
+
+	if (args_expanded[0])
+		_snprintf(szCommandLine, CMD_BUF_SIZE, "%s %s", Profile.lifecycle_cmd, args_expanded);
+	else
+		strncpy(szCommandLine, Profile.lifecycle_cmd, CMD_BUF_SIZE - 1);
+	szCommandLine[CMD_BUF_SIZE - 1] = '\0';
+
+	// Derive working directory from command path
+	char *szWorkDir = (char *)malloc(CMD_BUF_SIZE);
+	if (!szWorkDir)
+	{
+		PDW_DLOG("ActivateLifecycleCommand: malloc failed for work dir");
+		free(args_expanded);
+		free(szCommandLine);
+		return;
+	}
+	strncpy(szWorkDir, Profile.lifecycle_cmd, CMD_BUF_SIZE - 1);
+	szWorkDir[CMD_BUF_SIZE - 1] = '\0';
+	char *pSlash = strrchr(szWorkDir, '\\');
+	if (!pSlash) pSlash = strrchr(szWorkDir, '/');
+	if (pSlash) *pSlash = '\0'; else szWorkDir[0] = '\0';
+
+	// Spawn process (fire-and-forget)
+	PROCESS_INFORMATION pif;
+	STARTUPINFO si;
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+
+	if (CreateProcess(NULL, szCommandLine, NULL, NULL, FALSE, NULL, 0,
+	                  szWorkDir[0] ? szWorkDir : NULL, &si, &pif))
+	{
+		CloseHandle(pif.hProcess);
+		CloseHandle(pif.hThread);
+	}
+
+	free(args_expanded);
+	free(szCommandLine);
+	free(szWorkDir);
+}
+
 void ActivateCommandFile()
 {
 //	int  arg_pos=0, arg, tmp_index;		// Command file / argument stuff
 	int  arg_pos=0, arg;
 	int  pos, i=0;
 //	char param_str[MAX_STR_LEN], tmp_fname[MAX_PATH], tmp_pagername[100], tmp[10];
-	char param_str[MAX_STR_LEN], tmp_pagername[100], tmp[10];
-	char szCommandFile[MAX_STR_LEN];	// was MAX_PATH
+	// FIX [CmdLineBufSize]: use dynamically-sized buffer up to Windows' CreateProcess limit (32K).
+	// Old code shared fixed 5120-byte MAX_STR_LEN for param_str and szCommandFile, causing truncation
+	// when path + message arguments exceed that limit. Now param_str and szCommandFile are decoupled.
+	const int CMD_BUF_SIZE = 32768;		// Windows CreateProcess lpCommandLine limit
+	char *param_str = (char *)malloc(CMD_BUF_SIZE);
+	char tmp_pagername[100], tmp[10];
 	char szLabel[FILTER_LABEL_LEN+50];
 //	char ch;							// Buffer for current character
 
+	if (!param_str)
+	{
+		PDW_DLOG("ActivateCommandFile: malloc failed for param_str");
+		return;
+	}
+
 	tmp_pagername[0] = 0;
+	*param_str = 0;
 
 	while (Profile.filter_cmd_args[i] != 0)
 	{
-		if ((i > 254) || (arg_pos > FILTER_PARAM_LEN)) break;
+		// FIX [CmdLineBufSize]: >= leaves 1 byte headroom so the terminator write below the loop never overflows
+		// FIX [CmdArgsTemplateCap]: the template cap was still 254 while IDC_FILTERCMDARGS' EM_LIMITTEXT
+		// matches the field size, so everything past char 255 of a typed template was silently
+		// ignored. Cap at the actual field size instead.
+		// FIX [FileLenSplit]: that field size is MAX_CMD_LEN now, not MAX_FILE_LEN; filter_cmd_args is
+		// char[MAX_CMD_LEN+1], so reading [i] and [i+1] at i = MAX_CMD_LEN-1 stays in bounds.
+		if ((i >= MAX_CMD_LEN) || (arg_pos >= CMD_BUF_SIZE - 1)) break;
 
 		if (Profile.filter_cmd_args[i] == '%')
 		{
@@ -3196,7 +3356,7 @@ void ActivateCommandFile()
 					//        that the user put in the Arguments template (e.g. "%7")
 					//   '\'  before other chars → copied as-is (no escaping needed)
 					pos = 0;
-					while (Current_MSG[7][pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
+					while (Current_MSG[7][pos] != 0 && arg_pos < CMD_BUF_SIZE - 1)
 					{
 						if (Current_MSG[7][pos] == '\\')
 						{
@@ -3205,13 +3365,13 @@ void ActivateCommandFile()
 							int n   = pos - bs_start;
 							// Double backslashes if followed by '"' or end-of-string
 							int emit = (Current_MSG[7][pos] == '"' || Current_MSG[7][pos] == '\0') ? n * 2 : n;
-							for (int b = 0; b < emit && arg_pos < (int)sizeof(param_str) - 1; b++)
+							for (int b = 0; b < emit && arg_pos < CMD_BUF_SIZE - 1; b++)
 								param_str[arg_pos++] = '\\';
 						}
 						else if (Current_MSG[7][pos] == '"')
 						{
 							param_str[arg_pos++] = '"';
-							if (arg_pos < (int)sizeof(param_str) - 1)
+							if (arg_pos < CMD_BUF_SIZE - 1)
 								param_str[arg_pos++] = '"';
 							pos++;
 						}
@@ -3228,7 +3388,7 @@ void ActivateCommandFile()
 				}
 				else
 				{
-					for (pos=0; Current_MSG[arg][pos] != 0 && arg_pos < (int)sizeof(param_str) - 1; pos++, arg_pos++)
+					for (pos=0; Current_MSG[arg][pos] != 0 && arg_pos < CMD_BUF_SIZE - 1; pos++, arg_pos++)
 						param_str[arg_pos] = Current_MSG[arg][pos];
 				}
 				i+=2;
@@ -3240,7 +3400,7 @@ void ActivateCommandFile()
 				// '"' or '\', which would break Windows command-line parsing identically.
 				MakeFilterLabel(Profile.filters[iMatch].label, Current_MSG[MSG_CAPCODE], szLabel);
 				pos = 0;
-				while (szLabel[pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
+				while (szLabel[pos] != 0 && arg_pos < CMD_BUF_SIZE - 1)
 				{
 					if (szLabel[pos] == '\\')
 					{
@@ -3248,13 +3408,13 @@ void ActivateCommandFile()
 						while (szLabel[pos] == '\\') pos++;
 						int n    = pos - bs_start;
 						int emit = (szLabel[pos] == '"' || szLabel[pos] == '\0') ? n * 2 : n;
-						for (int b = 0; b < emit && arg_pos < (int)sizeof(param_str) - 1; b++)
+						for (int b = 0; b < emit && arg_pos < CMD_BUF_SIZE - 1; b++)
 							param_str[arg_pos++] = '\\';
 					}
 					else if (szLabel[pos] == '"')
 					{
 						param_str[arg_pos++] = '"';
-						if (arg_pos < (int)sizeof(param_str) - 1)
+						if (arg_pos < CMD_BUF_SIZE - 1)
 							param_str[arg_pos++] = '"';
 						pos++;
 					}
@@ -3270,7 +3430,7 @@ void ActivateCommandFile()
 			{
 				sprintf(tmp, "%02i", iCurrentCycle);
 				pos = 0;
-				while (tmp[pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
+				while (tmp[pos] != 0 && arg_pos < CMD_BUF_SIZE - 1)
 				{
 					param_str[arg_pos++] = tmp[pos++];
 				}
@@ -3281,7 +3441,7 @@ void ActivateCommandFile()
 			{
 				sprintf(tmp, "%03i", iCurrentFrame);
 				pos = 0;
-				while (tmp[pos] != 0 && arg_pos < (int)sizeof(param_str) - 1)
+				while (tmp[pos] != 0 && arg_pos < CMD_BUF_SIZE - 1)
 				{
 					param_str[arg_pos++] = tmp[pos++];
 				}
@@ -3356,11 +3516,20 @@ void ActivateCommandFile()
 	ZeroMemory(&si,sizeof(si));	//Zero the STARTUPINFO struct
 	si.cb = sizeof(si);			//Must set size of structure
 
+	// FIX [CmdLineBufSize]: szCommandFile is now dynamically sized to accommodate full path + arguments
+	char *szCommandFile = (char *)malloc(CMD_BUF_SIZE);
+	if (!szCommandFile)
+	{
+		PDW_DLOG("ActivateCommandFile: malloc failed for szCommandFile");
+		free(param_str);
+		return;
+	}
+
 	if (param_str[0])
-		_snprintf(szCommandFile, MAX_STR_LEN, "%s %s", Profile.filter_cmd, param_str);
+		_snprintf(szCommandFile, CMD_BUF_SIZE, "%s %s", Profile.filter_cmd, param_str);
 	else
-		strncpy(szCommandFile, Profile.filter_cmd, MAX_STR_LEN - 1);
-	szCommandFile[MAX_STR_LEN - 1] = '\0';
+		strncpy(szCommandFile, Profile.filter_cmd, CMD_BUF_SIZE - 1);
+	szCommandFile[CMD_BUF_SIZE - 1] = '\0';
 
 	// FIX [CmdWorkDir]: run the command file from its OWN folder instead of inheriting
 	//                   PDW's current working directory. The 8th CreateProcess argument
@@ -3370,10 +3539,18 @@ void ActivateCommandFile()
 	//                   sets OFN_NOCHANGEDIR. Derive the directory from the full command
 	//                   path (Profile.filter_cmd is a browsed full path) and pass it as
 	//                   the working directory so the helper always finds files next to it.
-	char  szWorkDir[MAX_FILE_LEN + 1];
+	// FIX [CmdLineBufSize]: use CMD_BUF_SIZE for szWorkDir to accommodate long paths
+	char *szWorkDir = (char *)malloc(CMD_BUF_SIZE);
 	char *pSlash;
-	strncpy(szWorkDir, Profile.filter_cmd, MAX_FILE_LEN);
-	szWorkDir[MAX_FILE_LEN] = '\0';
+	if (!szWorkDir)
+	{
+		PDW_DLOG("ActivateCommandFile: malloc failed for szWorkDir");
+		free(param_str);
+		free(szCommandFile);
+		return;
+	}
+	strncpy(szWorkDir, Profile.filter_cmd, CMD_BUF_SIZE - 1);
+	szWorkDir[CMD_BUF_SIZE - 1] = '\0';
 	pSlash = strrchr(szWorkDir, '\\');
 	if (!pSlash) pSlash = strrchr(szWorkDir, '/');
 	if (pSlash) *pSlash = '\0'; else szWorkDir[0] = '\0';
@@ -3391,6 +3568,11 @@ void ActivateCommandFile()
 	}
 
 //	MessageBox(ghWnd, szCommandFile, "PDW Commandfile", MB_ICONINFORMATION);
+
+	// FIX [CmdLineBufSize]: cleanup dynamically allocated buffers
+	free(param_str);
+	free(szCommandFile);
+	free(szWorkDir);
 }
 
 
@@ -4088,3 +4270,4 @@ void InvertData(void)
 	low_audio  = Profile.invert ? DEFAULT_HI_AUDIO : DEFAULT_LO_AUDIO;
 	high_audio = Profile.invert ? DEFAULT_LO_AUDIO : DEFAULT_HI_AUDIO;
 }
+
